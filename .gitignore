@@ -1,0 +1,27 @@
+﻿# Local env
+.env
+.env.*
+!.env.example
+
+# Build outputs
+bin/
+dist/
+build/
+tmp/
+
+# Logs
+logs/
+*.log
+
+# Local reference repo, only if you accidentally put it inside this project
+remnawave-node-reference/
+
+# Go
+*.test
+coverage.out
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
