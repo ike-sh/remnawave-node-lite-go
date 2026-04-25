@@ -1,0 +1,13 @@
+SPDX-License-Identifier: AGPL-3.0-only
+
+This project is licensed under the GNU Affero General Public License v3.0 only.
+
+The license choice is intentional because this repository is a compatibility
+implementation for Remnawave Node, whose reference implementation declares
+AGPL-3.0-only licensing.
+
+You should review AGPL-3.0-only obligations before distributing this software
+or offering it as a network service. The full license text is published by the
+Free Software Foundation:
+
+https://www.gnu.org/licenses/agpl-3.0.txt

@@ -18,6 +18,7 @@ remnawave-node-reference/
 
 # Go
 *.test
+*.exe
 coverage.out
 
 # IDE / OS
