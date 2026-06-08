@@ -554,3 +554,44 @@ stats 和 handler 不是简单 HTTP CRUD：
 - 大规模用户 stats 可能很大，官方 JSON body limit 到 `1000mb`，并引入 zstd body parser。
 
 建议 Go MVP 先稳定启动链路和 contract 响应，再逐步补齐 gRPC stats、动态 handler、connection drop 和插件。
+
+---
+
+## 附录 A：lite-go v0.8.1 实现对照
+
+> 以下对照 **当前代码库** 相对本文档早期「MVP / stub / 暂不实现」建议的落地情况。正文第 5–6 节保留为历史规划参考。
+
+| 分析项（正文章节） | 官方要求 | lite-go v0.8.1 | 代码位置 |
+|-------------------|----------|----------------|----------|
+| mTLS + JWT | Panel 双向 TLS + Bearer | ✅ | `internal/httpserver`, `internal/auth` |
+| zstd + 1000MB body | `@kastov/body-parser-with-zstd` | ✅（低内存 64MB 可选） | `internal/bodylimit` |
+| Unix get-config / webhook | internal socket + token | ✅ | `internal/unixconfig` |
+| Xray start/stop/healthcheck | supervisord 等价 | ✅ | `internal/xray/manager.go` |
+| 内部 mTLS 三件套 | CA + server + **client** cert | ✅ | `internal/xray/certs.go` |
+| HashedSet 重启优化 | `isNeedRestartCore()` | ✅ | `internal/xray/hashedset.go` |
+| Stats 10 路由 | gRPC 真实数据 | ✅ | `internal/stats`, `internal/xtls/stats*.go` |
+| Handler 8 路由 | 5 协议热更新 | ✅ | `internal/nodehandler`, `internal/xtls/handler.go` |
+| Plugin sync + schema | `NodePluginSchema` | ✅ 0.4.4 对齐 | `internal/plugin/schema_validate.go` |
+| nftables | CAP_NET_ADMIN + nft | ✅ | `internal/plugin/nft_linux.go` |
+| torrent-blocker | webhook + outbound | ✅ | `internal/plugin/torrent.go` |
+| Vision block/unblock | Router gRPC | ✅ | `internal/vision`, `internal/xtls/router.go` |
+| drop connections / drop-ips | `ss -K` | ✅ | `internal/connections`, `internal/netadmin` |
+| CAP_NET_ADMIN 部署 | docker `cap_add: NET_ADMIN` | ✅ systemd `AmbientCapabilities` | `deploy/remnawave-node.service` |
+| contract golden tests | DTO shape | ✅ 28 路由 | `internal/contract/` |
+| contract-sync CI | 跟踪 upstream | ✅ | `.github/workflows/contract-sync.yml` |
+| 部署自检 | — | ✅ `remnanode-lite doctor` | `internal/doctor/` |
+| 错误码 errorCode | 统一 A00x | ⚠️ 部分（JWT A003） | — |
+| compression / helmet | Express 中间件 | ❌ 未做 | 无影响 |
+| CUSTOM_CORE_URL | entrypoint 下载 | ❌ 未做 | 可选 |
+| Docker 镜像 | 官方主分发 | ❌ 未做 | 可选 |
+| geo-zapret.dat | volume 挂载 | ❌ 未做 | 可选 |
+
+**Panel 主流程结论**：v0.8.1 已覆盖正文第 5 节「必须实现」与「可 stub」项中的生产必需部分；第 5 节「暂时不实现」列表在 v0.8.1 中 **均已实现**（除上表标记 ❌ 的可选项）。
+
+**验证命令**：
+
+```bash
+go test ./internal/contract/...   # 28 路由 DTO
+sudo remnanode-lite doctor        # 部署环境
+grep AmbientCapabilities /etc/systemd/system/remnawave-node.service
+```
