@@ -3,7 +3,6 @@ package stats
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"time"
 
@@ -55,15 +54,18 @@ type systemStatsResponse struct {
 type writeJSONFn func(w http.ResponseWriter, status int, value any)
 
 func (s *Service) HandleGetSystemStats(w http.ResponseWriter, write writeJSONFn) {
-	var xrayInfo any
-	if s.provider != nil {
-		if stats, err := s.provider.GetSysStats(context.Background()); err == nil && stats != nil {
-			xrayInfo = stats
-		}
+	if s.provider == nil {
+		writeAPIError(write, w, errFailedSystemStats)
+		return
+	}
+	stats, err := s.provider.GetSysStats(context.Background())
+	if err != nil || stats == nil {
+		writeAPIError(write, w, errFailedSystemStats)
+		return
 	}
 
 	var resp systemStatsResponse
-	resp.XrayInfo = xrayInfo
+	resp.XrayInfo = stats
 	if s.reportsCounter != nil {
 		resp.Plugins.TorrentBlocker.ReportsCount = s.reportsCounter.ReportsCount()
 	}
@@ -73,11 +75,22 @@ func (s *Service) HandleGetSystemStats(w http.ResponseWriter, write writeJSONFn)
 
 func (s *Service) HandleGetUserOnlineStatus(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	body := decodeOnlineRequest(r)
-	online := false
-	if s.provider != nil && body.Username != "" {
-		if value, err := s.provider.GetUserOnlineStatus(r.Context(), body.Username); err == nil {
-			online = value
-		}
+	if s.provider == nil {
+		writeAPIError(write, w, errFailedUserOnlineStatus)
+		return
+	}
+	if body.Username == "" {
+		write(w, http.StatusOK, envelope[struct {
+			IsOnline bool `json:"isOnline"`
+		}]{Response: struct {
+			IsOnline bool `json:"isOnline"`
+		}{IsOnline: false}})
+		return
+	}
+	online, err := s.provider.GetUserOnlineStatus(r.Context(), body.Username)
+	if err != nil {
+		writeAPIError(write, w, errFailedUserOnlineStatus)
+		return
 	}
 	write(w, http.StatusOK, envelope[struct {
 		IsOnline bool `json:"isOnline"`
@@ -88,17 +101,26 @@ func (s *Service) HandleGetUserOnlineStatus(w http.ResponseWriter, r *http.Reque
 
 func (s *Service) HandleGetUsersStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	reset := decodeResetRequest(r)
-	users := []userTrafficResponse{}
-	if s.provider != nil {
-		if stats, err := s.provider.GetAllUsersStats(r.Context(), reset); err == nil {
-			for _, item := range stats {
-				users = append(users, userTrafficResponse{
-					Username: item.Username,
-					Downlink: item.Downlink,
-					Uplink:   item.Uplink,
-				})
-			}
+	if s.provider == nil {
+		writeAPIError(write, w, errFailedUsersStats)
+		return
+	}
+	stats, err := s.provider.GetAllUsersStats(r.Context(), reset)
+	if err != nil {
+		writeAPIError(write, w, errFailedUsersStats)
+		return
+	}
+
+	users := make([]userTrafficResponse, 0, len(stats))
+	for _, item := range stats {
+		if item.Uplink == 0 && item.Downlink == 0 {
+			continue
 		}
+		users = append(users, userTrafficResponse{
+			Username: item.Username,
+			Downlink: item.Downlink,
+			Uplink:   item.Uplink,
+		})
 	}
 	write(w, http.StatusOK, envelope[struct {
 		Users []userTrafficResponse `json:"users"`
@@ -109,47 +131,58 @@ func (s *Service) HandleGetUsersStats(w http.ResponseWriter, r *http.Request, wr
 
 func (s *Service) HandleGetInboundStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	tag, reset := decodeTagResetRequest(r)
-	item := tagTrafficResponse{}
-	if s.provider != nil && tag != "" {
-		if stats, err := s.provider.GetInboundStats(r.Context(), tag, reset); err == nil {
-			item = tagTrafficResponse{
-				Inbound:  stats.Tag,
-				Downlink: stats.Downlink,
-				Uplink:   stats.Uplink,
-			}
-		}
+	if s.provider == nil || tag == "" {
+		writeAPIError(write, w, errFailedInboundStats)
+		return
 	}
-	write(w, http.StatusOK, envelope[tagTrafficResponse]{Response: item})
+	stats, err := s.provider.GetInboundStats(r.Context(), tag, reset)
+	if err != nil || stats.Tag == "" {
+		writeAPIError(write, w, errFailedInboundStats)
+		return
+	}
+	write(w, http.StatusOK, envelope[tagTrafficResponse]{Response: tagTrafficResponse{
+		Inbound:  stats.Tag,
+		Downlink: stats.Downlink,
+		Uplink:   stats.Uplink,
+	}})
 }
 
 func (s *Service) HandleGetOutboundStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	tag, reset := decodeTagResetRequest(r)
-	item := outboundTrafficResponse{}
-	if s.provider != nil && tag != "" {
-		if stats, err := s.provider.GetOutboundStats(r.Context(), tag, reset); err == nil {
-			item = outboundTrafficResponse{
-				Outbound: stats.Tag,
-				Downlink: stats.Downlink,
-				Uplink:   stats.Uplink,
-			}
-		}
+	if s.provider == nil || tag == "" {
+		writeAPIError(write, w, errFailedOutboundStats)
+		return
 	}
-	write(w, http.StatusOK, envelope[outboundTrafficResponse]{Response: item})
+	stats, err := s.provider.GetOutboundStats(r.Context(), tag, reset)
+	if err != nil || stats.Tag == "" {
+		writeAPIError(write, w, errFailedOutboundStats)
+		return
+	}
+	write(w, http.StatusOK, envelope[outboundTrafficResponse]{Response: outboundTrafficResponse{
+		Outbound: stats.Tag,
+		Downlink: stats.Downlink,
+		Uplink:   stats.Uplink,
+	}})
 }
 
 func (s *Service) HandleGetAllInboundsStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	reset := decodeResetRequest(r)
-	items := []inboundTrafficResponse{}
-	if s.provider != nil {
-		if stats, err := s.provider.GetAllInboundsStats(r.Context(), reset); err == nil {
-			for _, item := range stats {
-				items = append(items, inboundTrafficResponse{
-					Inbound:  item.Tag,
-					Downlink: item.Downlink,
-					Uplink:   item.Uplink,
-				})
-			}
-		}
+	if s.provider == nil {
+		writeAPIError(write, w, errFailedInboundsStats)
+		return
+	}
+	stats, err := s.provider.GetAllInboundsStats(r.Context(), reset)
+	if err != nil {
+		writeAPIError(write, w, errFailedInboundsStats)
+		return
+	}
+	items := make([]inboundTrafficResponse, 0, len(stats))
+	for _, item := range stats {
+		items = append(items, inboundTrafficResponse{
+			Inbound:  item.Tag,
+			Downlink: item.Downlink,
+			Uplink:   item.Uplink,
+		})
 	}
 	write(w, http.StatusOK, envelope[struct {
 		Inbounds []inboundTrafficResponse `json:"inbounds"`
@@ -160,17 +193,22 @@ func (s *Service) HandleGetAllInboundsStats(w http.ResponseWriter, r *http.Reque
 
 func (s *Service) HandleGetAllOutboundsStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	reset := decodeResetRequest(r)
-	items := []outboundListItemResponse{}
-	if s.provider != nil {
-		if stats, err := s.provider.GetAllOutboundsStats(r.Context(), reset); err == nil {
-			for _, item := range stats {
-				items = append(items, outboundListItemResponse{
-					Outbound: item.Tag,
-					Downlink: item.Downlink,
-					Uplink:   item.Uplink,
-				})
-			}
-		}
+	if s.provider == nil {
+		writeAPIError(write, w, errFailedOutboundsStats)
+		return
+	}
+	stats, err := s.provider.GetAllOutboundsStats(r.Context(), reset)
+	if err != nil {
+		writeAPIError(write, w, errFailedOutboundsStats)
+		return
+	}
+	items := make([]outboundListItemResponse, 0, len(stats))
+	for _, item := range stats {
+		items = append(items, outboundListItemResponse{
+			Outbound: item.Tag,
+			Downlink: item.Downlink,
+			Uplink:   item.Uplink,
+		})
 	}
 	write(w, http.StatusOK, envelope[struct {
 		Outbounds []outboundListItemResponse `json:"outbounds"`
@@ -181,27 +219,36 @@ func (s *Service) HandleGetAllOutboundsStats(w http.ResponseWriter, r *http.Requ
 
 func (s *Service) HandleGetCombinedStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	reset := decodeResetRequest(r)
-	inbounds := []inboundTrafficResponse{}
-	outbounds := []outboundListItemResponse{}
-	if s.provider != nil {
-		if items, err := s.provider.GetAllInboundsStats(r.Context(), reset); err == nil {
-			for _, item := range items {
-				inbounds = append(inbounds, inboundTrafficResponse{
-					Inbound:  item.Tag,
-					Downlink: item.Downlink,
-					Uplink:   item.Uplink,
-				})
-			}
-		}
-		if items, err := s.provider.GetAllOutboundsStats(r.Context(), reset); err == nil {
-			for _, item := range items {
-				outbounds = append(outbounds, outboundListItemResponse{
-					Outbound: item.Tag,
-					Downlink: item.Downlink,
-					Uplink:   item.Uplink,
-				})
-			}
-		}
+	if s.provider == nil {
+		writeAPIError(write, w, errFailedCombinedStats)
+		return
+	}
+	inboundItems, err := s.provider.GetAllInboundsStats(r.Context(), reset)
+	if err != nil {
+		writeAPIError(write, w, errFailedCombinedStats)
+		return
+	}
+	outboundItems, err := s.provider.GetAllOutboundsStats(r.Context(), reset)
+	if err != nil {
+		writeAPIError(write, w, errFailedCombinedStats)
+		return
+	}
+
+	inbounds := make([]inboundTrafficResponse, 0, len(inboundItems))
+	for _, item := range inboundItems {
+		inbounds = append(inbounds, inboundTrafficResponse{
+			Inbound:  item.Tag,
+			Downlink: item.Downlink,
+			Uplink:   item.Uplink,
+		})
+	}
+	outbounds := make([]outboundListItemResponse, 0, len(outboundItems))
+	for _, item := range outboundItems {
+		outbounds = append(outbounds, outboundListItemResponse{
+			Outbound: item.Tag,
+			Downlink: item.Downlink,
+			Uplink:   item.Uplink,
+		})
 	}
 	write(w, http.StatusOK, envelope[struct {
 		Inbounds  []inboundTrafficResponse   `json:"inbounds"`
@@ -214,16 +261,29 @@ func (s *Service) HandleGetCombinedStats(w http.ResponseWriter, r *http.Request,
 
 func (s *Service) HandleGetUserIPList(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	body := decodeUserIDRequest(r)
-	ips := []ipEntryResponse{}
-	if s.provider != nil && body.UserID != "" {
-		if items, err := s.provider.GetUserIPList(r.Context(), body.UserID, true); err == nil {
-			for _, item := range items {
-				ips = append(ips, ipEntryResponse{
-					IP:       item.IP,
-					LastSeen: item.LastSeen.Format(time.RFC3339Nano),
-				})
-			}
-		}
+	if body.UserID == "" {
+		write(w, http.StatusOK, envelope[struct {
+			IPs []ipEntryResponse `json:"ips"`
+		}]{Response: struct {
+			IPs []ipEntryResponse `json:"ips"`
+		}{IPs: []ipEntryResponse{}}})
+		return
+	}
+	if s.provider == nil {
+		writeAPIError(write, w, errFailedUserIPList)
+		return
+	}
+	items, err := s.provider.GetUserIPList(r.Context(), body.UserID, true)
+	if err != nil {
+		writeAPIError(write, w, errFailedUserIPList)
+		return
+	}
+	ips := make([]ipEntryResponse, 0, len(items))
+	for _, item := range items {
+		ips = append(ips, ipEntryResponse{
+			IP:       item.IP,
+			LastSeen: item.LastSeen.Format(time.RFC3339Nano),
+		})
 	}
 	write(w, http.StatusOK, envelope[struct {
 		IPs []ipEntryResponse `json:"ips"`
@@ -233,23 +293,31 @@ func (s *Service) HandleGetUserIPList(w http.ResponseWriter, r *http.Request, wr
 }
 
 func (s *Service) HandleGetUsersIPList(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	users := []userIPListResponse{}
-	if s.provider != nil {
-		if items, err := s.provider.GetUsersIPList(r.Context()); err == nil {
-			for _, item := range items {
-				ips := make([]ipEntryResponse, 0, len(item.IPs))
-				for _, ip := range item.IPs {
-					ips = append(ips, ipEntryResponse{
-						IP:       ip.IP,
-						LastSeen: ip.LastSeen.Format(time.RFC3339Nano),
-					})
-				}
-				users = append(users, userIPListResponse{
-					UserID: item.UserID,
-					IPs:    ips,
-				})
-			}
+	if s.provider == nil {
+		writeAPIError(write, w, errFailedUsersIPList)
+		return
+	}
+	items, err := s.provider.GetUsersIPList(r.Context())
+	if err != nil {
+		writeAPIError(write, w, errFailedUsersIPList)
+		return
+	}
+	users := make([]userIPListResponse, 0, len(items))
+	for _, item := range items {
+		if len(item.IPs) == 0 {
+			continue
 		}
+		ips := make([]ipEntryResponse, 0, len(item.IPs))
+		for _, ip := range item.IPs {
+			ips = append(ips, ipEntryResponse{
+				IP:       ip.IP,
+				LastSeen: ip.LastSeen.Format(time.RFC3339Nano),
+			})
+		}
+		users = append(users, userIPListResponse{
+			UserID: item.UserID,
+			IPs:    ips,
+		})
 	}
 	write(w, http.StatusOK, envelope[struct {
 		Users []userIPListResponse `json:"users"`
@@ -337,12 +405,4 @@ func decodeTagResetRequest(r *http.Request) (string, bool) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	return body.Tag, body.Reset
-}
-
-func discardBody(r *http.Request) {
-	if r.Body == nil {
-		return
-	}
-	defer r.Body.Close()
-	_, _ = io.Copy(io.Discard, r.Body)
 }

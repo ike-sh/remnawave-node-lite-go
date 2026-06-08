@@ -160,7 +160,13 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 		message := "Request already in progress"
 		return m.startResponse(false, &message)
 	}
+	m.startProcessing = true
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.startProcessing = false
+		m.mu.Unlock()
+	}()
 
 	fullConfig := generateAPIConfig(req.XrayConfig, m.xtlsAPIPort, m.internalCerts, m.torrentBlockerOptions())
 
@@ -184,15 +190,6 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 			m.mu.Unlock()
 		}
 	}
-
-	m.mu.Lock()
-	m.startProcessing = true
-	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		m.startProcessing = false
-		m.mu.Unlock()
-	}()
 
 	m.mu.Lock()
 	m.currentConfig = fullConfig

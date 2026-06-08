@@ -33,7 +33,7 @@ func TestHandleSyncDisableUsesRemoveOutboundWhenNoIncludeTags(t *testing.T) {
 	xray := &mockXray{}
 	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
 
-	_, _ = state.UpdateFromSync(map[string]any{
+	_, _ = state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
 		"uuid": "00000000-0000-4000-8000-000000000001",
 		"name": "test",
 		"config": map[string]any{
@@ -43,7 +43,7 @@ func TestHandleSyncDisableUsesRemoveOutboundWhenNoIncludeTags(t *testing.T) {
 				"ignoreLists":   map[string]any{},
 			},
 		},
-	})
+	}))
 
 	body, _ := json.Marshal(map[string]any{
 		"plugin": map[string]any{
@@ -75,14 +75,14 @@ func TestHandleSyncDisableUsesRemoveOutboundWhenNoIncludeTags(t *testing.T) {
 	}
 }
 
-func TestHandleSyncIncludeRuleTagsChangeRestartsXray(t *testing.T) {
+func TestHandleSyncDisableWithStaleIncludeRuleTagsUsesRemoveOutbound(t *testing.T) {
 	t.Parallel()
 
 	state := plugin.NewState()
 	xray := &mockXray{}
 	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
 
-	_, _ = state.UpdateFromSync(map[string]any{
+	_, _ = state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
 		"uuid": "00000000-0000-4000-8000-000000000001",
 		"name": "test",
 		"config": map[string]any{
@@ -93,7 +93,58 @@ func TestHandleSyncIncludeRuleTagsChangeRestartsXray(t *testing.T) {
 				"includeRuleTags": []any{"rule-a"},
 			},
 		},
+	}))
+
+	body, _ := json.Marshal(map[string]any{
+		"plugin": map[string]any{
+			"uuid": "00000000-0000-4000-8000-000000000001",
+			"name": "test",
+			"config": map[string]any{
+				"torrentBlocker": map[string]any{
+					"enabled":         false,
+					"blockDuration":   0,
+					"ignoreLists":     map[string]any{},
+					"includeRuleTags": []any{"rule-a"},
+				},
+			},
+		},
 	})
+	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	write := func(w http.ResponseWriter, status int, value any) {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(value)
+	}
+
+	service.HandleSync(rec, req, write)
+
+	if xray.removeOutbound != 1 {
+		t.Fatalf("RemoveTorrentBlockerOutbound calls = %d, want 1", xray.removeOutbound)
+	}
+	if xray.stopIfOnline != 0 {
+		t.Fatalf("StopIfOnline calls = %d, want 0", xray.stopIfOnline)
+	}
+}
+
+func TestHandleSyncIncludeRuleTagsChangeRestartsXray(t *testing.T) {
+	t.Parallel()
+
+	state := plugin.NewState()
+	xray := &mockXray{}
+	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
+
+	_, _ = state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{
+			"torrentBlocker": map[string]any{
+				"enabled":         true,
+				"blockDuration":   300,
+				"ignoreLists":     map[string]any{},
+				"includeRuleTags": []any{"rule-a"},
+			},
+		},
+	}))
 
 	body, _ := json.Marshal(map[string]any{
 		"plugin": map[string]any{
@@ -174,7 +225,7 @@ func TestHandleSyncUnchangedConfigSkipsRestart(t *testing.T) {
 			},
 		},
 	}
-	_, _ = state.UpdateFromSync(pluginConfig)
+	_, _ = state.UpdateFromSync(mustSyncPlugin(t, pluginConfig))
 
 	body, _ := json.Marshal(map[string]any{"plugin": pluginConfig})
 	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", bytes.NewReader(body))

@@ -17,7 +17,6 @@ type Provider interface {
 	RemoveUserFromInboundHash(inboundTag, userUUID string)
 	GetUserIPList(ctx context.Context, userID string, reset bool) ([]xtls.IPEntry, error)
 	HandlerRemoveUser(ctx context.Context, tag, username string) xtls.HandlerResult
-	HandlerRemoveUserFromAllInbounds(ctx context.Context, username string) []xtls.HandlerResult
 	HandlerAddVlessUser(ctx context.Context, tag, username, uuid, flow string, level uint32) xtls.HandlerResult
 	HandlerAddTrojanUser(ctx context.Context, tag, username, password string, level uint32) xtls.HandlerResult
 	HandlerAddShadowsocksUser(ctx context.Context, tag, username, password string, cipherType int, ivCheck bool, level uint32) xtls.HandlerResult
@@ -48,6 +47,7 @@ type genericResponse struct {
 type writeJSONFn func(w http.ResponseWriter, status int, value any)
 
 func (s *Service) HandleAddUser(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
+	defer recoverHandler(write, w)
 	var req addUserRequest
 	if !decodeBody(r, &req) {
 		writeError(write, w, "invalid JSON body")
@@ -88,6 +88,7 @@ func (s *Service) HandleAddUser(w http.ResponseWriter, r *http.Request, write wr
 }
 
 func (s *Service) HandleRemoveUser(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
+	defer recoverHandler(write, w)
 	var req removeUserRequest
 	if !decodeBody(r, &req) {
 		writeError(write, w, "invalid JSON body")
@@ -111,6 +112,7 @@ func (s *Service) HandleRemoveUser(w http.ResponseWriter, r *http.Request, write
 }
 
 func (s *Service) HandleAddUsers(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
+	defer recoverHandler(write, w)
 	var req addUsersRequest
 	if !decodeBody(r, &req) {
 		writeError(write, w, "invalid JSON body")
@@ -121,7 +123,6 @@ func (s *Service) HandleAddUsers(w http.ResponseWriter, r *http.Request, write w
 		s.provider.AddInboundTag(tag)
 	}
 
-	results := make([]xtls.HandlerResult, 0)
 	for _, user := range req.Users {
 		for _, inbound := range user.InboundData {
 			s.provider.AddInboundTag(inbound.Tag)
@@ -135,14 +136,14 @@ func (s *Service) HandleAddUsers(w http.ResponseWriter, r *http.Request, write w
 			if result.OK {
 				s.provider.AddUserToInboundHash(inbound.Tag, user.UserData.VlessUUID)
 			}
-			results = append(results, result)
 		}
 	}
 
-	write(w, http.StatusOK, envelope[genericResponse]{Response: aggregateResults(results)})
+	write(w, http.StatusOK, envelope[genericResponse]{Response: genericResponse{Success: true, Error: nil}})
 }
 
 func (s *Service) HandleRemoveUsers(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
+	defer recoverHandler(write, w)
 	var req removeUsersRequest
 	if !decodeBody(r, &req) {
 		writeError(write, w, "invalid JSON body")
@@ -176,11 +177,18 @@ func (s *Service) HandleGetInboundUsersCount(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	count := int64(0)
-	if s.provider != nil && req.Tag != "" {
-		if value, result := s.provider.HandlerGetInboundUsersCount(r.Context(), req.Tag); result.OK {
-			count = value
-		}
+	if s.provider == nil || req.Tag == "" {
+		write(w, http.StatusOK, envelope[struct {
+			Count int64 `json:"count"`
+		}]{Response: struct {
+			Count int64 `json:"count"`
+		}{Count: 0}})
+		return
+	}
+	count, result := s.provider.HandlerGetInboundUsersCount(r.Context(), req.Tag)
+	if !result.OK {
+		writeHandlerAPIError(write, w, errFailedInboundUsers, handlerErrorMessage(result.Message, errFailedInboundUsers.Message))
+		return
 	}
 
 	write(w, http.StatusOK, envelope[struct {
@@ -197,11 +205,18 @@ func (s *Service) HandleGetInboundUsers(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	users := make([]xtls.InboundUser, 0)
-	if s.provider != nil && req.Tag != "" {
-		if value, result := s.provider.HandlerGetInboundUsers(r.Context(), req.Tag); result.OK {
-			users = value
-		}
+	if s.provider == nil || req.Tag == "" {
+		write(w, http.StatusOK, envelope[struct {
+			Users []xtls.InboundUser `json:"users"`
+		}]{Response: struct {
+			Users []xtls.InboundUser `json:"users"`
+		}{Users: []xtls.InboundUser{}}})
+		return
+	}
+	users, result := s.provider.HandlerGetInboundUsers(r.Context(), req.Tag)
+	if !result.OK {
+		writeHandlerAPIError(write, w, errFailedInboundUsers, handlerErrorMessage(result.Message, errFailedInboundUsers.Message))
+		return
 	}
 	if users == nil {
 		users = make([]xtls.InboundUser, 0)
@@ -349,6 +364,19 @@ func decodeBody(r *http.Request, target any) bool {
 
 func writeError(write writeJSONFn, w http.ResponseWriter, message string) {
 	write(w, http.StatusBadRequest, map[string]any{"message": message})
+}
+
+func recoverHandler(write writeJSONFn, w http.ResponseWriter) {
+	if recover() != nil {
+		writeHandlerAPIError(write, w, errInternalServer, errInternalServer.Message)
+	}
+}
+
+func handlerErrorMessage(resultMessage, fallback string) string {
+	if resultMessage != "" {
+		return resultMessage
+	}
+	return fallback
 }
 
 func stringPtr(value string) *string {

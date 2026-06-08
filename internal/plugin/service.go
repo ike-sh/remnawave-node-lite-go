@@ -41,7 +41,7 @@ type writeJSONFn func(w http.ResponseWriter, status int, value any)
 
 func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	var req struct {
-		Plugin map[string]any `json:"plugin"`
+		Plugin *SyncPlugin `json:"plugin"`
 	}
 	if !decodeBody(r, &req) {
 		writeError(write, w, "invalid JSON body")
@@ -71,7 +71,6 @@ func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write write
 
 	wasEnabled := s.state.TorrentBlockerEnabled()
 	prevIncludeTags := append([]string(nil), s.state.TorrentBlockerIncludeRuleTags()...)
-	newIncludeTags := extractIncludeRuleTags(req.Plugin)
 
 	changed, accepted := s.state.UpdateFromSync(req.Plugin)
 	if !accepted {
@@ -89,7 +88,7 @@ func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write write
 		}
 	}
 
-	s.applyTorrentRestart(wasEnabled, nowEnabled, prevIncludeTags, newIncludeTags, nowIncludeTags)
+	s.applyTorrentRestart(wasEnabled, nowEnabled, prevIncludeTags, nowIncludeTags)
 	writeAccepted(write, w, true)
 }
 
@@ -113,12 +112,12 @@ func (s *Service) resetPlugins() {
 	}
 }
 
-func (s *Service) applyTorrentRestart(wasEnabled, nowEnabled bool, prevIncludeTags, newIncludeTags, nowIncludeTags []string) {
+func (s *Service) applyTorrentRestart(wasEnabled, nowEnabled bool, prevIncludeTags, nowIncludeTags []string) {
 	if s.xray == nil {
 		return
 	}
 	switch {
-	case wasEnabled && !nowEnabled && len(newIncludeTags) == 0:
+	case wasEnabled && !nowEnabled && len(nowIncludeTags) == 0:
 		_ = s.xray.RemoveTorrentBlockerOutbound()
 	default:
 		needsRestart := (wasEnabled && !nowEnabled) ||
@@ -219,21 +218,6 @@ func writeAccepted(write writeJSONFn, w http.ResponseWriter, accepted bool) {
 func decodeBody(r *http.Request, target any) bool {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(target) == nil
-}
-
-func extractIncludeRuleTags(plugin map[string]any) []string {
-	if plugin == nil {
-		return nil
-	}
-	cfg, ok := plugin["config"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	blocker, ok := cfg["torrentBlocker"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	return toStringSlice(blocker["includeRuleTags"])
 }
 
 func hashIncludeRuleTags(tags []string) string {

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -167,14 +166,6 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
-}
-
-func discardBody(r *http.Request) {
-	if r.Body == nil {
-		return
-	}
-	defer r.Body.Close()
-	_, _ = io.Copy(io.Discard, r.Body)
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {

@@ -20,9 +20,6 @@ func (stubHandlerProvider) GetUserIPList(context.Context, string, bool) ([]xtls.
 func (stubHandlerProvider) HandlerRemoveUser(context.Context, string, string) xtls.HandlerResult {
 	return xtls.HandlerResult{OK: true}
 }
-func (stubHandlerProvider) HandlerRemoveUserFromAllInbounds(context.Context, string) []xtls.HandlerResult {
-	return nil
-}
 func (stubHandlerProvider) HandlerAddVlessUser(context.Context, string, string, string, string, uint32) xtls.HandlerResult {
 	return xtls.HandlerResult{OK: false, Message: "offline"}
 }

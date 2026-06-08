@@ -32,6 +32,20 @@ func main() {
 			return
 		case "doctor":
 			os.Exit(doctor.Run(os.Args[2:]))
+		case "release-url":
+			if len(os.Args) < 4 {
+				fmt.Fprintf(os.Stderr, "usage: remnanode-lite release-url <tag> <arch>\n")
+				os.Exit(2)
+			}
+			fmt.Println(version.ReleaseAssetURL(os.Args[2], os.Args[3]))
+			return
+		case "install-script-url":
+			if len(os.Args) < 4 {
+				fmt.Fprintf(os.Stderr, "usage: remnanode-lite install-script-url <tag> <script>\n")
+				os.Exit(2)
+			}
+			fmt.Println(version.InstallScriptURL(os.Args[2], os.Args[3]))
+			return
 		}
 	}
 	cfg, err := config.Load(".env")

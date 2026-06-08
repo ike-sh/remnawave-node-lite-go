@@ -1,8 +1,6 @@
 package plugin
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -98,7 +96,30 @@ func (s *State) Reset() {
 	s.torrent = torrentSettings{}
 }
 
-func (s *State) UpdateFromSync(plugin map[string]any) (changed bool, accepted bool) {
+type SyncPlugin struct {
+	UUID   string          `json:"uuid"`
+	Name   string          `json:"name"`
+	Config json.RawMessage `json:"config"`
+}
+
+// NewSyncPlugin builds a sync payload preserving JSON key order for config hashing.
+func NewSyncPlugin(uuid, name string, config map[string]any) (*SyncPlugin, error) {
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	return &SyncPlugin{UUID: uuid, Name: name, Config: raw}, nil
+}
+
+// NewSyncPluginFromEnvelope parses the plugin envelope used in tests and HTTP sync bodies.
+func NewSyncPluginFromEnvelope(raw map[string]any) (*SyncPlugin, error) {
+	uuid, _ := raw["uuid"].(string)
+	name, _ := raw["name"].(string)
+	config, _ := raw["config"].(map[string]any)
+	return NewSyncPlugin(uuid, name, config)
+}
+
+func (s *State) UpdateFromSync(plugin *SyncPlugin) (changed bool, accepted bool) {
 	if plugin == nil {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -115,8 +136,7 @@ func (s *State) UpdateFromSync(plugin map[string]any) (changed bool, accepted bo
 		return true, true
 	}
 
-	rawConfig, _ := plugin["config"].(map[string]any)
-	hash := hashConfig(rawConfig)
+	hash := hashPluginConfig(plugin.Config)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -126,11 +146,12 @@ func (s *State) UpdateFromSync(plugin map[string]any) (changed bool, accepted bo
 
 	s.configHash = hash
 	s.hasActive = true
-	if uuid, ok := plugin["uuid"].(string); ok {
-		s.pluginUUID = uuid
-	}
-	if name, ok := plugin["name"].(string); ok {
-		s.pluginName = name
+	s.pluginUUID = plugin.UUID
+	s.pluginName = plugin.Name
+
+	var rawConfig map[string]any
+	if err := json.Unmarshal(plugin.Config, &rawConfig); err != nil {
+		rawConfig = nil
 	}
 
 	shared := buildSharedIPMap(rawConfig)
@@ -146,18 +167,6 @@ func (s *State) UpdateFromSync(plugin map[string]any) (changed bool, accepted bo
 	s.configureTorrentBlocker(rawConfig, shared)
 
 	return true, true
-}
-
-func hashConfig(config map[string]any) string {
-	if config == nil {
-		return ""
-	}
-	raw, err := json.Marshal(config)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
 }
 
 func toStringSlice(value any) []string {

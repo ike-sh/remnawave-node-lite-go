@@ -126,10 +126,3 @@ func (m *Manager) StopIfOnline() bool {
 	return m.Stop().IsStopped
 }
 
-func (m *Manager) HandlerRemoveUserFromAllInbounds(ctx context.Context, username string) []xtls.HandlerResult {
-	results := make([]xtls.HandlerResult, 0)
-	for _, tag := range m.InboundTags() {
-		results = append(results, m.HandlerRemoveUser(ctx, tag, username))
-	}
-	return results
-}

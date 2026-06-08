@@ -1,8 +1,8 @@
 # Remnawave Node Go 轻量兼容分析
 
 > **文档性质**：官方 node 行为参考 + 早期兼容规划（撰写于 MVP 阶段）。  
-> **lite-go 当前版本**：v0.8.1 | **官方参考版本**：`@remnawave/node` 2.7.0  
-> **实现状态摘要**：见文末 [附录 A：lite-go v0.8.1 实现对照](#附录-a-lite-go-v081-实现对照)。
+> **lite-go 当前版本**：v0.8.2 | **官方参考版本**：`@remnawave/node` 2.7.0  
+> **实现状态摘要**：见文末 [附录 A：lite-go v0.8.2 实现对照](#附录-a-lite-go-v082-实现对照) 与 [附录 B：v0.8.2 审计与修复记录](#附录-b-v082-审计与修复记录)。
 
 参考仓库：[remnawave/node](https://github.com/remnawave/node)（本地快照 `remnawave-node-reference`）。本文只做兼容分析，不复制官方实现。
 
@@ -557,11 +557,11 @@ stats 和 handler 不是简单 HTTP CRUD：
 
 ---
 
-## 附录 A：lite-go v0.8.1 实现对照
+## 附录 A：lite-go v0.8.2 实现对照
 
 > 以下对照 **当前代码库** 相对本文档早期「MVP / stub / 暂不实现」建议的落地情况。正文第 5–6 节保留为历史规划参考。
 
-| 分析项（正文章节） | 官方要求 | lite-go v0.8.1 | 代码位置 |
+| 分析项（正文章节） | 官方要求 | lite-go v0.8.2 | 代码位置 |
 |-------------------|----------|----------------|----------|
 | mTLS + JWT | Panel 双向 TLS + Bearer | ✅ | `internal/httpserver`, `internal/auth` |
 | zstd + 1000MB body | `@kastov/body-parser-with-zstd` | ✅（低内存 64MB 可选） | `internal/bodylimit` |
@@ -569,7 +569,7 @@ stats 和 handler 不是简单 HTTP CRUD：
 | Xray start/stop/healthcheck | supervisord 等价 | ✅ | `internal/xray/manager.go` |
 | 内部 mTLS 三件套 | CA + server + **client** cert | ✅ | `internal/xray/certs.go` |
 | HashedSet 重启优化 | `isNeedRestartCore()` | ✅ | `internal/xray/hashedset.go` |
-| Stats 10 路由 | gRPC 真实数据 | ✅ | `internal/stats`, `internal/xtls/stats*.go` |
+| Stats 10 路由 | gRPC 真实数据 + 失败 HTTP 错误 | ✅ A010–A017 | `internal/stats/` |
 | Handler 8 路由 | 5 协议热更新 | ✅ | `internal/nodehandler`, `internal/xtls/handler.go` |
 | Plugin sync + schema | `NodePluginSchema` | ✅ 0.4.4 对齐 | `internal/plugin/schema_validate.go` |
 | nftables | CAP_NET_ADMIN + nft | ✅ | `internal/plugin/nft_linux.go` |
@@ -580,18 +580,115 @@ stats 和 handler 不是简单 HTTP CRUD：
 | contract golden tests | DTO shape | ✅ 28 路由 | `internal/contract/` |
 | contract-sync CI | 跟踪 upstream | ✅ | `.github/workflows/contract-sync.yml` |
 | 部署自检 | — | ✅ `remnanode-lite doctor` | `internal/doctor/` |
-| 错误码 errorCode | 统一 A00x | ⚠️ 部分（JWT A003） | — |
+| 错误码 errorCode | 统一 A00x | ✅ JWT A003 + Stats A009–A017 + Handler A001/A014 | `internal/auth`, `internal/stats/errors.go`, `internal/nodehandler/errors.go` |
 | compression / helmet | Express 中间件 | ❌ 未做 | 无影响 |
 | CUSTOM_CORE_URL | entrypoint 下载 | ❌ 未做 | 可选 |
 | Docker 镜像 | 官方主分发 | ❌ 未做 | 可选 |
 | geo-zapret.dat | volume 挂载 | ❌ 未做 | 可选 |
 
-**Panel 主流程结论**：v0.8.1 已覆盖正文第 5 节「必须实现」与「可 stub」项中的生产必需部分；第 5 节「暂时不实现」列表在 v0.8.1 中 **均已实现**（除上表标记 ❌ 的可选项）。
+**Panel 主流程结论**：v0.8.2 已覆盖正文第 5 节「必须实现」与「可 stub」项中的生产必需部分；第 5 节「暂时不实现」列表在 v0.8.2 中 **均已实现**（除上表标记 ❌ 的可选项）。
 
 **验证命令**：
 
 ```bash
-go test ./internal/contract/...   # 28 路由 DTO
-sudo remnanode-lite doctor        # 部署环境
+go test ./...                      # 全量测试（含 stats 回归）
+go test ./internal/contract/...      # 28 路由 DTO
+sudo remnanode-lite doctor         # 部署环境
 grep AmbientCapabilities /etc/systemd/system/remnawave-node.service
 ```
+
+---
+
+## 附录 B：v0.8.2 审计与修复记录
+
+> 2026-06 对照官方 v2.7.0 全量代码审计结论；下列 **已修复** 项在本分支代码中落地。
+
+### 功能缺失（仍可选 / 设计不做）
+
+| 项 | 说明 |
+|----|------|
+| Docker / supervisord / entrypoint | lite 单二进制 + systemd，有意不做 |
+| `CUSTOM_CORE_URL` | 需手动安装 rw-core |
+| CLI `dump-config` / `kill-sockets` | 有 `doctor` + `release-url` 子命令替代部分能力 |
+| compression / helmet | 无 Panel 影响 |
+
+### 已修复 BUG
+
+| 项 | 修复 |
+|----|------|
+| Stats gRPC 失败静默返回 200+空数据 | 返回 HTTP 500 + `errorCode` A010–A017 |
+| `get-users-stats` 未过滤零流量 | 对齐官方 `uplink/downlink !== 0` 过滤 |
+| Xray `Start` 并发 TOCTOU | `startProcessing` 检查后立即置位 + defer 释放 |
+| `add-users` 批量失败语义 | 对齐官方始终 `success: true` |
+| plugin config hash | 对齐 `node-object-hash`（trim+sort:false）+ node 向量测试 |
+
+### 已清理孤立代码
+
+- 删除 `pluginUUID()`、`discardBody()`（httpserver/stats）
+- `version.ReleaseAssetURL` / `InstallScriptURL` 接入 CLI：`remnanode-lite release-url`；`upgrade.sh` 优先调用
+
+### 仍建议后续改进
+
+- 256MB VPS 生产联调实测
+
+---
+
+## 附录 C：2026-06-08 官方对比审计（upstream main @ v2.7.0）
+
+> 对照 [remnawave/node](https://github.com/remnawave/node) `main` 分支 `package.json` version **2.7.0**；本地执行 contract-sync 路由 diff：**28/28 无缺失、无多余**。
+
+### contract-sync 结果
+
+| 项 | 结果 |
+|----|------|
+| upstream 版本 | 2.7.0（与 lite-go 参考版本一致） |
+| 官方路由数 | 28 |
+| lite-go 覆盖 | 28/28 ✅ |
+| CI 工作流 | `.github/workflows/contract-sync.yml` 每周一自动对比 |
+
+### 功能缺失（相对官方，有意不做）
+
+| 类别 | 说明 | Panel 影响 |
+|------|------|-----------|
+| Docker / supervisord | lite 用 systemd + 单二进制 | 无 |
+| `CUSTOM_CORE_URL` | 需手动安装 rw-core | 无 |
+| CLI `dump-config` / `kill-sockets` | 有 `doctor` 替代 | 无 |
+| compression / helmet | Express 中间件 | 无 |
+| geo-zapret.dat volume | Docker 专用 | 无 |
+| sockdestroy → `ss -K` | 踢连接实现不同 | 需 CAP_NET_ADMIN |
+
+### 行为差异（已评估）
+
+| 端点/模块 | 官方 | lite-go（审计后） | 说明 |
+|-----------|------|-------------------|------|
+| Stats 流量类 | gRPC 失败 → 500 A010–A017 | 同 | 已对齐 |
+| Stats 在线/IP | NOT_FOUND → 200 空/false；其他错误 → 200 空/false | NOT_FOUND → 200；其他 → **500 A009** | **混合策略**，比官方更可观测 |
+| Handler get-inbound-* | gRPC 失败 → 500 **A014** | 同 | 已对齐 |
+| Handler add/remove catch | 异常 → 500 **A001** | panic recover → 500 **A001** | 已对齐 |
+| Handler add/remove 全失败 | 200 + `success:false` | 同 | 已对齐 |
+| plugin torrent 禁用 | 看请求体 `includeRuleTags` | 看状态 `nowIncludeTags` | lite 避免无谓全停 Xray |
+| 进程管理 | supervisord | exec + monitorProcess | 等价 |
+
+### 本次修复（审计落地）
+
+| 项 | 修复 |
+|----|------|
+| Stats 在线/IP 静默失败 | 混合策略：NOT_FOUND 静默，其他 gRPC 错误 → 500 A009 |
+| Stats 错误码 A014 冲突 | A014 归还官方 Handler；Stats 在线/IP 改用 A009 |
+| Handler get-inbound 失败 | 500 + errorCode A014 |
+| Handler panic/异常 | recover → 500 + A001 |
+| torrent 禁用 + 残留 tags | `nowIncludeTags` 判断 → RemoveOutbound 轻量路径 |
+| zstd decoder 泄漏 | `zstdReadCloser` 正确 Close |
+| 孤立代码 | 删除 `HandlerRemoveUserFromAllInbounds`；`.gitignore` 排除 `node_modules` |
+
+### Plugin / Xray 模块评估
+
+| 模块 | 对齐度 | 备注 |
+|------|--------|------|
+| Plugin sync/hash/nft/torrent | ~95% | torrent 禁用逻辑优于官方 |
+| Xray Start/Stop/HashedSet | ~92% | gRPC 就绪检测策略略不同（500ms 轮询 vs pRetry 2s） |
+| REST Contract | 100% | 28 路由全覆盖 |
+
+### 总体结论
+
+**无阻塞性 BUG**。lite-go v0.8.2 可替代官方 Docker 节点完成 Panel 主流程。关注 upstream 版本升级时重跑 contract-sync，以及 256MB VPS 生产联调。

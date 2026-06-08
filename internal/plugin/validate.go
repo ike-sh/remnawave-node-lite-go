@@ -1,8 +1,8 @@
 package plugin
 
 import (
+	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // ValidatePluginConfig performs structural validation aligned with @remnawave/node-plugins@0.4.4.
@@ -30,34 +30,25 @@ func ValidatePluginConfig(config map[string]any) error {
 	return nil
 }
 
-func pluginConfigHash(plugin map[string]any) string {
-	if plugin == nil {
-		return ""
-	}
-	rawConfig, _ := plugin["config"].(map[string]any)
-	return hashConfig(rawConfig)
+func pluginConfigHash(config json.RawMessage) string {
+	return hashPluginConfig(config)
 }
 
-func isUnchangedPluginConfig(plugin map[string]any, state *State) bool {
+func isUnchangedPluginConfig(plugin *SyncPlugin, state *State) bool {
 	if plugin == nil || state == nil {
 		return false
 	}
-	hash := pluginConfigHash(plugin)
+	hash := pluginConfigHash(plugin.Config)
 	return hash != "" && hash == state.ConfigHash() && state.HasActivePlugin()
 }
 
-func extractPluginConfig(plugin map[string]any) map[string]any {
-	if plugin == nil {
+func extractPluginConfig(plugin *SyncPlugin) map[string]any {
+	if plugin == nil || len(plugin.Config) == 0 {
 		return nil
 	}
-	raw, _ := plugin["config"].(map[string]any)
-	return raw
-}
-
-func pluginUUID(plugin map[string]any) string {
-	if plugin == nil {
-		return ""
+	var config map[string]any
+	if err := json.Unmarshal(plugin.Config, &config); err != nil {
+		return nil
 	}
-	uuid, _ := plugin["uuid"].(string)
-	return strings.TrimSpace(uuid)
+	return config
 }

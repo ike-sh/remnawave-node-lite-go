@@ -8,7 +8,7 @@ ETC_DIR="/etc/remnanode"
 UNIT="/etc/systemd/system/remnawave-node.service"
 BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
-REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"
+REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"  # must match internal/version/version.go releaseRepo
 TAG="${RNL_TAG:-v${VERSION}}"
 UPGRADE_XRAY="${RNL_UPGRADE_XRAY:-0}"
 
@@ -131,7 +131,13 @@ backup_binary() {
 
 download_binary() {
   local arch="$1"
-  local url="https://github.com/${REPO}/releases/download/${TAG}/remnanode-lite_linux_${arch}.tar.gz"
+  local url=""
+  if [ -x "${PREFIX}/${BIN_NAME}" ]; then
+    url="$("${PREFIX}/${BIN_NAME}" release-url "${TAG}" "${arch}" 2>/dev/null || true)"
+  fi
+  if [ -z "${url}" ]; then
+    url="https://github.com/${REPO}/releases/download/${TAG}/remnanode-lite_linux_${arch}.tar.gz"
+  fi
   local tmp
   tmp="$(mktemp -d)"
 

@@ -23,6 +23,9 @@ remnawave-node-reference/
 *.exe
 coverage.out
 
+# Node (hash reference vectors only — not used at runtime)
+node_modules/
+
 # IDE / OS
 .vscode/
 .idea/

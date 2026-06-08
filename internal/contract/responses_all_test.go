@@ -366,7 +366,7 @@ func (stubStatsProvider) GetSysStats(context.Context) (*xtls.SysStats, error) {
 	return &xtls.SysStats{NumGoroutine: 1, Uptime: 10}, nil
 }
 func (stubStatsProvider) GetAllUsersStats(context.Context, bool) ([]xtls.UserTraffic, error) {
-	return []xtls.UserTraffic{{Username: "u1"}}, nil
+	return []xtls.UserTraffic{{Username: "u1", Uplink: 1, Downlink: 2}}, nil
 }
 func (stubStatsProvider) GetUserOnlineStatus(context.Context, string) (bool, error) { return false, nil }
 func (stubStatsProvider) GetInboundStats(context.Context, string, bool) (xtls.TagTraffic, error) {

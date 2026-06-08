@@ -34,7 +34,7 @@ func TestHandleXrayWebhookAddsReport(t *testing.T) {
 	t.Parallel()
 
 	state := plugin.NewState()
-	_, _ = state.UpdateFromSync(map[string]any{
+	payload, err := plugin.NewSyncPluginFromEnvelope(map[string]any{
 		"uuid": "00000000-0000-4000-8000-000000000001",
 		"name": "test",
 		"config": map[string]any{
@@ -44,6 +44,10 @@ func TestHandleXrayWebhookAddsReport(t *testing.T) {
 			},
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = state.UpdateFromSync(payload)
 	service := plugin.NewService(state, nil, nil)
 	service.HandleXrayWebhook(map[string]any{
 		"email":  "user-1",
