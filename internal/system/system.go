@@ -73,7 +73,7 @@ func GetStats() Stats {
 		MemoryUsed: used,
 		Uptime:     uptime(),
 		LoadAvg:    loadAvg(),
-		Interface:  nil,
+		Interface:  defaultMonitor.GetDefaultInterface(),
 	}
 }
 

@@ -1,0 +1,75 @@
+name: contract-sync
+
+on:
+  schedule:
+    # 每周一 UTC 02:00 对比官方 remnawave/node contract
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "remnawave/node git ref (tag/branch)"
+        required: false
+        default: "main"
+
+jobs:
+  compare-routes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone upstream remnawave/node
+        run: |
+          ref="${{ github.event.inputs.upstream_ref || 'main' }}"
+          git clone --depth 1 --branch "$ref" https://github.com/remnawave/node.git /tmp/remnawave-node || \
+            git clone --depth 1 https://github.com/remnawave/node.git /tmp/remnawave-node
+
+      - name: Report upstream version
+        run: |
+          ver=$(python3 -c "import json; print(json.load(open('/tmp/remnawave-node/package.json'))['version'])")
+          echo "Upstream @remnawave/node version: $ver"
+          echo "upstream_version=$ver" >> "$GITHUB_OUTPUT"
+          if [ "$ver" != "2.7.0" ]; then
+            echo "::notice::Upstream node bumped to $ver — review contract diff manually"
+          fi
+        id: official
+        run: |
+          python3 <<'PY'
+          import re, pathlib
+          text = pathlib.Path("/tmp/remnawave-node/libs/contract/api/routes.ts").read_text()
+          # Match template strings like `${ROOT}/...` and `/vision/...`
+          paths = set()
+          for m in re.finditer(r"`(\$\{ROOT\}/[^`]+|/vision/[^`]+)`", text):
+              p = m.group(1).replace("${ROOT}", "")
+              paths.add(p)
+          for p in sorted(paths):
+              print(p)
+          PY > /tmp/official-routes.txt
+          echo "count=$(wc -l < /tmp/official-routes.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Extract lite-go implemented routes
+        run: |
+          grep -E '^\s*"/node/|^\s*"/vision/' internal/contract/routes_test.go \
+            | sed 's/.*"\(\/[^"]*\)".*/\1/' \
+            | sort -u > /tmp/lite-routes.txt
+
+      - name: Diff routes
+        run: |
+          echo "=== Official only (missing in lite-go) ==="
+          comm -23 /tmp/official-routes.txt /tmp/lite-routes.txt || true
+          echo ""
+          echo "=== Lite-go only (not in official contract) ==="
+          comm -13 /tmp/official-routes.txt /tmp/lite-routes.txt || true
+          echo ""
+          missing=$(comm -23 /tmp/official-routes.txt /tmp/lite-routes.txt | wc -l | tr -d ' ')
+          if [ "$missing" != "0" ]; then
+            echo "::error::Found $missing official route(s) not covered in lite-go contract test"
+            exit 1
+          fi
+          echo "All ${{ steps.official.outputs.count }} official routes are covered."
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go test contract
+        run: go test ./internal/contract/...

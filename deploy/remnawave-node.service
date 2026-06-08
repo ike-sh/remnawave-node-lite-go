@@ -1,0 +1,28 @@
+[Unit]
+Description=Remnawave Node Lite (Go)
+Documentation=https://github.com/ike-sh/remnawave-node-lite-go
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/remnanode/node.env
+# 128/256MB VPS：install-node.sh --low-memory 会写入 LOW_MEMORY=1 并启用 GOMEMLIMIT
+Environment=GOMEMLIMIT=180MiB
+WorkingDirectory=/var/lib/remnanode
+ExecStart=/usr/local/bin/remnanode-lite
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+# 对齐官方 docker-compose cap_add: NET_ADMIN
+# nftables 插件、ss -K 踢连接、policy 注入均依赖此 capability
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=false
+
+# rw-core 子进程与 Unix socket 需要
+RuntimeDirectory=remnanode
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

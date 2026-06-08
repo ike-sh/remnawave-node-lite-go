@@ -12,8 +12,11 @@ import (
 
 type internalCerts struct {
 	CACertPEM     string
+	CAKeyPEM      string
 	ServerCertPEM string
 	ServerKeyPEM  string
+	ClientCertPEM string
+	ClientKeyPEM  string
 }
 
 func generateInternalCerts() (internalCerts, error) {
@@ -60,9 +63,39 @@ func generateInternalCerts() (internalCerts, error) {
 		return internalCerts{}, err
 	}
 
+	caKeyDER, err := x509.MarshalPKCS8PrivateKey(caKey)
+	if err != nil {
+		return internalCerts{}, err
+	}
+
+	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return internalCerts{}, err
+	}
+	clientTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(3),
+		Subject:               pkix.Name{CommonName: "Remnawave Internal Client"},
+		NotBefore:             now.Add(-time.Minute),
+		NotAfter:              now.AddDate(5, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caTemplate, &clientKey.PublicKey, caKey)
+	if err != nil {
+		return internalCerts{}, err
+	}
+	clientKeyDER, err := x509.MarshalPKCS8PrivateKey(clientKey)
+	if err != nil {
+		return internalCerts{}, err
+	}
+
 	return internalCerts{
 		CACertPEM:     string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})),
+		CAKeyPEM:      string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caKeyDER})),
 		ServerCertPEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})),
 		ServerKeyPEM:  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: serverKeyDER})),
+		ClientCertPEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER})),
+		ClientKeyPEM:  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: clientKeyDER})),
 	}, nil
 }

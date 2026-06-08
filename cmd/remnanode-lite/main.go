@@ -2,23 +2,45 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"remnawave-node-lite-go/internal/auth"
+	"remnawave-node-lite-go/internal/bodylimit"
 	"remnawave-node-lite-go/internal/config"
+	"remnawave-node-lite-go/internal/connections"
+	"remnawave-node-lite-go/internal/doctor"
 	"remnawave-node-lite-go/internal/httpserver"
+	"remnawave-node-lite-go/internal/netadmin"
+	"remnawave-node-lite-go/internal/plugin"
 	"remnawave-node-lite-go/internal/secret"
+	"remnawave-node-lite-go/internal/system"
 	"remnawave-node-lite-go/internal/unixconfig"
+	"remnawave-node-lite-go/internal/version"
 	"remnawave-node-lite-go/internal/xray"
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version", "-version", "--version":
+			fmt.Println(version.String())
+			return
+		case "doctor":
+			os.Exit(doctor.Run(os.Args[2:]))
+		}
+	}
 	cfg, err := config.Load(".env")
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+	bodylimit.Configure(cfg.LowMemory, cfg.BodyLimitMB)
+	if !netadmin.HasCapNetAdmin() {
+		log.Printf("warning: CAP_NET_ADMIN not available — nftables plugin and ss -K connection drop are disabled (check systemd AmbientCapabilities)")
 	}
 
 	payload, err := secret.Parse(cfg.SecretKey)
@@ -38,11 +60,19 @@ func main() {
 		InternalSocketPath: cfg.InternalSocketPath,
 		InternalRESTToken:  cfg.InternalRESTToken,
 		XtlsAPIPort:        cfg.XtlsAPIPort,
+		DisableHashCheck:   cfg.DisableHashedSetCheck,
 	})
 	if err != nil {
 		log.Fatalf("initialize Xray manager: %v", err)
 	}
-	server, err := httpserver.New(cfg, payload, validator, manager)
+
+	pluginState := plugin.NewState()
+	dropper := connections.NewDropper(pluginState.IsWhitelisted)
+	pluginService := plugin.NewService(pluginState, dropper, manager)
+
+	manager.SetTorrentBlockerProvider(pluginState)
+
+	server, err := httpserver.New(cfg, payload, validator, manager, pluginService, dropper)
 	if err != nil {
 		log.Fatalf("initialize HTTPS server: %v", err)
 	}
@@ -54,6 +84,7 @@ func main() {
 		Path:     cfg.InternalSocketPath,
 		Token:    cfg.InternalRESTToken,
 		Provider: manager,
+		Webhook:  pluginService,
 	}
 	go func() {
 		log.Printf("internal config socket listening on %s", cfg.InternalSocketPath)
@@ -70,6 +101,7 @@ func main() {
 	}()
 
 	<-ctx.Done()
+	system.DefaultNetworkMonitor().Stop()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {

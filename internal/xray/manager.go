@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -15,33 +14,44 @@ import (
 	"time"
 
 	"remnawave-node-lite-go/internal/system"
+	nodeversion "remnawave-node-lite-go/internal/version"
 )
 
-const NodeVersion = "0.2.0-mvp"
-
 type Options struct {
-	XrayBin            string
-	GeoDir             string
-	LogDir             string
-	InternalSocketPath string
-	InternalRESTToken  string
-	XtlsAPIPort        int
+	XrayBin              string
+	GeoDir               string
+	LogDir               string
+	InternalSocketPath   string
+	InternalRESTToken    string
+	XtlsAPIPort          int
+	DisableHashCheck     bool
+}
+
+type TorrentBlockerConfigProvider interface {
+	TorrentBlockerEnabled() bool
+	TorrentBlockerIncludeRuleTags() []string
 }
 
 type Manager struct {
-	mu            sync.RWMutex
-	xrayBin       string
-	geoDir        string
-	logDir        string
-	socketPath    string
-	token         string
-	xtlsAPIPort   int
-	internalCerts internalCerts
+	mu               sync.RWMutex
+	xrayBin          string
+	geoDir           string
+	logDir           string
+	socketPath       string
+	token            string
+	xtlsAPIPort      int
+	disableHashCheck bool
+	internalCerts    internalCerts
+	torrentBlocker   TorrentBlockerConfigProvider
 
-	xrayVersion   *string
-	xrayOnline    bool
-	currentConfig map[string]any
-	process       *processState
+	xrayVersion     *string
+	xrayOnline      bool
+	startProcessing bool
+	currentConfig   map[string]any
+	emptyConfigHash string
+	inboundHashes   map[string]*HashedSet
+	inboundTags     map[string]struct{}
+	process         *processState
 }
 
 type processState struct {
@@ -101,28 +111,92 @@ func NewManager(opts Options) (*Manager, error) {
 		return nil, fmt.Errorf("generate internal Xray certificates: %w", err)
 	}
 	manager := &Manager{
-		xrayBin:       opts.XrayBin,
-		geoDir:        opts.GeoDir,
-		logDir:        opts.LogDir,
-		socketPath:    opts.InternalSocketPath,
-		token:         opts.InternalRESTToken,
-		xtlsAPIPort:   opts.XtlsAPIPort,
-		internalCerts: certs,
+		xrayBin:          opts.XrayBin,
+		geoDir:           opts.GeoDir,
+		logDir:           opts.LogDir,
+		socketPath:       opts.InternalSocketPath,
+		token:            opts.InternalRESTToken,
+		xtlsAPIPort:      opts.XtlsAPIPort,
+		disableHashCheck: opts.DisableHashCheck,
+		internalCerts:    certs,
 	}
 	manager.refreshVersion()
 	return manager, nil
 }
 
-func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
-	fullConfig := generateAPIConfig(req.XrayConfig, m.xtlsAPIPort, m.internalCerts)
+func (m *Manager) SetTorrentBlockerProvider(provider TorrentBlockerConfigProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.torrentBlocker = provider
+}
 
+func (m *Manager) torrentBlockerOptions() TorrentBlockerOptions {
+	m.mu.RLock()
+	socketPath := m.socketPath
+	token := m.token
+	provider := m.torrentBlocker
+	m.mu.RUnlock()
+
+	opts := TorrentBlockerOptions{
+		SocketPath: socketPath,
+		RESTToken:  token,
+	}
+	if provider != nil {
+		opts.Enabled = provider.TorrentBlockerEnabled()
+		opts.IncludeRuleTags = provider.TorrentBlockerIncludeRuleTags()
+	}
+	return opts
+}
+
+func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	if err := os.MkdirAll(m.logDir, 0o755); err != nil {
 		message := err.Error()
 		return m.startResponse(false, &message)
 	}
 
 	m.mu.Lock()
+	if m.startProcessing {
+		m.mu.Unlock()
+		message := "Request already in progress"
+		return m.startResponse(false, &message)
+	}
+	m.mu.Unlock()
+
+	fullConfig := generateAPIConfig(req.XrayConfig, m.xtlsAPIPort, m.internalCerts, m.torrentBlockerOptions())
+
+	m.mu.RLock()
+	online := m.xrayOnline
+	disableCheck := m.disableHashCheck
+	forceRestart := req.Internals.ForceRestart
+	m.mu.RUnlock()
+
+	if online && !disableCheck && !forceRestart {
+		if m.PingXrayGRPC(ctx) {
+			m.mu.RLock()
+			needRestart := m.isNeedRestartCoreLocked(req.Internals.Hashes)
+			m.mu.RUnlock()
+			if !needRestart {
+				return m.startResponse(true, nil)
+			}
+		} else {
+			m.mu.Lock()
+			m.xrayOnline = false
+			m.mu.Unlock()
+		}
+	}
+
+	m.mu.Lock()
+	m.startProcessing = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.startProcessing = false
+		m.mu.Unlock()
+	}()
+
+	m.mu.Lock()
 	m.currentConfig = fullConfig
+	m.extractUsersFromConfigLocked(req.Internals.Hashes, fullConfig)
 	if err := m.stopProcessLocked(false); err != nil {
 		m.mu.Unlock()
 		message := err.Error()
@@ -140,7 +214,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	m.xrayOnline = false
 	m.mu.Unlock()
 
-	started := m.waitForAPIPort(ctx, 20*time.Second)
+	started := m.waitForGRPC(ctx, 20*time.Second)
 
 	m.mu.Lock()
 	if started {
@@ -152,7 +226,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	m.xrayOnline = false
 	m.mu.Unlock()
 
-	message := fmt.Sprintf("xray API port 127.0.0.1:%d did not become reachable within 20s", m.xtlsAPIPort)
+	message := fmt.Sprintf("xray gRPC API on 127.0.0.1:%d did not become reachable within 20s", m.xtlsAPIPort)
 	return m.startResponse(false, &message)
 }
 
@@ -174,7 +248,7 @@ func (m *Manager) Health() HealthResponse {
 		IsAlive:                  true,
 		XrayInternalStatusCached: m.xrayOnline,
 		XrayVersion:              m.xrayVersion,
-		NodeVersion:              NodeVersion,
+		NodeVersion:              nodeversion.Version,
 	}
 }
 
@@ -294,31 +368,10 @@ func (m *Manager) stopProcessLocked(clearConfig bool) error {
 	m.xrayOnline = false
 	if clearConfig {
 		m.currentConfig = nil
+		m.clearHashStateLocked()
+		m.clearInboundTagsLocked()
 	}
 	return nil
-}
-
-func (m *Manager) waitForAPIPort(ctx context.Context, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	address := fmt.Sprintf("127.0.0.1:%d", m.xtlsAPIPort)
-
-	for time.Now().Before(deadline) {
-		dialer := net.Dialer{Timeout: 500 * time.Millisecond}
-		conn, err := dialer.DialContext(ctx, "tcp", address)
-		if err == nil {
-			_ = conn.Close()
-			return true
-		}
-
-		timer := time.NewTimer(500 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return false
-		case <-timer.C:
-		}
-	}
-	return false
 }
 
 func (m *Manager) refreshVersion() {
@@ -359,7 +412,7 @@ func (m *Manager) startResponse(isStarted bool, message *string) StartResponse {
 		Version:   version,
 		Error:     message,
 		NodeInformation: NodeInformation{
-			Version: stringPtr(NodeVersion),
+			Version: stringPtr(nodeversion.Version),
 		},
 		System: system.GetSnapshot(),
 	}

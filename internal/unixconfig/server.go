@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -16,10 +17,15 @@ type Provider interface {
 	CurrentConfig() map[string]any
 }
 
+type WebhookProcessor interface {
+	HandleXrayWebhook(payload map[string]any)
+}
+
 type Server struct {
 	Path       string
 	Token      string
 	Provider   Provider
+	Webhook    WebhookProcessor
 	httpServer *http.Server
 }
 
@@ -45,6 +51,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/internal/get-config", s.handleGetConfig)
+	mux.HandleFunc("/internal/webhook", s.handleWebhook)
 	s.httpServer = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -65,6 +72,28 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Token != "" && r.URL.Query().Get("token") != s.Token {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	defer r.Body.Close()
+
+	if s.Webhook != nil {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+			s.Webhook.HandleXrayWebhook(payload)
+		}
+	} else {
+		_, _ = io.Copy(io.Discard, r.Body)
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {

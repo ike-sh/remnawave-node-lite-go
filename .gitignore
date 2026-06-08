@@ -1,4 +1,4 @@
-﻿# Local env
+# Local env
 .env
 .env.*
 !.env.example
@@ -8,6 +8,8 @@ bin/
 dist/
 build/
 tmp/
+remnanode-lite
+remnanode-lite.exe
 
 # Logs
 logs/

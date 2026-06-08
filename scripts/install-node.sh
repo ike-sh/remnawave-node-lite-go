@@ -1,0 +1,418 @@
+#!/usr/bin/env bash
+# remnawave-node-lite-go 一键安装脚本
+set -euo pipefail
+
+VERSION="0.8.1"
+PREFIX="/usr/local/bin"
+ETC_DIR="/etc/remnanode"
+DATA_DIR="/var/lib/remnanode"
+LOG_DIR="/var/log/remnanode"
+UNIT="/etc/systemd/system/remnawave-node.service"
+BIN_NAME="remnanode-lite"
+NODE_ENV="${ETC_DIR}/node.env"
+SECRET_FILE="${ETC_DIR}/secret.key"
+REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"
+TAG="${RNL_TAG:-v${VERSION}}"
+INSTALL_XRAY="${RNL_INSTALL_XRAY:-1}"
+SKIP_XRAY="${RNL_SKIP_XRAY:-0}"
+SECRET_FILE_ARG=""
+
+YES=0
+DRY_RUN=0
+LOW_MEMORY=0
+STAGE="初始化"
+
+usage() {
+  cat <<EOF
+用法：install-node.sh [--yes] [--dry-run] [--skip-xray] [--low-memory] [--secret-file PATH] [--help] [--version]
+
+Remnawave Node Lite (Go) ${VERSION} 一键安装
+
+Secret Key（Panel 下发，通常很长）推荐写入独立文件，避免 .env 单行过长：
+  ${SECRET_FILE}
+
+环境变量：
+  RNL_REPO          GitHub 仓库，默认 ike-sh/remnawave-node-lite-go
+  RNL_TAG           Release 标签，默认 v${VERSION}
+  RNL_INSTALL_XRAY  是否安装 rw-core，默认 1
+  RNL_SKIP_XRAY     设为 1 跳过 rw-core 安装
+  SECRET_KEY        非交互模式可直接传入（写入 secret.key）
+  NODE_PORT         监听端口，默认 2222
+  LOW_MEMORY        设为 1 启用低内存模式（64MB body limit + GOMEMLIMIT）
+EOF
+}
+
+version() {
+  echo "remnawave-node-lite install ${VERSION}"
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes|-y) YES=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --skip-xray) SKIP_XRAY=1 ;;
+    --low-memory) LOW_MEMORY=1 ;;
+    --secret-file)
+      SECRET_FILE_ARG="${2:-}"
+      if [ -z "$SECRET_FILE_ARG" ]; then
+        echo "--secret-file 需要文件路径" >&2
+        exit 1
+      fi
+      shift 2
+      continue
+      ;;
+    --help|-h) usage; exit 0 ;;
+    --version) version; exit 0 ;;
+    *)
+      echo "未知参数：$1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+on_error() {
+  echo "安装失败：${STAGE}" >&2
+  echo "失败命令：${BASH_COMMAND}" >&2
+  exit $?
+}
+
+trap on_error ERR
+
+step() {
+  STAGE="$1"
+  echo "==> $1"
+}
+
+run() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] $*"
+  else
+    "$@"
+  fi
+}
+
+require_root() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "请使用 root 运行：sudo bash install-node.sh" >&2
+    exit 1
+  fi
+}
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "缺少命令：$1" >&2
+    exit 1
+  fi
+}
+
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "amd64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *)
+      echo "不支持的架构：$(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+secret_configured() {
+  if [ -f "$SECRET_FILE" ] && [ -s "$SECRET_FILE" ]; then
+    return 0
+  fi
+  return 1
+}
+
+write_secret_from_source() {
+  local src="$1"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 写入 ${SECRET_FILE} <- ${src}"
+    return 0
+  fi
+  install -m 0600 -D /dev/null "$SECRET_FILE"
+  if [ "$src" = "-" ]; then
+    cat >"$SECRET_FILE"
+  else
+    install -m 0600 "$src" "$SECRET_FILE"
+  fi
+}
+
+write_secret_from_env() {
+  local value="${SECRET_KEY:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 写入 ${SECRET_FILE} <- SECRET_KEY 环境变量"
+    return 0
+  fi
+  printf '%s' "$value" >"$SECRET_FILE"
+  chmod 600 "$SECRET_FILE"
+}
+
+download_binary() {
+  local arch="$1"
+  local url="https://github.com/${REPO}/releases/download/${TAG}/remnanode-lite_linux_${arch}.tar.gz"
+  local tmp
+  tmp="$(mktemp -d)"
+
+  step "下载 ${BIN_NAME} ${TAG} (linux/${arch})"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] curl -fsSL ${url}"
+    echo "[dry-run] install ${PREFIX}/${BIN_NAME}"
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  curl -fsSL "${url}" -o "${tmp}/archive.tar.gz"
+  tar -xzf "${tmp}/archive.tar.gz" -C "${tmp}"
+  install -m 0755 "${tmp}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
+  rm -rf "$tmp"
+
+  "${PREFIX}/${BIN_NAME}" version
+}
+
+install_xray() {
+  if [ "$SKIP_XRAY" -eq 1 ] || [ "$INSTALL_XRAY" -eq 0 ]; then
+    echo "跳过 rw-core 安装。"
+    return 0
+  fi
+
+  step "安装 rw-core (Xray core)"
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "${script_dir}/install-xray.sh" ]; then
+    bash "${script_dir}/install-xray.sh"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/install-xray.sh" | bash
+  fi
+}
+
+setup_directories() {
+  step "创建目录"
+  run mkdir -p "$ETC_DIR" "$DATA_DIR" "$LOG_DIR"
+  run chmod 0755 "$ETC_DIR" "$DATA_DIR" "$LOG_DIR"
+}
+
+setup_env_file() {
+  step "配置 ${NODE_ENV}"
+  if [ -f "$NODE_ENV" ]; then
+    echo "保留现有配置：${NODE_ENV}"
+    return 0
+  fi
+
+  local port="${NODE_PORT:-2222}"
+  local low_mem="${LOW_MEMORY:-0}"
+  if [ "$LOW_MEMORY" -eq 1 ]; then
+    low_mem=1
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 创建 ${NODE_ENV}"
+    return 0
+  fi
+
+  cat >"$NODE_ENV" <<EOF
+# Remnawave Node Lite — 由 install-node.sh 生成
+# Panel Secret Key 写入独立文件（支持超长 base64）
+SECRET_KEY_FILE=${SECRET_FILE}
+NODE_PORT=${port}
+XTLS_API_PORT=61000
+XRAY_BIN=/usr/local/bin/rw-core
+GEO_DIR=/usr/local/share/xray
+LOG_DIR=${LOG_DIR}
+INTERNAL_SOCKET_PATH=
+INTERNAL_REST_TOKEN=
+LOW_MEMORY=${low_mem}
+BODY_LIMIT_MB=
+EOF
+  chmod 600 "$NODE_ENV"
+  echo "已创建 ${NODE_ENV}"
+}
+
+setup_secret_file() {
+  step "配置 Secret Key"
+
+  if secret_configured; then
+    echo "保留现有 Secret Key：${SECRET_FILE}"
+    return 0
+  fi
+
+  if [ -n "$SECRET_FILE_ARG" ]; then
+    if [ ! -f "$SECRET_FILE_ARG" ]; then
+      echo "找不到 --secret-file 指定路径：${SECRET_FILE_ARG}" >&2
+      exit 1
+    fi
+    write_secret_from_source "$SECRET_FILE_ARG"
+    echo "已从文件导入 Secret Key。"
+    return 0
+  fi
+
+  write_secret_from_env
+  if secret_configured; then
+    echo "已从 SECRET_KEY 环境变量写入 Secret Key。"
+    return 0
+  fi
+
+  if [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "[dry-run] 创建空 ${SECRET_FILE}"
+    else
+      install -m 0600 -D /dev/null "$SECRET_FILE"
+    fi
+    return 0
+  fi
+
+  prompt_secret_interactive
+}
+
+prompt_secret_interactive() {
+  echo
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo " 配置 Panel Secret Key（通常很长）"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo
+  echo "请选择一种方式："
+  echo "  1) 编辑器粘贴（推荐）"
+  echo "  2) 终端多行粘贴（输入 END 结束）"
+  echo "  3) 稍后手动配置"
+  echo
+  read -r -p "选择 [1/2/3]（默认 1）： " choice || choice="1"
+  choice="${choice:-1}"
+
+  case "$choice" in
+    1)
+      install -m 0600 -D /dev/null "$SECRET_FILE"
+      if [ -n "${EDITOR:-}" ]; then
+        "$EDITOR" "$SECRET_FILE"
+      elif command -v nano >/dev/null 2>&1; then
+        nano "$SECRET_FILE"
+      elif command -v vi >/dev/null 2>&1; then
+        vi "$SECRET_FILE"
+      else
+        echo "未找到编辑器，请改用方式 2 或手动编辑 ${SECRET_FILE}" >&2
+        exit 1
+      fi
+      ;;
+    2)
+      echo
+      echo "请粘贴 Panel 下发的 Secret Key，完成后单独一行输入 END："
+      if [ "$DRY_RUN" -eq 1 ]; then
+        echo "[dry-run] heredoc -> ${SECRET_FILE}"
+      else
+        install -m 0600 -D /dev/null "$SECRET_FILE"
+        sed '/^END$/q' >"$SECRET_FILE"
+      fi
+      ;;
+    3)
+      install -m 0600 -D /dev/null "$SECRET_FILE"
+      echo "已跳过。请稍后执行："
+      echo "  sudo nano ${SECRET_FILE}"
+      echo "  sudo systemctl restart remnawave-node"
+      return 0
+      ;;
+    *)
+      echo "无效选择。" >&2
+      exit 1
+      ;;
+  esac
+
+  if ! secret_configured; then
+    echo "⚠ Secret Key 文件为空，服务启动后 Panel 无法连接。" >&2
+  fi
+}
+
+install_systemd() {
+  step "安装 systemd 服务"
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 安装 ${UNIT}"
+    return 0
+  fi
+
+  if [ -f "${script_dir}/../deploy/remnawave-node.service" ]; then
+    install -m 0644 "${script_dir}/../deploy/remnawave-node.service" "$UNIT"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node.service" -o "$UNIT"
+  fi
+
+  systemctl daemon-reload
+  systemctl enable remnawave-node.service
+}
+
+install_helpers() {
+  step "安装日志辅助命令"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] xlogs / xerrors"
+    return 0
+  fi
+
+  cat >/usr/local/bin/xlogs <<'EOF'
+#!/bin/sh
+exec tail -n +1 -f /var/log/remnanode/xray.out.log
+EOF
+  cat >/usr/local/bin/xerrors <<'EOF'
+#!/bin/sh
+exec tail -n +1 -f /var/log/remnanode/xray.err.log
+EOF
+  chmod +x /usr/local/bin/xlogs /usr/local/bin/xerrors
+}
+
+start_service() {
+  if ! secret_configured; then
+    echo "⚠ Secret Key 未配置，跳过启动服务。"
+    echo "  请编辑 ${SECRET_FILE} 后执行：systemctl restart remnawave-node"
+    return 0
+  fi
+
+  step "启动 remnawave-node 服务"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] systemctl restart remnawave-node"
+    return 0
+  fi
+
+  systemctl restart remnawave-node.service
+  sleep 1
+  systemctl --no-pager status remnawave-node.service || true
+}
+
+main() {
+  require_root
+  require_command curl
+  require_command systemctl
+
+  local arch
+  arch="$(detect_arch)"
+
+  setup_directories
+  download_binary "$arch"
+  install_xray
+  setup_env_file
+  setup_secret_file
+  install_systemd
+  install_helpers
+  start_service
+
+  echo
+  echo "安装完成。"
+  echo "  二进制：  ${PREFIX}/${BIN_NAME}"
+  echo "  环境配置：${NODE_ENV}"
+  echo "  Secret Key：${SECRET_FILE}"
+  echo "  日志：    journalctl -u remnawave-node -f"
+  echo "  Xray：    xlogs / xerrors"
+  if ! secret_configured; then
+    echo
+    echo "下一步："
+    echo "  1. sudo nano ${SECRET_FILE}   # 粘贴 Panel Secret Key"
+    echo "  2. sudo systemctl restart remnawave-node"
+  fi
+}
+
+main "$@"

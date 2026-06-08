@@ -31,7 +31,7 @@ func TestGenerateAPIConfigInjectsRemnawaveAPI(t *testing.T) {
 		"routing": map[string]any{
 			"rules": []any{map[string]any{"outboundTag": "direct"}},
 		},
-	}, 61000, certs)
+	}, 61000, certs, TorrentBlockerOptions{})
 
 	inbounds, ok := config["inbounds"].([]any)
 	if !ok || len(inbounds) != 2 {

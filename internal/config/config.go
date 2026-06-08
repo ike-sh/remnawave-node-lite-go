@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -16,18 +17,21 @@ const (
 	defaultXtlsAPIPort = 61000
 	defaultXrayBin     = "/usr/local/bin/rw-core"
 	defaultGeoDir      = "/usr/local/share/xray"
-	defaultLogDir      = "./logs"
+	defaultLogDir      = "/var/log/remnanode"
 )
 
 type Config struct {
-	NodePort           int
-	SecretKey          string
-	XtlsAPIPort        int
-	XrayBin            string
-	GeoDir             string
-	LogDir             string
-	InternalSocketPath string
-	InternalRESTToken  string
+	NodePort               int
+	SecretKey              string
+	XtlsAPIPort            int
+	XrayBin                string
+	GeoDir                 string
+	LogDir                 string
+	InternalSocketPath     string
+	InternalRESTToken      string
+	DisableHashedSetCheck  bool
+	LowMemory              bool
+	BodyLimitMB            int
 }
 
 func Load(dotenvPath string) (Config, error) {
@@ -45,14 +49,18 @@ func Load(dotenvPath string) (Config, error) {
 	for _, key := range []string{
 		"NODE_PORT",
 		"SECRET_KEY",
+		"SECRET_KEY_FILE",
 		"XTLS_API_PORT",
 		"XRAY_BIN",
 		"GEO_DIR",
 		"LOG_DIR",
 		"INTERNAL_SOCKET_PATH",
 		"INTERNAL_REST_TOKEN",
+		"DISABLE_HASHED_SET_CHECK",
+		"LOW_MEMORY",
+		"BODY_LIMIT_MB",
 	} {
-		if value, ok := os.LookupEnv(key); ok {
+		if value, ok := os.LookupEnv(key); ok && strings.TrimSpace(value) != "" {
 			values[key] = value
 		}
 	}
@@ -64,7 +72,13 @@ func Load(dotenvPath string) (Config, error) {
 
 	secretKey := strings.TrimSpace(values["SECRET_KEY"])
 	if secretKey == "" {
-		return Config{}, errors.New("SECRET_KEY is required")
+		secretKey, err = loadSecretFromFile(values)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if secretKey == "" {
+		return Config{}, errors.New("SECRET_KEY or SECRET_KEY_FILE is required")
 	}
 
 	xtlsAPIPort, err := optionalInt(values, "XTLS_API_PORT", defaultXtlsAPIPort)
@@ -89,14 +103,17 @@ func Load(dotenvPath string) (Config, error) {
 	}
 
 	return Config{
-		NodePort:           nodePort,
-		SecretKey:          secretKey,
-		XtlsAPIPort:        xtlsAPIPort,
-		XrayBin:            optionalString(values, "XRAY_BIN", defaultXrayBin),
-		GeoDir:             optionalString(values, "GEO_DIR", defaultGeoDir),
-		LogDir:             optionalString(values, "LOG_DIR", defaultLogDir),
-		InternalSocketPath: internalSocketPath,
-		InternalRESTToken:  internalRESTToken,
+		NodePort:              nodePort,
+		SecretKey:             secretKey,
+		XtlsAPIPort:           xtlsAPIPort,
+		XrayBin:               optionalString(values, "XRAY_BIN", defaultXrayBin),
+		GeoDir:                optionalString(values, "GEO_DIR", defaultGeoDir),
+		LogDir:                optionalString(values, "LOG_DIR", defaultLogDir),
+		InternalSocketPath:    internalSocketPath,
+		InternalRESTToken:     internalRESTToken,
+		DisableHashedSetCheck: optionalBool(values, "DISABLE_HASHED_SET_CHECK", false),
+		LowMemory:             optionalBool(values, "LOW_MEMORY", false),
+		BodyLimitMB:           optionalIntDefault(values, "BODY_LIMIT_MB", 0),
 	}, nil
 }
 
@@ -183,12 +200,48 @@ func optionalString(values map[string]string, key string, fallback string) strin
 	return fallback
 }
 
+func optionalBool(values map[string]string, key string, fallback bool) bool {
+	raw := strings.TrimSpace(values[key])
+	if raw == "" {
+		return fallback
+	}
+	return raw == "true" || raw == "1" || raw == "yes"
+}
+
+func optionalIntDefault(values map[string]string, key string, fallback int) int {
+	raw := strings.TrimSpace(values[key])
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func loadSecretFromFile(values map[string]string) (string, error) {
+	path := strings.TrimSpace(values["SECRET_KEY_FILE"])
+	if path == "" {
+		return "", nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read SECRET_KEY_FILE %s: %w", path, err)
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
 func randomSocketPath() (string, error) {
 	id, err := randomToken(10)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(os.TempDir(), "remnawave-internal-"+id+".sock"), nil
+	base := os.TempDir()
+	if runtime.GOOS == "linux" {
+		base = "/run"
+	}
+	return filepath.Join(base, "remnawave-internal-"+id+".sock"), nil
 }
 
 func randomToken(byteLen int) (string, error) {

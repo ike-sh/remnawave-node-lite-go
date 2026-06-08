@@ -1,0 +1,56 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          for arch in amd64 arm64; do
+            out_dir="$(mktemp -d)"
+            CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
+              go build -trimpath \
+                -ldflags="-s -w -X remnawave-node-lite-go/internal/version.Version=${VERSION}" \
+                -o "${out_dir}/remnanode-lite" \
+                ./cmd/remnanode-lite
+
+            "${out_dir}/remnanode-lite" version
+
+            printf '%s\n' \
+              "remnanode-lite ${GITHUB_REF_NAME} linux/${arch}" \
+              "" \
+              "Extract and install to /usr/local/bin/remnanode-lite" \
+              > "${out_dir}/README.txt"
+
+            tar -C "${out_dir}" -czf "dist/remnanode-lite_linux_${arch}.tar.gz" remnanode-lite README.txt
+            rm -rf "${out_dir}"
+          done
+
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/remnanode-lite_linux_amd64.tar.gz
+            dist/remnanode-lite_linux_arm64.tar.gz
+            dist/SHA256SUMS
