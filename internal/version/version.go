@@ -2,7 +2,7 @@ package version
 
 import "fmt"
 
-const Version = "0.8.2"
+const Version = "0.8.3"
 
 const releaseRepo = "ike-sh/remnawave-node-lite-go"
 

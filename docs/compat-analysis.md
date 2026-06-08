@@ -1,8 +1,8 @@
 # Remnawave Node Go 轻量兼容分析
 
 > **文档性质**：官方 node 行为参考 + 早期兼容规划（撰写于 MVP 阶段）。  
-> **lite-go 当前版本**：v0.8.2 | **官方参考版本**：`@remnawave/node` 2.7.0  
-> **实现状态摘要**：见文末 [附录 A：lite-go v0.8.2 实现对照](#附录-a-lite-go-v082-实现对照) 与 [附录 B：v0.8.2 审计与修复记录](#附录-b-v082-审计与修复记录)。
+> **lite-go 当前版本**：v0.8.3 | **官方参考版本**：`@remnawave/node` 2.7.0  
+> **实现状态摘要**：见文末 [附录 A：lite-go v0.8.3 实现对照](#附录-a-lite-go-v083-实现对照) 与 [附录 B：v0.8.3 审计与修复记录](#附录-b-v083-审计与修复记录)。
 
 参考仓库：[remnawave/node](https://github.com/remnawave/node)（本地快照 `remnawave-node-reference`）。本文只做兼容分析，不复制官方实现。
 
