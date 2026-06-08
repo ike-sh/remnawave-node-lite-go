@@ -1,6 +1,10 @@
 # Remnawave Node Go 轻量兼容分析
 
-参考仓库：`D:\code\remnawave-node-reference`，版本线索来自 `package.json` 的 `@remnawave/node` `2.7.0`。本文只做兼容分析，不复制官方实现，不生成 Go 代码。
+> **文档性质**：官方 node 行为参考 + 早期兼容规划（撰写于 MVP 阶段）。  
+> **lite-go 当前版本**：v0.8.1 | **官方参考版本**：`@remnawave/node` 2.7.0  
+> **实现状态摘要**：见文末 [附录 A：lite-go v0.8.1 实现对照](#附录-a-lite-go-v081-实现对照)。
+
+参考仓库：[remnawave/node](https://github.com/remnawave/node)（本地快照 `remnawave-node-reference`）。本文只做兼容分析，不复制官方实现。
 
 ## 1. 官方运行模型
 
