@@ -25,6 +25,7 @@ jobs:
           mkdir -p dist
           VERSION="${GITHUB_REF_NAME#v}"
 
+          host_arch="$(uname -m)"
           for arch in amd64 arm64; do
             out_dir="$(mktemp -d)"
             CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
@@ -33,7 +34,15 @@ jobs:
                 -o "${out_dir}/remnanode-lite" \
                 ./cmd/remnanode-lite
 
-            "${out_dir}/remnanode-lite" version
+            # amd64 runner cannot execute arm64 binaries (Exec format error)
+            case "${arch}:${host_arch}" in
+              amd64:x86_64|arm64:aarch64|arm64:arm64)
+                "${out_dir}/remnanode-lite" version
+                ;;
+              *)
+                file "${out_dir}/remnanode-lite"
+                ;;
+            esac
 
             printf '%s\n' \
               "remnanode-lite ${GITHUB_REF_NAME} linux/${arch}" \
