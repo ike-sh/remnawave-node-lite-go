@@ -96,7 +96,9 @@ require_root() {
     return 0
   fi
   if [ "$(id -u)" -ne 0 ]; then
-    echo "请使用 root 运行：sudo bash install-node-alpine.sh" >&2
+    echo "请使用 root 运行（Alpine 通常无 sudo）：" >&2
+    echo "  su -" >&2
+    echo "  curl -fsSL .../install-node-alpine.sh | bash" >&2
     exit 1
   fi
 }

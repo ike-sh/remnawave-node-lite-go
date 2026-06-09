@@ -53,16 +53,20 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.
 ### Alpine Linux 一键安装（OpenRC）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.4/scripts/install-node-alpine.sh | sudo bash
+# Alpine 极简镜像请先安装依赖（无 sudo 时以 root 执行，不要用 sudo）
+apk add --no-cache curl bash
 
-# 低内存 VPS
+curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.4/scripts/install-node-alpine.sh | bash
+
+# 低内存 VPS（256MB）
 curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.4/scripts/install-node-alpine.sh \
-  | sudo bash -s -- --low-memory
+  | bash -s -- --low-memory
 ```
 
 服务管理：`rc-service remnawave-node {start|stop|restart|status}`
 
-> Debian/Ubuntu 等 systemd 发行版请使用 `install-node.sh`；在 Alpine 上运行 `install-node.sh` 会自动提示改用本脚本。
+> Alpine 默认无 `sudo`；已是 root 时直接 `| bash`，勿写 `| sudo bash`。  
+> Debian/Ubuntu 等 systemd 发行版请使用 `install-node.sh`。
 
 ### 安装选项
 
