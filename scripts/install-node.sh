@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 一键安装脚本
 set -euo pipefail
 
-VERSION="0.8.15"
+VERSION="0.8.16"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -36,32 +36,32 @@ YES=0
 DRY_RUN=0
 LOW_MEMORY=0
 PORT_EXPLICIT=0
+ACTION=""
 STAGE="初始化"
 
 usage() {
   cat <<EOF
-用法：install-node.sh [--yes] [--dry-run] [--skip-xray] [--low-memory] [--port PORT] [--secret-file PATH] [--help] [--version]
+用法：install-node.sh [选项]
 
-Remnawave Node Lite (Go) ${VERSION} 一键安装
+Remnawave Node Lite (Go) ${VERSION} — 安装 / 升级 / 卸载
 
-Secret Key（Panel 下发，通常很长）推荐写入独立文件，避免 .env 单行过长：
-  ${SECRET_FILE}
+无参数时在终端显示菜单；非交互请指定动作：
+  --install           安装（或覆盖升级二进制，保留 node.env）
+  --upgrade           仅升级二进制
+  --uninstall         卸载
 
-环境变量：
-  RNL_REPO          GitHub 仓库，默认 ike-sh/remnawave-node-lite-go
-  RNL_TAG           Release 标签；未设置时自动取 GitHub 最新 Release（回退 v${VERSION}）
-  RNL_INSTALL_XRAY  是否安装 rw-core，默认 1
-  RNL_SKIP_XRAY     设为 1 跳过 rw-core 安装
-  SECRET_KEY        非交互：安装时传入（也可配合 --yes）
-  NODE_PORT         监听端口，默认 2222（与 --port 等效）
-  LOW_MEMORY        设为 1 启用低内存模式（64MB body limit + GOMEMLIMIT）
+其它选项：
+  --yes, -y           跳过确认
+  --dry-run           预览
+  --skip-xray         跳过 rw-core
+  --low-memory        低内存模式
+  --port PORT         监听端口（默认 2222）
+  --secret-file PATH  从文件导入 Secret Key
+  --help, -h          帮助
+  --version           版本
 
-卸载：
-  curl -fsSL .../scripts/uninstall.sh | sudo bash
-
-示例：
-  curl -fsSL .../install-node.sh | sudo bash
-  SECRET_KEY='eyJ...' curl -fsSL .../install-node.sh | sudo bash -s -- --yes
+一键入口（推荐）：
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install-node.sh | sudo bash
 EOF
 }
 
@@ -71,6 +71,10 @@ version() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --install) ACTION=install ;;
+    --upgrade) ACTION=upgrade ;;
+    --uninstall) ACTION=uninstall ;;
+    --menu) ACTION=menu ;;
     --yes|-y) YES=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --skip-xray) SKIP_XRAY=1 ;;
@@ -124,6 +128,95 @@ run() {
   else
     "$@"
   fi
+}
+
+read_tty() {
+  local _var="$1"
+  local _prompt="${2:-}"
+  local _line=""
+  if [ -n "$_prompt" ]; then
+    if [ -t 0 ]; then
+      read -r -p "$_prompt" _line || _line=""
+    elif [ -r /dev/tty ]; then
+      read -r -p "$_prompt" _line </dev/tty || _line=""
+    else
+      return 1
+    fi
+  else
+    if [ -t 0 ]; then
+      read -r _line || _line=""
+    elif [ -r /dev/tty ]; then
+      read -r _line </dev/tty || _line=""
+    else
+      return 1
+    fi
+  fi
+  printf -v "$_var" '%s' "$_line"
+}
+
+script_dir() {
+  if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+  else
+    echo ""
+  fi
+}
+
+run_sibling_script() {
+  local name="$1"
+  shift
+  local dir
+  dir="$(script_dir)"
+  if [ -n "$dir" ] && [ -f "${dir}/${name}" ]; then
+    bash "${dir}/${name}" "$@"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/scripts/${name}" | bash -s -- "$@"
+  fi
+}
+
+show_menu() {
+  echo
+  echo "Remnawave Node Lite ${VERSION} (contract 2.7.0)"
+  echo "  1) 安装"
+  echo "  2) 升级"
+  echo "  3) 卸载"
+  echo "  4) 退出"
+  echo
+  local choice=""
+  read_tty choice "请选择 [1-4]: " || {
+    echo "无法读取输入。非交互请用: --install | --upgrade | --uninstall" >&2
+    exit 1
+  }
+  case "$choice" in
+    1) ACTION=install ;;
+    2) ACTION=upgrade ;;
+    3) ACTION=uninstall ;;
+    4) exit 0 ;;
+    *)
+      echo "无效选择：${choice}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+dispatch_action() {
+  case "$ACTION" in
+    install) do_install ;;
+    upgrade)
+      if [ "$YES" -eq 1 ]; then
+        run_sibling_script upgrade.sh --yes
+      else
+        run_sibling_script upgrade.sh
+      fi
+      ;;
+    uninstall) run_sibling_script uninstall.sh ;;
+    menu) show_menu; dispatch_action ;;
+    *)
+      echo "未知动作：${ACTION}" >&2
+      usage
+      exit 1
+      ;;
+  esac
 }
 
 require_root() {
@@ -396,6 +489,14 @@ start_service() {
 
 main() {
   require_root
+  if [ -z "$ACTION" ]; then
+    show_menu
+  fi
+  dispatch_action
+}
+
+do_install() {
+  require_root
   redirect_alpine
   require_command curl
   require_command systemctl
@@ -423,7 +524,7 @@ main() {
   echo "  配置文件：${NODE_ENV}（NODE_PORT + SECRET_KEY）"
   echo "  日志：    journalctl -u remnawave-node -f"
   echo "  Xray：    xlogs / xerrors"
-  echo "  卸载：    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/uninstall.sh | sudo bash"
+  echo "  管理：    再次运行 install-node.sh 可升级或卸载"
   if ! secret_configured; then
     print_env_config_hint "sudo systemctl restart remnawave-node"
   fi
