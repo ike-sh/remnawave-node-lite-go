@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 卸载脚本（systemd / Alpine OpenRC）
 set -euo pipefail
 
-VERSION="0.8.17"
+VERSION="0.8.19"
 PREFIX="/usr/local/bin"
 BIN_NAME="remnanode-lite"
 RUN_WRAPPER="${PREFIX}/remnawave-node-run"
@@ -34,6 +34,7 @@ Remnawave Node Lite (Go) 卸载 ${VERSION}
   --dry-run           仅预览将删除的内容
   --purge             删除配置 + 日志 + 数据（保留 rw-core）
   --purge-all         删除全部（含 rw-core / geo 数据）
+  --full              完全卸载（等同 --purge-all --yes，不逐项询问）
   --keep-config       仅卸载服务与二进制，保留 ${ETC_DIR}
   --help, -h          显示帮助
 
@@ -60,6 +61,13 @@ while [ $# -gt 0 ]; do
       PURGE_LOGS=1
       PURGE_DATA=1
       PURGE_XRAY=1
+      ;;
+    --full)
+      PURGE_CONFIG=1
+      PURGE_LOGS=1
+      PURGE_DATA=1
+      PURGE_XRAY=1
+      YES=1
       ;;
     --keep-config) PURGE_CONFIG=0 ;;
     --help|-h) usage; exit 0 ;;
@@ -91,6 +99,41 @@ run() {
     echo "[dry-run] $*"
   else
     "$@"
+  fi
+}
+
+read_tty() {
+  local _var="$1"
+  local _prompt="${2:-}"
+  local _line=""
+  if [ -n "$_prompt" ]; then
+    if [ -t 0 ]; then
+      read -r -p "$_prompt" _line || _line=""
+    elif [ -r /dev/tty ]; then
+      read -r -p "$_prompt" _line </dev/tty || _line=""
+    else
+      return 1
+    fi
+  else
+    if [ -t 0 ]; then
+      read -r _line || _line=""
+    elif [ -r /dev/tty ]; then
+      read -r _line </dev/tty || _line=""
+    else
+      return 1
+    fi
+  fi
+  printf -v "$_var" '%s' "$_line"
+}
+
+cleanup_runtime() {
+  step "清理运行时（rw-core 进程 / socket）"
+  run pkill -x rw-core 2>/dev/null || true
+  run pkill -f '/usr/local/bin/rw-core' 2>/dev/null || true
+  run rm -rf /run/remnanode 2>/dev/null || true
+  run rm -f /run/remnawave-internal-*.sock 2>/dev/null || true
+  if [ "$PURGE_CONFIG" -eq 1 ]; then
+    run rm -f "${ETC_DIR}/node.env.bak."* 2>/dev/null || true
   fi
 }
 
@@ -141,7 +184,8 @@ prompt_yes_no() {
   fi
   local hint="[y/N]"
   [ "$default" = "y" ] && hint="[Y/n]"
-  read -r -p "${prompt} ${hint} " ans || ans=""
+  local ans=""
+  read_tty ans "${prompt} ${hint} " || ans=""
   ans="${ans:-$default}"
   case "$ans" in
     y|Y|yes|YES) return 0 ;;
@@ -278,10 +322,12 @@ main() {
   print_plan
 
   stop_service
+  cleanup_runtime
   remove_service_files
   remove_binaries
   remove_optional_dirs
   remove_xray
+  cleanup_runtime
 
   echo
   if [ "$DRY_RUN" -eq 1 ]; then

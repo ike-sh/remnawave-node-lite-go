@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 一键安装脚本
 set -euo pipefail
 
-VERSION="0.8.17"
+VERSION="0.8.19"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -37,6 +37,7 @@ DRY_RUN=0
 LOW_MEMORY=0
 PORT_EXPLICIT=0
 ACTION=""
+UNINSTALL_MODE=""
 STAGE="初始化"
 
 usage() {
@@ -199,6 +200,25 @@ show_menu() {
   esac
 }
 
+show_uninstall_menu() {
+  echo
+  echo "卸载选项："
+  echo "  1) 仅卸服务（保留 node.env / rw-core）"
+  echo "  2) 完全卸载（配置+日志+rw-core 全删）"
+  echo "  3) 返回"
+  local choice=""
+  read_tty choice "请选择 [1-3]: " || exit 1
+  case "$choice" in
+    1) UNINSTALL_MODE=keep ;;
+    2) UNINSTALL_MODE=full ;;
+    3) exit 0 ;;
+    *)
+      echo "无效选择" >&2
+      exit 1
+      ;;
+  esac
+}
+
 dispatch_action() {
   case "$ACTION" in
     install) do_install ;;
@@ -209,7 +229,14 @@ dispatch_action() {
         run_sibling_script upgrade.sh
       fi
       ;;
-    uninstall) run_sibling_script uninstall.sh ;;
+    uninstall)
+      show_uninstall_menu
+      if [ "${UNINSTALL_MODE:-}" = "full" ]; then
+        run_sibling_script uninstall.sh --full
+      else
+        run_sibling_script uninstall.sh --keep-config --yes
+      fi
+      ;;
     menu) show_menu; dispatch_action ;;
     *)
       echo "未知动作：${ACTION}" >&2
@@ -291,18 +318,30 @@ confirm_install() {
   fi
   echo
   echo "检测到本机已安装 remnawave-node-lite。"
-  local ans=""
-  if [ -t 0 ]; then
-    read -r -p "继续安装/升级？保留现有 ${NODE_ENV} [y/N]: " ans || ans=""
-  elif [ -r /dev/tty ]; then
-    read -r -p "继续安装/升级？保留现有 ${NODE_ENV} [y/N]: " ans </dev/tty || ans=""
-  else
-    echo "非交互环境请添加 --yes 确认升级。" >&2
+  echo "  1) 升级（保留 ${NODE_ENV}）"
+  echo "  2) 全新安装（删除配置/日志后重装）"
+  echo "  3) 取消"
+  local choice=""
+  read_tty choice "请选择 [1-3]: " || {
+    echo "非交互环境请用: --yes 或 menu 选升级" >&2
     exit 1
-  fi
-  case "$ans" in
-    y|Y|yes|YES) ;;
-    *) echo "已取消。"; exit 0 ;;
+  }
+  case "$choice" in
+    1) ;;
+    2)
+      if [ "$DRY_RUN" -eq 1 ]; then
+        echo "[dry-run] 删除 ${ETC_DIR} ${LOG_DIR} ${DATA_DIR}"
+      else
+        rm -rf "$ETC_DIR" "$LOG_DIR" "$DATA_DIR"
+        cleanup_runtime
+        rm -f "${ETC_DIR}.bak."* 2>/dev/null || true
+        echo "已清除旧配置，开始全新安装。"
+      fi
+      ;;
+    *)
+      echo "已取消。"
+      exit 0
+      ;;
   esac
 }
 

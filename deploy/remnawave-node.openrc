@@ -17,5 +17,5 @@ depend() {
 }
 
 start_pre() {
-	checkpath -d -m 0755 /var/log/remnanode /var/lib/remnanode
+	checkpath -d -m 0755 /var/log/remnanode /var/lib/remnanode /run/remnanode
 }

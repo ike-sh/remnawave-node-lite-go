@@ -163,27 +163,34 @@ prompt_secret_key() {
     return 0
   fi
 
-  print_env_config_hint "sudo systemctl restart remnawave-node"
+  print_env_config_hint "${RESTART_CMD:-systemctl restart remnawave-node}"
+}
+
+cleanup_runtime() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] cleanup runtime sockets and rw-core"
+    return 0
+  fi
+  pkill -x rw-core 2>/dev/null || pkill -f '/usr/local/bin/rw-core' 2>/dev/null || true
+  rm -rf /run/remnanode 2>/dev/null || true
+  rm -f /run/remnawave-internal-*.sock 2>/dev/null || true
 }
 
 print_panel_address_hint() {
   local port="$1"
-  local docker_ip=""
-  docker_ip="$(ip -4 -o addr show docker0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1 || true)"
-  [ -n "$docker_ip" ] || docker_ip="172.17.0.1"
+  local pub_ip=""
+  pub_ip="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1 || true)"
 
   echo
   echo "━━━━━━━━ Panel 对接（必读）━━━━━━━━"
-  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qiE 'remnawave|rw-'; then
-    echo "本机检测到 Remnawave Panel (Docker)。"
-    echo "  节点地址请填: ${docker_ip}:${port}"
-    echo "  勿填公网 IP —— 会导致 Panel 报 timeout of 15000ms exceeded"
-  else
-    echo "  节点端口: ${port}"
-    echo "  节点地址: Panel 能访问到的本机 IP（公网或内网）"
-    echo "  Panel 报 timeout 说明 Panel 连不上此 IP:${port}，请核对地址与端口"
+  echo "  节点端口: ${port}"
+  if [ -n "$pub_ip" ]; then
+    echo "  本机公网 IP（参考）: ${pub_ip}"
   fi
-  echo "  保存后请在 Panel 禁用 -> 启用节点"
+  echo "  Panel 在其它服务器：地址填 Panel 能 ping/tcp 通的本机 IP"
+  echo "  Panel 服务器上自测:"
+  echo "    nc -zv -w 5 <节点IP> ${port}"
+  echo "  保存后：禁用 -> 启用节点"
 }
 
 verify_service_listening() {
@@ -196,7 +203,7 @@ verify_service_listening() {
     ss -tlnp 2>/dev/null | grep ":${port} " | head -n1 || true
     return 0
   fi
-  echo "错误: :${port} 未监听，请检查 systemctl status remnawave-node" >&2
+  echo "错误: :${port} 未监听，请检查服务状态（systemctl/rc-service remnawave-node）" >&2
   return 1
 }
 
