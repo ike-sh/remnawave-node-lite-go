@@ -383,7 +383,7 @@ main() {
   echo "  二进制：  ${PREFIX}/${BIN_NAME}"
   echo "  环境配置：${NODE_ENV}"
   echo "  监听端口：$(configured_node_port)（Panel 须填相同端口）"
-  echo "  配置文件：${NODE_ENV}（NODE_PORT + SECRET_KEY，对齐官方 Docker）"
+  echo "  配置文件：${NODE_ENV}（NODE_PORT + SECRET_KEY）"
   echo "  日志：    journalctl -u remnawave-node -f"
   echo "  Xray：    xlogs / xerrors"
   if ! secret_configured; then

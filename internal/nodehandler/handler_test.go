@@ -57,7 +57,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func TestHandleAddUsersAlwaysSuccess(t *testing.T) {
+func TestHandleAddUsersReportsFailureWhenAllFail(t *testing.T) {
 	t.Parallel()
 
 	service := nodehandler.NewService(&stubProvider{}, connections.NewDropper(nil))
@@ -73,9 +73,6 @@ func TestHandleAddUsersAlwaysSuccess(t *testing.T) {
 
 	service.HandleAddUsers(rec, req, writeJSON)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
 	var resp struct {
 		Response struct {
 			Success bool    `json:"success"`
@@ -85,8 +82,11 @@ func TestHandleAddUsersAlwaysSuccess(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if !resp.Response.Success {
-		t.Fatalf("success = false, error = %v", resp.Response.Error)
+	if resp.Response.Success {
+		t.Fatal("expected success=false when all handler operations fail")
+	}
+	if resp.Response.Error == nil || *resp.Response.Error == "" {
+		t.Fatal("expected error message when all operations fail")
 	}
 }
 

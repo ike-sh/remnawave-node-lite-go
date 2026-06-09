@@ -51,7 +51,7 @@
 
 | 类别 | 说明 |
 |------|------|
-| Docker 镜像 | 第二分发渠道，非必须 |
+| Docker 镜像 | **不计划**（定位裸机替代，非容器） |
 | `CUSTOM_CORE_URL` | 自定义 core 下载 |
 | geo-zapret.dat 挂载 | Panel 文档中的可选 volume |
 | Panel 256MB 压测报告 | 需真实 VPS 验证 |

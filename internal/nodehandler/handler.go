@@ -123,6 +123,7 @@ func (s *Service) HandleAddUsers(w http.ResponseWriter, r *http.Request, write w
 		s.provider.AddInboundTag(tag)
 	}
 
+	results := make([]xtls.HandlerResult, 0)
 	for _, user := range req.Users {
 		for _, inbound := range user.InboundData {
 			s.provider.AddInboundTag(inbound.Tag)
@@ -133,13 +134,14 @@ func (s *Service) HandleAddUsers(w http.ResponseWriter, r *http.Request, write w
 		}
 		for _, inbound := range user.InboundData {
 			result := s.addBatchUser(r.Context(), inbound, user.UserData)
+			results = append(results, result)
 			if result.OK {
 				s.provider.AddUserToInboundHash(inbound.Tag, user.UserData.VlessUUID)
 			}
 		}
 	}
 
-	write(w, http.StatusOK, envelope[genericResponse]{Response: genericResponse{Success: true, Error: nil}})
+	write(w, http.StatusOK, envelope[genericResponse]{Response: aggregateResults(results)})
 }
 
 func (s *Service) HandleRemoveUsers(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
@@ -348,6 +350,9 @@ func aggregateResults(results []xtls.HandlerResult) genericResponse {
 	}
 
 	if allFailed {
+		if firstError == "" {
+			firstError = "all handler operations failed"
+		}
 		return genericResponse{Success: false, Error: stringPtr(firstError)}
 	}
 	return genericResponse{Success: true, Error: nil}
