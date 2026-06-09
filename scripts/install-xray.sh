@@ -42,14 +42,20 @@ require_root() {
 
 require_root
 
+if ! command -v bash >/dev/null 2>&1; then
+  echo "缺少命令：bash（Debian/Ubuntu: apt install bash）" >&2
+  exit 1
+fi
+
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "[dry-run] curl -fsSL ${INSTALL_SCRIPT} | sh -s -- ${XRAY_CORE_VERSION} ${UPSTREAM_REPO}"
+  echo "[dry-run] curl -fsSL ${INSTALL_SCRIPT} | bash -s -- ${XRAY_CORE_VERSION} ${UPSTREAM_REPO}"
   echo "[dry-run] ln -sf /usr/local/bin/xray /usr/local/bin/rw-core"
   exit 0
 fi
 
 echo "安装 rw-core ${XRAY_CORE_VERSION} (upstream=${UPSTREAM_REPO})..."
-curl -fsSL "${INSTALL_SCRIPT}" | sh -s -- "${XRAY_CORE_VERSION}" "${UPSTREAM_REPO}"
+# 官方 install-xray.sh 使用 bash [[ 语法，不能用 Debian 默认 sh (dash)
+curl -fsSL "${INSTALL_SCRIPT}" | bash -s -- "${XRAY_CORE_VERSION}" "${UPSTREAM_REPO}"
 
 if [ -x /usr/local/bin/xray ] && [ ! -e /usr/local/bin/rw-core ]; then
   ln -sf /usr/local/bin/xray /usr/local/bin/rw-core
