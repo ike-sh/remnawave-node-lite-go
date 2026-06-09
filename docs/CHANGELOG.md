@@ -3,6 +3,14 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [0.8.24] - 2026-06-09
+
+### 修复
+
+- **重启后需手动禁用/启用节点**：成功 `xray/start` 后将配置持久化到 `/var/lib/remnanode/last-start.json`，进程启动时自动恢复 rw-core（与官方节点重启后 Panel 自动恢复行为对齐）。
+- **healthcheck 误报在线**：`/node/xray/healthcheck` 改为实时 gRPC Ping（对齐官方 `getSysStats` 探测），不再仅返回内存缓存的 `xrayOnline`。
+- `xray/stop` 时清除持久化配置，避免禁用节点后重启仍自动拉起 core。
+
 ## [0.8.23] - 2026-06-09
 
 ### 修复
@@ -44,6 +52,7 @@
 
 ---
 
+[0.8.24]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.24
 [0.8.23]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.23
 [0.8.22]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.22
 [0.8.21]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.21

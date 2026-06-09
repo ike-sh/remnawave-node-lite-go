@@ -19,6 +19,7 @@ const (
 	defaultXrayBin     = "/usr/local/bin/rw-core"
 	defaultGeoDir      = "/usr/local/share/xray"
 	defaultLogDir             = "/var/log/remnanode"
+	defaultDataDir              = "/var/lib/remnanode"
 	defaultInternalSocketPath = "/run/remnanode/internal.sock"
 )
 
@@ -39,6 +40,7 @@ type Config struct {
 	XrayBin                string
 	GeoDir                 string
 	LogDir                 string
+	DataDir                string
 	InternalSocketPath     string
 	InternalRESTToken      string
 	DisableHashedSetCheck  bool
@@ -66,6 +68,7 @@ func Load(dotenvPath string) (Config, error) {
 		"XRAY_BIN",
 		"GEO_DIR",
 		"LOG_DIR",
+		"DATA_DIR",
 		"INTERNAL_SOCKET_PATH",
 		"INTERNAL_REST_TOKEN",
 		"DISABLE_HASHED_SET_CHECK",
@@ -115,6 +118,7 @@ func Load(dotenvPath string) (Config, error) {
 		XrayBin:               optionalString(values, "XRAY_BIN", defaultXrayBin),
 		GeoDir:                optionalString(values, "GEO_DIR", defaultGeoDir),
 		LogDir:                optionalString(values, "LOG_DIR", defaultLogDir),
+		DataDir:               optionalString(values, "DATA_DIR", defaultDataDir),
 		InternalSocketPath:    internalSocketPath,
 		InternalRESTToken:     internalRESTToken,
 		DisableHashedSetCheck: optionalBool(values, "DISABLE_HASHED_SET_CHECK", false),

@@ -71,6 +71,7 @@ func main() {
 		XrayBin:            cfg.XrayBin,
 		GeoDir:             cfg.GeoDir,
 		LogDir:             cfg.LogDir,
+		DataDir:            cfg.DataDir,
 		InternalSocketPath: cfg.InternalSocketPath,
 		InternalRESTToken:  cfg.InternalRESTToken,
 		XtlsAPIPort:        cfg.XtlsAPIPort,
@@ -114,6 +115,8 @@ func main() {
 			log.Fatalf("HTTPS server stopped: %v", err)
 		}
 	}()
+
+	go manager.RestoreOnBoot(ctx)
 
 	<-ctx.Done()
 	system.DefaultNetworkMonitor().Stop()

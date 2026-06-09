@@ -23,6 +23,7 @@ type Options struct {
 	XrayBin              string
 	GeoDir               string
 	LogDir               string
+	DataDir              string
 	InternalSocketPath   string
 	InternalRESTToken    string
 	XtlsAPIPort          int
@@ -40,6 +41,7 @@ type Manager struct {
 	xrayBin          string
 	geoDir           string
 	logDir           string
+	dataDir          string
 	socketPath       string
 	token            string
 	xtlsAPIPort      int
@@ -122,6 +124,7 @@ func NewManager(opts Options) (*Manager, error) {
 		xrayBin:          opts.XrayBin,
 		geoDir:           opts.GeoDir,
 		logDir:           opts.LogDir,
+		dataDir:          opts.DataDir,
 		socketPath:       opts.InternalSocketPath,
 		token:            opts.InternalRESTToken,
 		xtlsAPIPort:      opts.XtlsAPIPort,
@@ -233,6 +236,9 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	if started {
 		m.xrayOnline = true
 		m.mu.Unlock()
+		if err := savePersistedStart(m.dataDir, req); err != nil {
+			log.Printf("warning: save persisted xray config: %v", err)
+		}
 		log.Printf("xray/start succeeded: rw-core online on gRPC 127.0.0.1:%d", m.xtlsAPIPort)
 		return m.startResponse(true, nil)
 	}
@@ -260,22 +266,70 @@ func (m *Manager) grpcStartupTimeout() time.Duration {
 
 func (m *Manager) Stop() StopResponse {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	err := m.stopProcessLocked(true)
+	m.mu.Unlock()
+	if clearErr := clearPersistedStart(m.dataDir); clearErr != nil {
+		log.Printf("warning: clear persisted xray config: %v", clearErr)
+	}
 	return StopResponse{IsStopped: err == nil}
+}
+
+func (m *Manager) RestoreOnBoot(ctx context.Context) {
+	delay := 2 * time.Second
+	if m.lowMemory {
+		delay = 5 * time.Second
+	}
+	timer := time.NewTimer(delay)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return
+	case <-timer.C:
+	}
+
+	req, err := loadPersistedStart(m.dataDir)
+	if err != nil {
+		log.Printf("warning: load persisted xray config: %v", err)
+		return
+	}
+	if req == nil {
+		return
+	}
+	log.Printf("restoring rw-core from persisted config")
+	resp := m.Start(ctx, *req)
+	if !resp.IsStarted {
+		msg := "unknown error"
+		if resp.Error != nil {
+			msg = *resp.Error
+		}
+		log.Printf("restore rw-core failed: %s", msg)
+	}
 }
 
 func (m *Manager) Health() HealthResponse {
 	m.refreshVersion()
 
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	process := m.process
+	cached := m.xrayOnline
+	version := m.xrayVersion
+	m.mu.RUnlock()
+
+	online := cached
+	if process != nil || cached {
+		pingCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		online = m.PingXrayGRPC(pingCtx)
+		cancel()
+	}
+
+	m.mu.Lock()
+	m.xrayOnline = online
+	m.mu.Unlock()
 
 	return HealthResponse{
 		IsAlive:                  true,
-		XrayInternalStatusCached: m.xrayOnline,
-		XrayVersion:              m.xrayVersion,
+		XrayInternalStatusCached: online,
+		XrayVersion:              version,
 		NodeVersion:              nodeversion.ReportedNodeVersion(),
 	}
 }
