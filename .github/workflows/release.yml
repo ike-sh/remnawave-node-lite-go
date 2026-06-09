@@ -24,13 +24,14 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           VERSION="${GITHUB_REF_NAME#v}"
+          CONTRACT_VERSION="$(tr -d ' \n\r' < internal/version/contract.version)"
 
           host_arch="$(uname -m)"
           for arch in amd64 arm64; do
             out_dir="$(mktemp -d)"
             CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
               go build -trimpath \
-                -ldflags="-s -w -X remnawave-node-lite-go/internal/version.Version=${VERSION}" \
+                -ldflags="-s -w -X remnawave-node-lite-go/internal/version.Version=${VERSION} -X remnawave-node-lite-go/internal/version.ContractVersion=${CONTRACT_VERSION}" \
                 -o "${out_dir}/remnanode-lite" \
                 ./cmd/remnanode-lite
 

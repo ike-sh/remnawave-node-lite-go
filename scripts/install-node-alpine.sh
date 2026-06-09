@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# remnawave-node-lite-go 一键安装脚本
+# remnawave-node-lite-go Alpine Linux 一键安装（OpenRC）
 set -euo pipefail
 
 VERSION="0.8.4"
@@ -7,11 +7,12 @@ PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
 LOG_DIR="/var/log/remnanode"
-UNIT="/etc/systemd/system/remnawave-node.service"
+OPENRC_SVC="/etc/init.d/remnawave-node"
+RUN_WRAPPER="${PREFIX}/remnawave-node-run"
 BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
 SECRET_FILE="${ETC_DIR}/secret.key"
-REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"  # must match internal/version/version.go releaseRepo
+REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"
 TAG="${RNL_TAG:-v${VERSION}}"
 INSTALL_XRAY="${RNL_INSTALL_XRAY:-1}"
 SKIP_XRAY="${RNL_SKIP_XRAY:-0}"
@@ -24,12 +25,9 @@ STAGE="初始化"
 
 usage() {
   cat <<EOF
-用法：install-node.sh [--yes] [--dry-run] [--skip-xray] [--low-memory] [--secret-file PATH] [--help] [--version]
+用法：install-node-alpine.sh [--yes] [--dry-run] [--skip-xray] [--low-memory] [--secret-file PATH] [--help] [--version]
 
-Remnawave Node Lite (Go) ${VERSION} 一键安装
-
-Secret Key（Panel 下发，通常很长）推荐写入独立文件，避免 .env 单行过长：
-  ${SECRET_FILE}
+Remnawave Node Lite (Go) ${VERSION} — Alpine Linux / OpenRC 一键安装
 
 环境变量：
   RNL_REPO          GitHub 仓库，默认 ike-sh/remnawave-node-lite-go
@@ -38,12 +36,12 @@ Secret Key（Panel 下发，通常很长）推荐写入独立文件，避免 .en
   RNL_SKIP_XRAY     设为 1 跳过 rw-core 安装
   SECRET_KEY        非交互模式可直接传入（写入 secret.key）
   NODE_PORT         监听端口，默认 2222
-  LOW_MEMORY        设为 1 启用低内存模式（64MB body limit + GOMEMLIMIT）
+  LOW_MEMORY        设为 1 启用低内存模式
 EOF
 }
 
 version() {
-  echo "remnawave-node-lite install ${VERSION}"
+  echo "remnawave-node-lite alpine install ${VERSION}"
 }
 
 while [ $# -gt 0 ]; do
@@ -98,25 +96,18 @@ require_root() {
     return 0
   fi
   if [ "$(id -u)" -ne 0 ]; then
-    echo "请使用 root 运行：sudo bash install-node.sh" >&2
+    echo "请使用 root 运行：sudo bash install-node-alpine.sh" >&2
     exit 1
   fi
 }
 
-redirect_alpine() {
+require_alpine() {
   if [ "$DRY_RUN" -eq 1 ]; then
     return 0
   fi
-  if [ -f /etc/alpine-release ]; then
-    echo "检测到 Alpine Linux，请使用专用安装脚本："
-    echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/install-node-alpine.sh | sudo bash"
-    exit 1
-  fi
-}
-
-require_command() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "缺少命令：$1" >&2
+  if [ ! -f /etc/alpine-release ]; then
+    echo "此脚本仅适用于 Alpine Linux（未找到 /etc/alpine-release）。" >&2
+    echo "Debian/Ubuntu 等请使用：scripts/install-node.sh" >&2
     exit 1
   fi
 }
@@ -133,10 +124,7 @@ detect_arch() {
 }
 
 secret_configured() {
-  if [ -f "$SECRET_FILE" ] && [ -s "$SECRET_FILE" ]; then
-    return 0
-  fi
-  return 1
+  [ -f "$SECRET_FILE" ] && [ -s "$SECRET_FILE" ]
 }
 
 write_secret_from_source() {
@@ -166,6 +154,15 @@ write_secret_from_env() {
   chmod 600 "$SECRET_FILE"
 }
 
+install_packages() {
+  step "安装 Alpine 依赖包"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] apk add --no-cache bash curl tar ca-certificates libcap openrc"
+    return 0
+  fi
+  apk add --no-cache bash curl tar ca-certificates libcap openrc
+}
+
 download_binary() {
   local arch="$1"
   local url="https://github.com/${REPO}/releases/download/${TAG}/remnanode-lite_linux_${arch}.tar.gz"
@@ -186,6 +183,19 @@ download_binary() {
   rm -rf "$tmp"
 
   "${PREFIX}/${BIN_NAME}" version
+}
+
+apply_capabilities() {
+  step "授予 CAP_NET_ADMIN（nftables / ss -K）"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] setcap cap_net_admin+ep ${PREFIX}/${BIN_NAME}"
+    return 0
+  fi
+  if ! command -v setcap >/dev/null 2>&1; then
+    echo "警告：未找到 setcap，nftables 插件可能不可用。" >&2
+    return 0
+  fi
+  setcap cap_net_admin+ep "${PREFIX}/${BIN_NAME}"
 }
 
 install_xray() {
@@ -229,8 +239,7 @@ setup_env_file() {
   fi
 
   cat >"$NODE_ENV" <<EOF
-# Remnawave Node Lite — 由 install-node.sh 生成
-# Panel Secret Key 写入独立文件（支持超长 base64）
+# Remnawave Node Lite — 由 install-node-alpine.sh 生成
 SECRET_KEY_FILE=${SECRET_FILE}
 NODE_PORT=${port}
 XTLS_API_PORT=61000
@@ -279,83 +288,37 @@ setup_secret_file() {
     return 0
   fi
 
-  prompt_secret_interactive
+  echo
+  echo "请粘贴 Panel Secret Key 到 ${SECRET_FILE}，或重新运行："
+  echo "  sudo bash install-node-alpine.sh --secret-file /path/to/key"
+  install -m 0600 -D /dev/null "$SECRET_FILE"
 }
 
-prompt_secret_interactive() {
-  echo
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo " 配置 Panel Secret Key（通常很长）"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo
-  echo "请选择一种方式："
-  echo "  1) 编辑器粘贴（推荐）"
-  echo "  2) 终端多行粘贴（输入 END 结束）"
-  echo "  3) 稍后手动配置"
-  echo
-  read -r -p "选择 [1/2/3]（默认 1）： " choice || choice="1"
-  choice="${choice:-1}"
-
-  case "$choice" in
-    1)
-      install -m 0600 -D /dev/null "$SECRET_FILE"
-      if [ -n "${EDITOR:-}" ]; then
-        "$EDITOR" "$SECRET_FILE"
-      elif command -v nano >/dev/null 2>&1; then
-        nano "$SECRET_FILE"
-      elif command -v vi >/dev/null 2>&1; then
-        vi "$SECRET_FILE"
-      else
-        echo "未找到编辑器，请改用方式 2 或手动编辑 ${SECRET_FILE}" >&2
-        exit 1
-      fi
-      ;;
-    2)
-      echo
-      echo "请粘贴 Panel 下发的 Secret Key，完成后单独一行输入 END："
-      if [ "$DRY_RUN" -eq 1 ]; then
-        echo "[dry-run] heredoc -> ${SECRET_FILE}"
-      else
-        install -m 0600 -D /dev/null "$SECRET_FILE"
-        sed '/^END$/q' >"$SECRET_FILE"
-      fi
-      ;;
-    3)
-      install -m 0600 -D /dev/null "$SECRET_FILE"
-      echo "已跳过。请稍后执行："
-      echo "  sudo nano ${SECRET_FILE}"
-      echo "  sudo systemctl restart remnawave-node"
-      return 0
-      ;;
-    *)
-      echo "无效选择。" >&2
-      exit 1
-      ;;
-  esac
-
-  if ! secret_configured; then
-    echo "⚠ Secret Key 文件为空，服务启动后 Panel 无法连接。" >&2
-  fi
-}
-
-install_systemd() {
-  step "安装 systemd 服务"
+install_openrc() {
+  step "安装 OpenRC 服务"
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] 安装 ${UNIT}"
+    echo "[dry-run] 安装 ${RUN_WRAPPER} 与 ${OPENRC_SVC}"
     return 0
   fi
 
-  if [ -f "${script_dir}/../deploy/remnawave-node.service" ]; then
-    install -m 0644 "${script_dir}/../deploy/remnawave-node.service" "$UNIT"
+  if [ -f "${script_dir}/../deploy/remnawave-node-run.sh" ]; then
+    install -m 0755 "${script_dir}/../deploy/remnawave-node-run.sh" "$RUN_WRAPPER"
   else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node.service" -o "$UNIT"
+    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node-run.sh" -o "$RUN_WRAPPER"
+    chmod 0755 "$RUN_WRAPPER"
   fi
 
-  systemctl daemon-reload
-  systemctl enable remnawave-node.service
+  if [ -f "${script_dir}/../deploy/remnawave-node.openrc" ]; then
+    install -m 0755 "${script_dir}/../deploy/remnawave-node.openrc" "$OPENRC_SVC"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node.openrc" -o "$OPENRC_SVC"
+    chmod 0755 "$OPENRC_SVC"
+  fi
+
+  rc-update add remnawave-node default 2>/dev/null || true
 }
 
 install_helpers() {
@@ -365,65 +328,65 @@ install_helpers() {
     return 0
   fi
 
-  cat >/usr/local/bin/xlogs <<'EOF'
+  cat >"${PREFIX}/xlogs" <<'EOF'
 #!/bin/sh
 exec tail -n +1 -f /var/log/remnanode/xray.out.log
 EOF
-  cat >/usr/local/bin/xerrors <<'EOF'
+  cat >"${PREFIX}/xerrors" <<'EOF'
 #!/bin/sh
 exec tail -n +1 -f /var/log/remnanode/xray.err.log
 EOF
-  chmod +x /usr/local/bin/xlogs /usr/local/bin/xerrors
+  chmod +x "${PREFIX}/xlogs" "${PREFIX}/xerrors"
 }
 
 start_service() {
   if ! secret_configured; then
     echo "⚠ Secret Key 未配置，跳过启动服务。"
-    echo "  请编辑 ${SECRET_FILE} 后执行：systemctl restart remnawave-node"
+    echo "  请编辑 ${SECRET_FILE} 后执行：rc-service remnawave-node restart"
     return 0
   fi
 
   step "启动 remnawave-node 服务"
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] systemctl restart remnawave-node"
+    echo "[dry-run] rc-service remnawave-node restart"
     return 0
   fi
 
-  systemctl restart remnawave-node.service
+  rc-service remnawave-node restart
   sleep 1
-  systemctl --no-pager status remnawave-node.service || true
+  rc-service remnawave-node status || true
 }
 
 main() {
   require_root
-  redirect_alpine
-  require_command curl
-  require_command systemctl
+  require_alpine
 
   local arch
   arch="$(detect_arch)"
 
+  install_packages
   setup_directories
   download_binary "$arch"
+  apply_capabilities
   install_xray
   setup_env_file
   setup_secret_file
-  install_systemd
+  install_openrc
   install_helpers
   start_service
 
   echo
-  echo "安装完成。"
-  echo "  二进制：  ${PREFIX}/${BIN_NAME}"
-  echo "  环境配置：${NODE_ENV}"
+  echo "Alpine 安装完成。"
+  echo "  二进制：    ${PREFIX}/${BIN_NAME}"
+  echo "  环境配置：  ${NODE_ENV}"
   echo "  Secret Key：${SECRET_FILE}"
-  echo "  日志：    journalctl -u remnawave-node -f"
-  echo "  Xray：    xlogs / xerrors"
+  echo "  服务管理：  rc-service remnawave-node {start|stop|restart|status}"
+  echo "  日志：      tail -f /var/log/remnanode/openrc.log"
   if ! secret_configured; then
     echo
     echo "下一步："
-    echo "  1. sudo nano ${SECRET_FILE}   # 粘贴 Panel Secret Key"
-    echo "  2. sudo systemctl restart remnawave-node"
+    echo "  1. nano ${SECRET_FILE}   # 粘贴 Panel Secret Key"
+    echo "  2. rc-service remnawave-node restart"
   fi
 }
 

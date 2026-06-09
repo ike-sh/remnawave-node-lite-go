@@ -24,19 +24,23 @@ jobs:
             git clone --depth 1 https://github.com/remnawave/node.git /tmp/remnawave-node
 
       - name: Report upstream version
+        id: official
         run: |
           ver=$(python3 -c "import json; print(json.load(open('/tmp/remnawave-node/package.json'))['version'])")
+          local_ver=$(tr -d ' \n\r' < internal/version/contract.version)
           echo "Upstream @remnawave/node version: $ver"
+          echo "Lite-go contract.version: $local_ver"
           echo "upstream_version=$ver" >> "$GITHUB_OUTPUT"
+          if [ "$ver" != "$local_ver" ]; then
+            echo "::error::contract.version ($local_ver) != upstream ($ver) — update internal/version/contract.version and version.go ContractVersion default"
+            exit 1
+          fi
           if [ "$ver" != "2.7.0" ]; then
             echo "::notice::Upstream node bumped to $ver — review contract diff manually"
           fi
-        id: official
-        run: |
           python3 <<'PY'
           import re, pathlib
           text = pathlib.Path("/tmp/remnawave-node/libs/contract/api/routes.ts").read_text()
-          # Match template strings like `${ROOT}/...` and `/vision/...`
           paths = set()
           for m in re.finditer(r"`(\$\{ROOT\}/[^`]+|/vision/[^`]+)`", text):
               p = m.group(1).replace("${ROOT}", "")

@@ -14,8 +14,10 @@
 
 | 文件 | 字段 |
 |------|------|
-| `internal/version/version.go` | `const Version` |
+| `internal/version/version.go` | `var Version` |
+| `internal/version/contract.version` | upstream contract 版本（与官方 package.json 对齐） |
 | `scripts/install-node.sh` | `VERSION=` |
+| `scripts/install-node-alpine.sh` | `VERSION=` |
 | `scripts/upgrade.sh` | `VERSION=` |
 
 ## 1.1 已安装节点：刷新 systemd unit（CAP_NET_ADMIN）

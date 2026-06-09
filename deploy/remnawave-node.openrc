@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+
+name="remnawave-node"
+description="Remnawave Node Lite (Go)"
+
+command="/usr/local/bin/remnawave-node-run"
+command_background=true
+command_user="root"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/remnanode/openrc.log"
+error_log="/var/log/remnanode/openrc.err.log"
+rc_ulimit="-n 1048576"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath -d -m 0755 /var/log/remnanode /var/lib/remnanode
+}

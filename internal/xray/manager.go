@@ -245,7 +245,7 @@ func (m *Manager) Health() HealthResponse {
 		IsAlive:                  true,
 		XrayInternalStatusCached: m.xrayOnline,
 		XrayVersion:              m.xrayVersion,
-		NodeVersion:              nodeversion.Version,
+		NodeVersion:              nodeversion.ReportedNodeVersion(),
 	}
 }
 
@@ -409,7 +409,7 @@ func (m *Manager) startResponse(isStarted bool, message *string) StartResponse {
 		Version:   version,
 		Error:     message,
 		NodeInformation: NodeInformation{
-			Version: stringPtr(nodeversion.Version),
+			Version: stringPtr(nodeversion.ReportedNodeVersion()),
 		},
 		System: system.GetSnapshot(),
 	}
