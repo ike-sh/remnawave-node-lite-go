@@ -11,9 +11,21 @@ RUN_WRAPPER="${PREFIX}/remnawave-node-run"
 BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
 REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=install-env-helpers.sh
-source "${_SCRIPT_DIR}/install-env-helpers.sh"
+if ! command -v curl >/dev/null 2>&1; then
+  echo "缺少命令：curl" >&2
+  exit 1
+fi
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  _HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=install-env-helpers.sh
+  source "${_HELPERS_DIR}/install-env-helpers.sh"
+else
+  _HELPERS_TMP="$(mktemp -d)"
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/scripts/install-env-helpers.sh" \
+    -o "${_HELPERS_TMP}/install-env-helpers.sh"
+  # shellcheck source=install-env-helpers.sh
+  source "${_HELPERS_TMP}/install-env-helpers.sh"
+fi
 TAG="$(resolve_install_tag "$REPO" "v${VERSION}")"
 UPGRADE_XRAY="${RNL_UPGRADE_XRAY:-0}"
 

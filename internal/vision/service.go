@@ -40,15 +40,14 @@ func (s *Service) HandleBlockIP(w http.ResponseWriter, r *http.Request, write wr
 		return
 	}
 
-	resp := genericResponse{Success: true, Error: nil}
 	if s.provider != nil {
 		if err := s.provider.RouterAddSrcIPRule(r.Context(), req.IP, true); err != nil {
-			msg := err.Error()
-			resp = genericResponse{Success: false, Error: &msg}
+			writeAPIError(write, w, errInternalServer, err.Error())
+			return
 		}
 	}
 
-	write(w, http.StatusOK, envelope[genericResponse]{Response: resp})
+	write(w, http.StatusOK, envelope[genericResponse]{Response: genericResponse{Success: true, Error: nil}})
 }
 
 func (s *Service) HandleUnblockIP(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
@@ -61,15 +60,14 @@ func (s *Service) HandleUnblockIP(w http.ResponseWriter, r *http.Request, write 
 		return
 	}
 
-	resp := genericResponse{Success: true, Error: nil}
 	if s.provider != nil {
 		if err := s.provider.RouterRemoveRuleByIP(r.Context(), req.IP); err != nil {
-			msg := err.Error()
-			resp = genericResponse{Success: false, Error: &msg}
+			writeAPIError(write, w, errInternalServer, err.Error())
+			return
 		}
 	}
 
-	write(w, http.StatusOK, envelope[genericResponse]{Response: resp})
+	write(w, http.StatusOK, envelope[genericResponse]{Response: genericResponse{Success: true, Error: nil}})
 }
 
 func decodeBody(r *http.Request, target any) bool {
