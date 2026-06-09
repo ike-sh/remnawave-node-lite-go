@@ -40,7 +40,8 @@ type envelope[T any] struct {
 }
 
 type systemStatsResponse struct {
-	XrayInfo any `json:"xrayInfo"`
+	// Nullable per upstream contract when rw-core is not running yet.
+	XrayInfo *xtls.SysStats `json:"xrayInfo"`
 	Plugins  struct {
 		TorrentBlocker struct {
 			ReportsCount int `json:"reportsCount"`
@@ -54,22 +55,19 @@ type systemStatsResponse struct {
 type writeJSONFn func(w http.ResponseWriter, status int, value any)
 
 func (s *Service) HandleGetSystemStats(w http.ResponseWriter, write writeJSONFn) {
-	if s.provider == nil {
-		writeAPIError(write, w, errFailedSystemStats)
-		return
-	}
-	stats, err := s.provider.GetSysStats(context.Background())
-	if err != nil || stats == nil {
-		writeAPIError(write, w, errFailedSystemStats)
-		return
-	}
-
 	var resp systemStatsResponse
-	resp.XrayInfo = stats
 	if s.reportsCounter != nil {
 		resp.Plugins.TorrentBlocker.ReportsCount = s.reportsCounter.ReportsCount()
 	}
 	resp.System.Stats = system.GetStats()
+
+	if s.provider != nil {
+		stats, err := s.provider.GetSysStats(context.Background())
+		if err == nil && stats != nil {
+			resp.XrayInfo = stats
+		}
+	}
+
 	write(w, http.StatusOK, envelope[systemStatsResponse]{Response: resp})
 }
 

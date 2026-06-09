@@ -18,6 +18,14 @@ type mockProvider struct {
 	usersErr   error
 }
 
+type offlineSysStatsProvider struct {
+	mockProvider
+}
+
+func (offlineSysStatsProvider) GetSysStats(context.Context) (*xtls.SysStats, error) {
+	return nil, errors.New("xray is not online")
+}
+
 func (m mockProvider) GetSysStats(context.Context) (*xtls.SysStats, error) {
 	return &xtls.SysStats{Uptime: 1}, nil
 }
@@ -50,6 +58,32 @@ func writeTestJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func TestHandleGetSystemStatsReturnsNullXrayInfoWhenOffline(t *testing.T) {
+	service := stats.NewService(offlineSysStatsProvider{}, nil)
+	rec := httptest.NewRecorder()
+	service.HandleGetSystemStats(rec, writeTestJSON)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body struct {
+		Response struct {
+			XrayInfo *xtls.SysStats   `json:"xrayInfo"`
+			System   struct {
+				Stats struct {
+					MemoryFree uint64 `json:"memoryFree"`
+				} `json:"stats"`
+			} `json:"system"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Response.XrayInfo != nil {
+		t.Fatalf("xrayInfo = %+v, want null when rw-core offline", body.Response.XrayInfo)
+	}
 }
 
 func TestHandleGetUsersStatsFiltersZeroTraffic(t *testing.T) {

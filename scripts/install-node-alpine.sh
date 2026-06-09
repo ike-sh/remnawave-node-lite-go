@@ -2,7 +2,7 @@
 # remnawave-node-lite-go Alpine Linux 一键安装（OpenRC）
 set -euo pipefail
 
-VERSION="0.8.11"
+VERSION="0.8.13"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
