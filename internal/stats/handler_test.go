@@ -104,15 +104,19 @@ func TestHandleGetUserOnlineStatusGRPCError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-user-online-status", strings.NewReader(`{"username":"u1"}`))
 	rec := httptest.NewRecorder()
 	service.HandleGetUserOnlineStatus(rec, req, writeTestJSON)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+	var resp struct {
+		Response struct {
+			IsOnline bool `json:"isOnline"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if body["errorCode"] != "A009" {
-		t.Fatalf("errorCode = %v, want A009", body["errorCode"])
+	if resp.Response.IsOnline {
+		t.Fatal("expected isOnline=false when provider returns error")
 	}
 }
 

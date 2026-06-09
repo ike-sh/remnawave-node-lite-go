@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 升级脚本（保留 node.env 与 rw-core）
 set -euo pipefail
 
-VERSION="0.8.5"
+VERSION="0.8.8"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 UNIT="/etc/systemd/system/remnawave-node.service"
@@ -11,7 +11,10 @@ RUN_WRAPPER="${PREFIX}/remnawave-node-run"
 BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
 REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"
-TAG="${RNL_TAG:-v${VERSION}}"
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=install-env-helpers.sh
+source "${_SCRIPT_DIR}/install-env-helpers.sh"
+TAG="$(resolve_install_tag "$REPO" "v${VERSION}")"
 UPGRADE_XRAY="${RNL_UPGRADE_XRAY:-0}"
 
 YES=0
@@ -26,7 +29,7 @@ Remnawave Node Lite (Go) 升级到 ${TAG}
 
 环境变量：
   RNL_REPO           GitHub 仓库，默认 ike-sh/remnawave-node-lite-go
-  RNL_TAG            Release 标签，默认 v${VERSION}
+  RNL_TAG            Release 标签；未设置时自动取 GitHub 最新 Release（回退 v${VERSION}）
   RNL_UPGRADE_XRAY   设为 1 时同时运行 install-xray.sh
 EOF
 }

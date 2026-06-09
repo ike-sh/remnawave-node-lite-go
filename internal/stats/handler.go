@@ -89,8 +89,8 @@ func (s *Service) HandleGetUserOnlineStatus(w http.ResponseWriter, r *http.Reque
 	}
 	online, err := s.provider.GetUserOnlineStatus(r.Context(), body.Username)
 	if err != nil {
-		writeAPIError(write, w, errFailedUserOnlineStatus)
-		return
+		// Match upstream: SDK errors return isOnline:false on HTTP 200.
+		online = false
 	}
 	write(w, http.StatusOK, envelope[struct {
 		IsOnline bool `json:"isOnline"`

@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 一键安装脚本
 set -euo pipefail
 
-VERSION="0.8.5"
+VERSION="0.8.8"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -12,7 +12,10 @@ BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
 SECRET_FILE="${ETC_DIR}/secret.key"
 REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"  # must match internal/version/version.go releaseRepo
-TAG="${RNL_TAG:-v${VERSION}}"
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=install-env-helpers.sh
+source "${_SCRIPT_DIR}/install-env-helpers.sh"
+TAG="$(resolve_install_tag "$REPO" "v${VERSION}")"
 INSTALL_XRAY="${RNL_INSTALL_XRAY:-1}"
 SKIP_XRAY="${RNL_SKIP_XRAY:-0}"
 SECRET_FILE_ARG=""
@@ -22,9 +25,6 @@ DRY_RUN=0
 LOW_MEMORY=0
 PORT_EXPLICIT=0
 STAGE="初始化"
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=install-env-helpers.sh
-source "${_SCRIPT_DIR}/install-env-helpers.sh"
 
 usage() {
   cat <<EOF
@@ -37,7 +37,7 @@ Secret Key（Panel 下发，通常很长）推荐写入独立文件，避免 .en
 
 环境变量：
   RNL_REPO          GitHub 仓库，默认 ike-sh/remnawave-node-lite-go
-  RNL_TAG           Release 标签，默认 v${VERSION}
+  RNL_TAG           Release 标签；未设置时自动取 GitHub 最新 Release（回退 v${VERSION}）
   RNL_INSTALL_XRAY  是否安装 rw-core，默认 1
   RNL_SKIP_XRAY     设为 1 跳过 rw-core 安装
   SECRET_KEY        非交互模式可直接传入（写入 secret.key）
@@ -127,7 +127,7 @@ redirect_alpine() {
   fi
   if [ -f /etc/alpine-release ]; then
     echo "检测到 Alpine Linux，请使用专用安装脚本："
-    echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/install-node-alpine.sh | sudo bash"
+    echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install-node-alpine.sh | bash"
     exit 1
   fi
 }

@@ -2,7 +2,7 @@
 # remnawave-node-lite-go Alpine Linux 一键安装（OpenRC）
 set -euo pipefail
 
-VERSION="0.8.5"
+VERSION="0.8.8"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -13,7 +13,10 @@ BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
 SECRET_FILE="${ETC_DIR}/secret.key"
 REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"
-TAG="${RNL_TAG:-v${VERSION}}"
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=install-env-helpers.sh
+source "${_SCRIPT_DIR}/install-env-helpers.sh"
+TAG="$(resolve_install_tag "$REPO" "v${VERSION}")"
 INSTALL_XRAY="${RNL_INSTALL_XRAY:-1}"
 SKIP_XRAY="${RNL_SKIP_XRAY:-0}"
 SECRET_FILE_ARG=""
@@ -23,9 +26,6 @@ DRY_RUN=0
 LOW_MEMORY=0
 PORT_EXPLICIT=0
 STAGE="初始化"
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=install-env-helpers.sh
-source "${_SCRIPT_DIR}/install-env-helpers.sh"
 
 usage() {
   cat <<EOF

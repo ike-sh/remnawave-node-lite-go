@@ -2,8 +2,35 @@
 # Shared env/secret helpers for install-node.sh and install-node-alpine.sh
 # Expects: NODE_ENV, SECRET_FILE, DRY_RUN
 
-secret_from_env_file() {
-  if [ ! -f "$NODE_ENV" ]; then
+resolve_release_tag() {
+  local repo="${1:?}"
+  local fallback="${2:?}"
+  local tag=""
+  if command -v curl >/dev/null 2>&1; then
+    tag="$(curl -fsSL -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null \
+      | tr -d '\n' \
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | head -n1)" || true
+  fi
+  if [ -n "$tag" ]; then
+    printf '%s' "$tag"
+  else
+    printf '%s' "$fallback"
+  fi
+}
+
+resolve_install_tag() {
+  local repo="${1:?}"
+  local fallback="${2:?}"
+  if [ -n "${RNL_TAG:-}" ]; then
+    printf '%s' "$RNL_TAG"
+  else
+    resolve_release_tag "$repo" "$fallback"
+  fi
+}
+
+secret_from_env_file() {  if [ ! -f "$NODE_ENV" ]; then
     return 1
   fi
   local line val
