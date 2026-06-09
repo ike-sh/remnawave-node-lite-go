@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -389,14 +390,38 @@ func (m *Manager) refreshVersion() {
 	m.mu.Unlock()
 }
 
+var xraySemverRe = regexp.MustCompile(`\d+\.\d+\.\d+`)
+
+// parseVersionLine returns semver like "26.3.27", matching official node (XRAY_CORE_VERSION / semver.coerce).
 func parseVersionLine(output string) string {
+	if env := strings.TrimSpace(os.Getenv("XRAY_CORE_VERSION")); env != "" {
+		if v := coerceSemver(env); v != "" {
+			return v
+		}
+	}
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" {
-			return line
+		if line == "" {
+			continue
+		}
+		if v := extractSemver(line); v != "" {
+			return v
 		}
 	}
 	return ""
+}
+
+func coerceSemver(raw string) string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "v")
+	return extractSemver(raw)
+}
+
+func extractSemver(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	return xraySemverRe.FindString(raw)
 }
 
 func (m *Manager) startResponse(isStarted bool, message *string) StartResponse {

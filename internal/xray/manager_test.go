@@ -115,3 +115,15 @@ func TestStopClearsConfig(t *testing.T) {
 		t.Fatalf("expected config to be cleared")
 	}
 }
+
+func TestParseVersionLine(t *testing.T) {
+	raw := "Xray 26.3.27 (Xray, Penetrates Everything.) d2758a0 (go1.26.1 linux/amd64)\nA unified platform..."
+	if got := parseVersionLine(raw); got != "26.3.27" {
+		t.Fatalf("parseVersionLine() = %q, want 26.3.27", got)
+	}
+
+	t.Setenv("XRAY_CORE_VERSION", "v26.3.27")
+	if got := parseVersionLine("ignored"); got != "26.3.27" {
+		t.Fatalf("XRAY_CORE_VERSION override = %q, want 26.3.27", got)
+	}
+}
