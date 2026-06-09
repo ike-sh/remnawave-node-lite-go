@@ -45,8 +45,8 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.
 
 安装完成后：
 
-1. 编辑 `/etc/remnanode/secret.key`，粘贴 Panel 下发的 Secret Key（推荐，支持超长 Key）
-2. `sudo systemctl restart remnawave-node`
+1. 编辑 `/etc/remnanode/node.env`，设置 `NODE_PORT` 与 `SECRET_KEY`（对齐官方 Docker environment）
+2. `sudo systemctl restart remnawave-node`（Alpine：`rc-service remnawave-node restart`）
 3. 在 Panel 添加节点，端口与 `NODE_PORT` 一致（默认 `2222`）
 4. 防火墙仅对 Panel IP 开放 `NODE_PORT`
 
@@ -67,6 +67,31 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.
 
 > Alpine 默认无 `sudo`；已是 root 时直接 `| bash`，勿写 `| sudo bash`。  
 > Debian/Ubuntu 等 systemd 发行版请使用 `install-node.sh`。
+
+### 配置方式（对齐官方 Docker Compose）
+
+官方 `remnawave/node` Docker：
+
+```yaml
+environment:
+  - NODE_PORT=2222
+  - SECRET_KEY="eyJ..."
+```
+
+lite-go 裸机安装等效配置为 **`/etc/remnanode/node.env`**（安装后自动生成模板，只需改两项）：
+
+```bash
+NODE_PORT=2222
+SECRET_KEY="eyJ..."    # Panel 下发的整段 Secret Key
+```
+
+安装时也可一次性传入（与 Docker environment 相同）：
+
+```bash
+NODE_PORT=8443 SECRET_KEY='eyJ...' curl -fsSL .../install-node-alpine.sh | bash -s -- --yes
+```
+
+密钥极长时可改用 `SECRET_KEY_FILE=/etc/remnanode/secret.key`（与 `SECRET_KEY` 二选一）。
 
 ### 自定义 NODE 端口
 

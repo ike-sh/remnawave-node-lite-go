@@ -14,11 +14,22 @@ import (
 )
 
 const (
+	DefaultEnvPath     = "/etc/remnanode/node.env"
 	defaultXtlsAPIPort = 61000
 	defaultXrayBin     = "/usr/local/bin/rw-core"
 	defaultGeoDir      = "/usr/local/share/xray"
 	defaultLogDir      = "/var/log/remnanode"
 )
+
+// ResolveEnvPath returns the first existing env file path, preferring production default.
+func ResolveEnvPath() string {
+	for _, path := range []string{DefaultEnvPath, ".env"} {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ".env"
+}
 
 type Config struct {
 	NodePort               int

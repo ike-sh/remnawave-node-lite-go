@@ -22,6 +22,9 @@ DRY_RUN=0
 LOW_MEMORY=0
 PORT_EXPLICIT=0
 STAGE="初始化"
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=install-env-helpers.sh
+source "${_SCRIPT_DIR}/install-env-helpers.sh"
 
 usage() {
   cat <<EOF
@@ -192,40 +195,6 @@ detect_arch() {
   esac
 }
 
-secret_configured() {
-  if [ -f "$SECRET_FILE" ] && [ -s "$SECRET_FILE" ]; then
-    return 0
-  fi
-  return 1
-}
-
-write_secret_from_source() {
-  local src="$1"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] 写入 ${SECRET_FILE} <- ${src}"
-    return 0
-  fi
-  install -m 0600 -D /dev/null "$SECRET_FILE"
-  if [ "$src" = "-" ]; then
-    cat >"$SECRET_FILE"
-  else
-    install -m 0600 "$src" "$SECRET_FILE"
-  fi
-}
-
-write_secret_from_env() {
-  local value="${SECRET_KEY:-}"
-  if [ -z "$value" ]; then
-    return 0
-  fi
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] 写入 ${SECRET_FILE} <- SECRET_KEY 环境变量"
-    return 0
-  fi
-  printf '%s' "$value" >"$SECRET_FILE"
-  chmod 600 "$SECRET_FILE"
-}
-
 download_binary() {
   local arch="$1"
   local url="https://github.com/${REPO}/releases/download/${TAG}/remnanode-lite_linux_${arch}.tar.gz"
@@ -295,20 +264,7 @@ setup_env_file() {
     return 0
   fi
 
-  cat >"$NODE_ENV" <<EOF
-# Remnawave Node Lite — 由 install-node.sh 生成
-# Panel Secret Key 写入独立文件（支持超长 base64）
-SECRET_KEY_FILE=${SECRET_FILE}
-NODE_PORT=${port}
-XTLS_API_PORT=61000
-XRAY_BIN=/usr/local/bin/rw-core
-GEO_DIR=/usr/local/share/xray
-LOG_DIR=${LOG_DIR}
-INTERNAL_SOCKET_PATH=
-INTERNAL_REST_TOKEN=
-LOW_MEMORY=${low_mem}
-BODY_LIMIT_MB=
-EOF
+  render_env_template "$port" "$low_mem" "install-node.sh" >"$NODE_ENV"
   chmod 600 "$NODE_ENV"
   echo "已创建 ${NODE_ENV}"
 }
@@ -317,7 +273,11 @@ setup_secret_file() {
   step "配置 Secret Key"
 
   if secret_configured; then
-    echo "保留现有 Secret Key：${SECRET_FILE}"
+    if secret_from_env_file; then
+      echo "保留现有 SECRET_KEY（${NODE_ENV}）"
+    else
+      echo "保留现有 Secret Key：${SECRET_FILE}"
+    fi
     return 0
   fi
 
@@ -327,22 +287,16 @@ setup_secret_file() {
       exit 1
     fi
     write_secret_from_source "$SECRET_FILE_ARG"
-    echo "已从文件导入 Secret Key。"
+    echo "已从文件导入 Secret Key（SECRET_KEY_FILE 模式）。"
     return 0
   fi
 
   write_secret_from_env
   if secret_configured; then
-    echo "已从 SECRET_KEY 环境变量写入 Secret Key。"
     return 0
   fi
 
   if [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
-    if [ "$DRY_RUN" -eq 1 ]; then
-      echo "[dry-run] 创建空 ${SECRET_FILE}"
-    else
-      install -m 0600 -D /dev/null "$SECRET_FILE"
-    fi
     return 0
   fi
 
@@ -446,7 +400,7 @@ EOF
 start_service() {
   if ! secret_configured; then
     echo "⚠ Secret Key 未配置，跳过启动服务。"
-    echo "  请编辑 ${SECRET_FILE} 后执行：systemctl restart remnawave-node"
+    echo "  请编辑 ${NODE_ENV} 填入 NODE_PORT 与 SECRET_KEY 后：systemctl restart remnawave-node"
     return 0
   fi
 
@@ -485,14 +439,11 @@ main() {
   echo "  二进制：  ${PREFIX}/${BIN_NAME}"
   echo "  环境配置：${NODE_ENV}"
   echo "  监听端口：$(configured_node_port)（Panel 须填相同端口）"
-  echo "  Secret Key：${SECRET_FILE}"
+  echo "  配置文件：${NODE_ENV}（NODE_PORT + SECRET_KEY，对齐官方 Docker）"
   echo "  日志：    journalctl -u remnawave-node -f"
   echo "  Xray：    xlogs / xerrors"
   if ! secret_configured; then
-    echo
-    echo "下一步："
-    echo "  1. sudo nano ${SECRET_FILE}   # 粘贴 Panel Secret Key"
-    echo "  2. sudo systemctl restart remnawave-node"
+    print_env_config_hint "sudo systemctl restart remnawave-node"
   fi
 }
 

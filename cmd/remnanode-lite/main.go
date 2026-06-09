@@ -48,7 +48,7 @@ func main() {
 			return
 		}
 	}
-	cfg, err := config.Load(".env")
+	cfg, err := config.Load(config.ResolveEnvPath())
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
