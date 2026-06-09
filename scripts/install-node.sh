@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 一键安装脚本
 set -euo pipefail
 
-VERSION="0.8.16"
+VERSION="0.8.17"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -515,6 +515,8 @@ do_install() {
   install_systemd
   install_helpers
   start_service
+  verify_service_listening "$(configured_node_port)"
+  print_panel_address_hint "$(configured_node_port)"
 
   echo
   echo "安装完成。"
