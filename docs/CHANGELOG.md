@@ -3,6 +3,13 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [0.8.23] - 2026-06-09
+
+### 修复
+
+- **用户流量统计始终 0B**：`GetAllUsersStats` 错误优先调用 rw-core 扩展 `GetUsersStats` RPC，成功但返回空流量，未回退到官方 SDK 使用的 `QueryStats(pattern=user>>>)`。现已与 `@remnawave/xtls-sdk` 对齐，仅走 `QueryStats`。
+- **inbound/outbound 流量解析**：计数器名格式为 `inbound>>>tag>>>traffic>>>uplink`，解析误用 `parts[2]`（值为 `traffic`），已改为 `parts[3]`。
+
 ## [0.8.22] - 2026-06-09
 
 ### 修复
@@ -37,6 +44,7 @@
 
 ---
 
+[0.8.23]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.23
 [0.8.22]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.22
 [0.8.21]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.21
 [0.8.20]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.20

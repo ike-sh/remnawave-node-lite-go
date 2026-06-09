@@ -97,12 +97,8 @@ func (s *StatsAPI) GetUserOnlineStatus(ctx context.Context, username string) (bo
 }
 
 func (s *StatsAPI) GetAllUsersStats(ctx context.Context, reset bool) ([]UserTraffic, error) {
-	if users, err := s.getAllUsersStatsExtended(ctx, reset); err == nil {
-		return users, nil
-	} else if !isGRPCUnimplemented(err) {
-		return nil, err
-	}
-
+	// Align with official @remnawave/xtls-sdk getAllUsersStats(): QueryStats only.
+	// Preferring GetUsersStats here returns empty traffic on rw-core even when counters exist.
 	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
 		Pattern: "user>>>",
 		Reset_:  reset,
@@ -296,13 +292,13 @@ func parseTagTraffic(stats []*statscommand.Stat, prefix string) TagTraffic {
 	traffic := TagTraffic{}
 	for _, stat := range stats {
 		parts := strings.Split(stat.Name, ">>>")
-		if len(parts) < 3 || parts[0] != prefix {
+		if len(parts) < 4 || parts[0] != prefix {
 			continue
 		}
 		if traffic.Tag == "" {
 			traffic.Tag = parts[1]
 		}
-		switch parts[2] {
+		switch parts[3] {
 		case "downlink":
 			traffic.Downlink = stat.Value
 		case "uplink":
@@ -316,7 +312,7 @@ func parseAllTagTraffic(stats []*statscommand.Stat, prefix string) []TagTraffic 
 	tags := map[string]*TagTraffic{}
 	for _, stat := range stats {
 		parts := strings.Split(stat.Name, ">>>")
-		if len(parts) < 3 || parts[0] != prefix {
+		if len(parts) < 4 || parts[0] != prefix {
 			continue
 		}
 		tag := parts[1]
@@ -325,7 +321,7 @@ func parseAllTagTraffic(stats []*statscommand.Stat, prefix string) []TagTraffic 
 			entry = &TagTraffic{Tag: tag}
 			tags[tag] = entry
 		}
-		switch parts[2] {
+		switch parts[3] {
 		case "downlink":
 			entry.Downlink = stat.Value
 		case "uplink":
