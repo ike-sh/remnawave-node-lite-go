@@ -31,24 +31,28 @@ func (d *Dropper) Available() bool {
 	return d.available
 }
 
-func (d *Dropper) DropIPs(ips []string) {
+func (d *Dropper) DropIPs(ips []string) bool {
 	if !d.available || len(ips) == 0 {
-		return
+		return true
 	}
+	ok := true
 	for _, ip := range ips {
 		if ip == "" || d.isWhitelisted(ip) {
 			continue
 		}
 		if err := netadmin.KillSocketsByIP(ip); err != nil {
 			slog.Warn("failed to drop connections", "ip", ip, "error", err)
+			ok = false
 		}
 	}
+	return ok
 }
 
-func (d *Dropper) DropUsers(ctx context.Context, provider IPListProvider, userIDs []string) {
+func (d *Dropper) DropUsers(ctx context.Context, provider IPListProvider, userIDs []string) bool {
 	if !d.available || provider == nil {
-		return
+		return true
 	}
+	ok := true
 	for _, userID := range userIDs {
 		entries, err := provider.GetUserIPList(ctx, userID, true)
 		if err != nil || len(entries) == 0 {
@@ -60,6 +64,9 @@ func (d *Dropper) DropUsers(ctx context.Context, provider IPListProvider, userID
 				ips = append(ips, entry.IP)
 			}
 		}
-		d.DropIPs(ips)
+		if !d.DropIPs(ips) {
+			ok = false
+		}
 	}
+	return ok
 }

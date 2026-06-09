@@ -239,15 +239,16 @@ func (s *Service) HandleDropUsersConnections(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	success := true
 	if s.dropper != nil && s.provider != nil {
-		s.dropper.DropUsers(r.Context(), s.provider, req.UserIDs)
+		success = s.dropper.DropUsers(r.Context(), s.provider, req.UserIDs)
 	}
 
 	write(w, http.StatusOK, envelope[struct {
 		Success bool `json:"success"`
 	}]{Response: struct {
 		Success bool `json:"success"`
-	}{Success: true}})
+	}{Success: success}})
 }
 
 func (s *Service) HandleDropIPs(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
@@ -259,15 +260,16 @@ func (s *Service) HandleDropIPs(w http.ResponseWriter, r *http.Request, write wr
 		return
 	}
 
+	success := true
 	if s.dropper != nil {
-		s.dropper.DropIPs(req.IPs)
+		success = s.dropper.DropIPs(req.IPs)
 	}
 
 	write(w, http.StatusOK, envelope[struct {
 		Success bool `json:"success"`
 	}]{Response: struct {
 		Success bool `json:"success"`
-	}{Success: true}})
+	}{Success: success}})
 }
 
 func (s *Service) addSingleUser(ctx context.Context, item addUserItem) xtls.HandlerResult {
