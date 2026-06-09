@@ -3,6 +3,7 @@ package xray
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"remnawave-node-lite-go/internal/xtls"
@@ -125,6 +126,9 @@ func (m *Manager) GetUsersIPList(ctx context.Context) ([]xtls.UserIPEntry, error
 func (m *Manager) waitForGRPC(ctx context.Context, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		if hint := m.rwCoreExitHint(); hint != "" && strings.Contains(hint, "exited") {
+			return false
+		}
 		if m.PingXrayGRPC(ctx) {
 			return true
 		}

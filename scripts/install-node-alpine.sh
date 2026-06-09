@@ -2,7 +2,7 @@
 # remnawave-node-lite-go Alpine Linux 一键安装（OpenRC）
 set -euo pipefail
 
-VERSION="0.8.20"
+VERSION="0.8.21"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -561,9 +561,23 @@ main() {
   dispatch_action
 }
 
+detect_low_memory_auto() {
+  if [ "$LOW_MEMORY" -eq 1 ]; then
+    return 0
+  fi
+  local total_kb=""
+  total_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+  if [ -n "$total_kb" ] && [ "$total_kb" -le 524288 ]; then
+    LOW_MEMORY=1
+    echo "检测到内存 ${total_kb}KB（≤512MB），自动启用低内存模式 LOW_MEMORY=1"
+  fi
+}
+
 do_install() {
   require_root
   require_alpine
+
+  detect_low_memory_auto
 
   local arch
   arch="$(detect_arch)"

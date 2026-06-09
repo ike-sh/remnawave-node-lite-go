@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 一键安装脚本
 set -euo pipefail
 
-VERSION="0.8.20"
+VERSION="0.8.21"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"

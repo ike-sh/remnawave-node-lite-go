@@ -27,6 +27,7 @@ type Options struct {
 	InternalRESTToken    string
 	XtlsAPIPort          int
 	DisableHashCheck     bool
+	LowMemory            bool
 }
 
 type TorrentBlockerConfigProvider interface {
@@ -43,6 +44,7 @@ type Manager struct {
 	token            string
 	xtlsAPIPort      int
 	disableHashCheck bool
+	lowMemory        bool
 	internalCerts    internalCerts
 	torrentBlocker   TorrentBlockerConfigProvider
 
@@ -61,6 +63,10 @@ type processState struct {
 	done   chan error
 	stdout *os.File
 	stderr *os.File
+
+	mu      sync.Mutex
+	exited  bool
+	exitErr error
 }
 
 type StartRequest struct {
@@ -120,6 +126,7 @@ func NewManager(opts Options) (*Manager, error) {
 		token:            opts.InternalRESTToken,
 		xtlsAPIPort:      opts.XtlsAPIPort,
 		disableHashCheck: opts.DisableHashCheck,
+		lowMemory:        opts.LowMemory,
 		internalCerts:    certs,
 	}
 	manager.refreshVersion()
@@ -220,7 +227,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	m.xrayOnline = false
 	m.mu.Unlock()
 
-	started := m.waitForGRPC(ctx, 20*time.Second)
+	started := m.waitForGRPC(ctx, m.grpcStartupTimeout())
 
 	m.mu.Lock()
 	if started {
@@ -233,9 +240,22 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	m.xrayOnline = false
 	m.mu.Unlock()
 
-	message := fmt.Sprintf("xray gRPC API on 127.0.0.1:%d did not become reachable within 20s (see %s/xray.err.log)", m.xtlsAPIPort, m.logDir)
+	message := fmt.Sprintf("xray gRPC API on 127.0.0.1:%d did not become reachable within %s (see %s/xray.err.log)", m.xtlsAPIPort, m.grpcStartupTimeout(), m.logDir)
+	if hint := m.rwCoreExitHint(); hint != "" {
+		message += "; " + hint
+	}
+	if tail := tailLogFile(filepath.Join(m.logDir, "xray.err.log"), 3); tail != "" {
+		message += "; xray.err: " + tail
+	}
 	log.Printf("xray/start failed: %s", message)
 	return m.startResponse(false, &message)
+}
+
+func (m *Manager) grpcStartupTimeout() time.Duration {
+	if m.lowMemory {
+		return 90 * time.Second
+	}
+	return 20 * time.Second
 }
 
 func (m *Manager) Stop() StopResponse {
@@ -332,6 +352,10 @@ func (m *Manager) monitorProcess(process *processState) {
 	err := process.cmd.Wait()
 	_ = process.stdout.Close()
 	_ = process.stderr.Close()
+	process.markExited(err)
+	if err != nil {
+		log.Printf("rw-core exited: %v", err)
+	}
 	process.done <- err
 	close(process.done)
 
@@ -341,6 +365,51 @@ func (m *Manager) monitorProcess(process *processState) {
 		m.process = nil
 		m.xrayOnline = false
 	}
+}
+
+func (p *processState) markExited(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.exited = true
+	p.exitErr = err
+}
+
+func (p *processState) exitStatus() (exited bool, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.exited, p.exitErr
+}
+
+func (m *Manager) rwCoreExitHint() string {
+	m.mu.RLock()
+	process := m.process
+	m.mu.RUnlock()
+	if process == nil {
+		return "rw-core is not running"
+	}
+	exited, err := process.exitStatus()
+	if !exited {
+		return ""
+	}
+	if err != nil {
+		return "rw-core exited: " + err.Error()
+	}
+	return "rw-core exited"
+}
+
+func tailLogFile(path string, maxLines int) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, " | ")
 }
 
 func (m *Manager) stopProcessLocked(clearConfig bool) error {
