@@ -9,14 +9,14 @@ import (
 	"remnawave-node-lite-go/internal/xtls"
 )
 
-func (m *Manager) statsAPI(ctx context.Context) (*xtls.StatsAPI, func(), error) {
+func (m *Manager) statsAPI(ctx context.Context, requireOnline bool) (*xtls.StatsAPI, func(), error) {
 	m.mu.RLock()
 	online := m.xrayOnline
 	port := m.xtlsAPIPort
 	certs := m.internalCerts
 	m.mu.RUnlock()
 
-	if !online {
+	if requireOnline && !online {
 		return nil, nil, fmt.Errorf("xray is not online")
 	}
 
@@ -34,7 +34,7 @@ func (m *Manager) statsAPI(ctx context.Context) (*xtls.StatsAPI, func(), error) 
 }
 
 func (m *Manager) PingXrayGRPC(ctx context.Context) bool {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, false)
 	if err != nil {
 		return false
 	}
@@ -43,7 +43,7 @@ func (m *Manager) PingXrayGRPC(ctx context.Context) bool {
 }
 
 func (m *Manager) GetSysStats(ctx context.Context) (*xtls.SysStats, error) {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +52,7 @@ func (m *Manager) GetSysStats(ctx context.Context) (*xtls.SysStats, error) {
 }
 
 func (m *Manager) GetAllUsersStats(ctx context.Context, reset bool) ([]xtls.UserTraffic, error) {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (m *Manager) GetAllUsersStats(ctx context.Context, reset bool) ([]xtls.User
 }
 
 func (m *Manager) GetUserOnlineStatus(ctx context.Context, username string) (bool, error) {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, true)
 	if err != nil {
 		return false, err
 	}
@@ -70,7 +70,7 @@ func (m *Manager) GetUserOnlineStatus(ctx context.Context, username string) (boo
 }
 
 func (m *Manager) GetInboundStats(ctx context.Context, tag string, reset bool) (xtls.TagTraffic, error) {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, true)
 	if err != nil {
 		return xtls.TagTraffic{}, err
 	}
@@ -79,7 +79,7 @@ func (m *Manager) GetInboundStats(ctx context.Context, tag string, reset bool) (
 }
 
 func (m *Manager) GetOutboundStats(ctx context.Context, tag string, reset bool) (xtls.TagTraffic, error) {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, true)
 	if err != nil {
 		return xtls.TagTraffic{}, err
 	}
@@ -88,7 +88,7 @@ func (m *Manager) GetOutboundStats(ctx context.Context, tag string, reset bool) 
 }
 
 func (m *Manager) GetAllInboundsStats(ctx context.Context, reset bool) ([]xtls.TagTraffic, error) {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (m *Manager) GetAllInboundsStats(ctx context.Context, reset bool) ([]xtls.T
 }
 
 func (m *Manager) GetAllOutboundsStats(ctx context.Context, reset bool) ([]xtls.TagTraffic, error) {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func (m *Manager) GetAllOutboundsStats(ctx context.Context, reset bool) ([]xtls.
 }
 
 func (m *Manager) GetUserIPList(ctx context.Context, userID string, reset bool) ([]xtls.IPEntry, error) {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (m *Manager) GetUserIPList(ctx context.Context, userID string, reset bool) 
 }
 
 func (m *Manager) GetUsersIPList(ctx context.Context) ([]xtls.UserIPEntry, error) {
-	api, closeFn, err := m.statsAPI(ctx)
+	api, closeFn, err := m.statsAPI(ctx, true)
 	if err != nil {
 		return nil, err
 	}
