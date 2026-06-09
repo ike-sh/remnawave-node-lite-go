@@ -20,11 +20,12 @@ SECRET_FILE_ARG=""
 YES=0
 DRY_RUN=0
 LOW_MEMORY=0
+PORT_EXPLICIT=0
 STAGE="初始化"
 
 usage() {
   cat <<EOF
-用法：install-node.sh [--yes] [--dry-run] [--skip-xray] [--low-memory] [--secret-file PATH] [--help] [--version]
+用法：install-node.sh [--yes] [--dry-run] [--skip-xray] [--low-memory] [--port PORT] [--secret-file PATH] [--help] [--version]
 
 Remnawave Node Lite (Go) ${VERSION} 一键安装
 
@@ -37,8 +38,12 @@ Secret Key（Panel 下发，通常很长）推荐写入独立文件，避免 .en
   RNL_INSTALL_XRAY  是否安装 rw-core，默认 1
   RNL_SKIP_XRAY     设为 1 跳过 rw-core 安装
   SECRET_KEY        非交互模式可直接传入（写入 secret.key）
-  NODE_PORT         监听端口，默认 2222
+  NODE_PORT         监听端口，默认 2222（与 --port 等效）
   LOW_MEMORY        设为 1 启用低内存模式（64MB body limit + GOMEMLIMIT）
+
+示例：
+  NODE_PORT=8443 curl -fsSL .../install-node.sh | sudo bash
+  curl -fsSL .../install-node.sh | sudo bash -s -- --port 8443 --yes
 EOF
 }
 
@@ -52,6 +57,16 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY_RUN=1 ;;
     --skip-xray) SKIP_XRAY=1 ;;
     --low-memory) LOW_MEMORY=1 ;;
+    --port)
+      NODE_PORT="${2:-}"
+      if [ -z "$NODE_PORT" ]; then
+        echo "--port 需要端口号" >&2
+        exit 1
+      fi
+      PORT_EXPLICIT=1
+      shift 2
+      continue
+      ;;
     --secret-file)
       SECRET_FILE_ARG="${2:-}"
       if [ -z "$SECRET_FILE_ARG" ]; then
@@ -119,6 +134,51 @@ require_command() {
     echo "缺少命令：$1" >&2
     exit 1
   fi
+}
+
+validate_port() {
+  local port="$1"
+  if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    echo "无效端口：${port}（有效范围 1-65535）" >&2
+    exit 1
+  fi
+}
+
+effective_node_port() {
+  echo "${NODE_PORT:-2222}"
+}
+
+configured_node_port() {
+  if [ -f "$NODE_ENV" ] && grep -q '^NODE_PORT=' "$NODE_ENV" 2>/dev/null; then
+    grep '^NODE_PORT=' "$NODE_ENV" | head -n 1 | cut -d= -f2-
+  else
+    effective_node_port
+  fi
+}
+
+prompt_node_port() {
+  if [ -n "${NODE_PORT:-}" ] || [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+  echo
+  read -r -p "NODE 监听端口（Panel 连接用，默认 2222）: " input || input=""
+  NODE_PORT="${input:-2222}"
+  validate_port "$NODE_PORT"
+}
+
+update_node_port_in_env() {
+  local port="$1"
+  validate_port "$port"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 更新 ${NODE_ENV} NODE_PORT=${port}"
+    return 0
+  fi
+  if grep -q '^NODE_PORT=' "$NODE_ENV"; then
+    sed -i "s/^NODE_PORT=.*/NODE_PORT=${port}/" "$NODE_ENV"
+  else
+    echo "NODE_PORT=${port}" >>"$NODE_ENV"
+  fi
+  echo "已设置 NODE_PORT=${port}"
 }
 
 detect_arch() {
@@ -212,12 +272,19 @@ setup_directories() {
 
 setup_env_file() {
   step "配置 ${NODE_ENV}"
+  local port
+  port="$(effective_node_port)"
+  validate_port "$port"
+
   if [ -f "$NODE_ENV" ]; then
-    echo "保留现有配置：${NODE_ENV}"
+    if [ "$PORT_EXPLICIT" -eq 1 ] || [ -n "${NODE_PORT:-}" ]; then
+      update_node_port_in_env "$port"
+    else
+      echo "保留现有配置：${NODE_ENV}（NODE_PORT=$(configured_node_port)）"
+    fi
     return 0
   fi
 
-  local port="${NODE_PORT:-2222}"
   local low_mem="${LOW_MEMORY:-0}"
   if [ "$LOW_MEMORY" -eq 1 ]; then
     low_mem=1
@@ -406,6 +473,7 @@ main() {
   setup_directories
   download_binary "$arch"
   install_xray
+  prompt_node_port
   setup_env_file
   setup_secret_file
   install_systemd
@@ -416,6 +484,7 @@ main() {
   echo "安装完成。"
   echo "  二进制：  ${PREFIX}/${BIN_NAME}"
   echo "  环境配置：${NODE_ENV}"
+  echo "  监听端口：$(configured_node_port)（Panel 须填相同端口）"
   echo "  Secret Key：${SECRET_FILE}"
   echo "  日志：    journalctl -u remnawave-node -f"
   echo "  Xray：    xlogs / xerrors"

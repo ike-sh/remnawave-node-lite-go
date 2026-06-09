@@ -68,6 +68,26 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.
 > Alpine 默认无 `sudo`；已是 root 时直接 `| bash`，勿写 `| sudo bash`。  
 > Debian/Ubuntu 等 systemd 发行版请使用 `install-node.sh`。
 
+### 自定义 NODE 端口
+
+默认 `2222`。安装时指定（须与 Panel 添加节点时的端口一致）：
+
+```bash
+# 环境变量
+NODE_PORT=8443 curl -fsSL .../install-node.sh | sudo bash
+
+# 命令行参数
+curl -fsSL .../install-node-alpine.sh | bash -s -- --port 8443 --low-memory
+```
+
+已安装节点修改端口：
+
+```bash
+nano /etc/remnanode/node.env   # 改 NODE_PORT=8443
+rc-service remnawave-node restart    # Alpine
+# systemctl restart remnawave-node  # systemd
+```
+
 ### 安装选项
 
 ```bash
