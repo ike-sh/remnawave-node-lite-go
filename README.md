@@ -138,11 +138,20 @@ sudo RNL_UPGRADE_XRAY=1 bash upgrade.sh --yes
 ### 卸载
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.5/scripts/uninstall.sh | sudo bash
+# 交互式卸载（逐项询问：配置 / 日志 / 数据 / rw-core）
+curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.5/scripts/uninstall.sh | bash
 
-# 同时删除配置
-sudo bash uninstall.sh --purge --yes
+# Alpine 非交互：删除服务+二进制，保留配置
+bash uninstall.sh --yes --keep-config
+
+# 删除全部（含 node.env、日志、rw-core）
+bash uninstall.sh --purge-all --yes
+
+# 仅预览
+bash uninstall.sh --dry-run
 ```
+
+支持 **systemd** 与 **Alpine OpenRC** 自动检测。
 
 ## 部署自检
 
