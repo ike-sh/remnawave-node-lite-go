@@ -30,7 +30,8 @@ resolve_install_tag() {
   fi
 }
 
-secret_from_env_file() {  if [ ! -f "$NODE_ENV" ]; then
+secret_from_env_file() {
+  if [ ! -f "$NODE_ENV" ]; then
     return 1
   fi
   local line val
@@ -114,6 +115,55 @@ write_secret_from_env() {
     return 0
   fi
   write_secret_to_env "$value"
+}
+
+ensure_internal_socket_in_env() {
+  if [ ! -f "$NODE_ENV" ] || [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+  if grep -q '^INTERNAL_SOCKET_PATH=.' "$NODE_ENV" 2>/dev/null; then
+    return 0
+  fi
+  if grep -q '^INTERNAL_SOCKET_PATH=' "$NODE_ENV" 2>/dev/null; then
+    sed -i 's|^INTERNAL_SOCKET_PATH=.*|INTERNAL_SOCKET_PATH=/run/remnanode/internal.sock|' "$NODE_ENV"
+  else
+    echo 'INTERNAL_SOCKET_PATH=/run/remnanode/internal.sock' >>"$NODE_ENV"
+  fi
+}
+
+prompt_secret_key() {
+  if secret_configured; then
+    return 0
+  fi
+
+  write_secret_from_env
+  if secret_configured; then
+    return 0
+  fi
+
+  if [ -n "$SECRET_FILE_ARG" ]; then
+    return 0
+  fi
+
+  if [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+
+  echo
+  echo "请粘贴 Panel 节点页下发的 Secret Key（整段 base64，粘贴后按 Enter）："
+  local secret=""
+  if [ -t 0 ]; then
+    read -r secret
+  elif [ -r /dev/tty ]; then
+    read -r secret </dev/tty
+  fi
+
+  if [ -n "$secret" ]; then
+    write_secret_to_env "$secret"
+    return 0
+  fi
+
+  print_env_config_hint "sudo systemctl restart remnawave-node"
 }
 
 print_env_config_hint() {

@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 一键安装脚本
 set -euo pipefail
 
-VERSION="0.8.14"
+VERSION="0.8.15"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -52,13 +52,16 @@ Secret Key（Panel 下发，通常很长）推荐写入独立文件，避免 .en
   RNL_TAG           Release 标签；未设置时自动取 GitHub 最新 Release（回退 v${VERSION}）
   RNL_INSTALL_XRAY  是否安装 rw-core，默认 1
   RNL_SKIP_XRAY     设为 1 跳过 rw-core 安装
-  SECRET_KEY        非交互模式可直接传入（写入 secret.key）
+  SECRET_KEY        非交互：安装时传入（也可配合 --yes）
   NODE_PORT         监听端口，默认 2222（与 --port 等效）
   LOW_MEMORY        设为 1 启用低内存模式（64MB body limit + GOMEMLIMIT）
 
+卸载：
+  curl -fsSL .../scripts/uninstall.sh | sudo bash
+
 示例：
-  NODE_PORT=8443 curl -fsSL .../install-node.sh | sudo bash
-  curl -fsSL .../install-node.sh | sudo bash -s -- --port 8443 --yes
+  curl -fsSL .../install-node.sh | sudo bash
+  SECRET_KEY='eyJ...' curl -fsSL .../install-node.sh | sudo bash -s -- --yes
 EOF
 }
 
@@ -176,9 +179,38 @@ prompt_node_port() {
     return 0
   fi
   echo
-  read -r -p "NODE 监听端口（Panel 连接用，默认 2222）: " input || input=""
+  local input=""
+  if [ -t 0 ]; then
+    read -r -p "NODE 监听端口（Panel 连接用，默认 2222）: " input || input=""
+  elif [ -r /dev/tty ]; then
+    read -r -p "NODE 监听端口（Panel 连接用，默认 2222）: " input </dev/tty || input=""
+  fi
   NODE_PORT="${input:-2222}"
   validate_port "$NODE_PORT"
+}
+
+confirm_install() {
+  if [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+  if [ ! -x "${PREFIX}/${BIN_NAME}" ] && [ ! -f "$NODE_ENV" ]; then
+    return 0
+  fi
+  echo
+  echo "检测到本机已安装 remnawave-node-lite。"
+  local ans=""
+  if [ -t 0 ]; then
+    read -r -p "继续安装/升级？保留现有 ${NODE_ENV} [y/N]: " ans || ans=""
+  elif [ -r /dev/tty ]; then
+    read -r -p "继续安装/升级？保留现有 ${NODE_ENV} [y/N]: " ans </dev/tty || ans=""
+  else
+    echo "非交互环境请添加 --yes 确认升级。" >&2
+    exit 1
+  fi
+  case "$ans" in
+    y|Y|yes|YES) ;;
+    *) echo "已取消。"; exit 0 ;;
+  esac
 }
 
 update_node_port_in_env() {
@@ -303,16 +335,7 @@ setup_secret_file() {
     return 0
   fi
 
-  write_secret_from_env
-  if secret_configured; then
-    return 0
-  fi
-
-  if [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
-    return 0
-  fi
-
-  print_env_config_hint "sudo systemctl restart remnawave-node"
+  prompt_secret_key
 }
 
 install_systemd() {
@@ -381,10 +404,12 @@ main() {
   arch="$(detect_arch)"
 
   setup_directories
+  confirm_install
   download_binary "$arch"
   install_xray
   prompt_node_port
   setup_env_file
+  ensure_internal_socket_in_env
   setup_secret_file
   install_systemd
   install_helpers
@@ -398,6 +423,7 @@ main() {
   echo "  配置文件：${NODE_ENV}（NODE_PORT + SECRET_KEY）"
   echo "  日志：    journalctl -u remnawave-node -f"
   echo "  Xray：    xlogs / xerrors"
+  echo "  卸载：    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/uninstall.sh | sudo bash"
   if ! secret_configured; then
     print_env_config_hint "sudo systemctl restart remnawave-node"
   fi
