@@ -55,6 +55,7 @@ func Run(args []string) int {
 		results = append(results, checkSecret(cfg)...)
 		results = append(results, checkXrayBinary(cfg.XrayBin)...)
 		results = append(results, checkGeoFiles(cfg.GeoDir)...)
+		results = append(results, checkXrayRuntime(cfg.LogDir)...)
 		results = append(results, checkCommand("nft", "nftables 命令行（插件 IP 封禁）")...)
 		results = append(results, checkCommand("ss", "ss 命令（踢连接 drop-ips）")...)
 	}
@@ -171,6 +172,41 @@ func checkXrayBinary(bin string) []result {
 	}
 	line := strings.TrimSpace(strings.Split(string(out), "\n")[0])
 	return []result{{level: "OK", title: "rw-core", detail: line}}
+}
+
+func checkXrayRuntime(logDir string) []result {
+	if logDir == "" {
+		logDir = "/var/log/remnanode"
+	}
+	if path, err := exec.LookPath("rw-core"); err == nil {
+		if out, err := exec.Command("pgrep", "-a", filepath.Base(path)).Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			return []result{{level: "OK", title: "rw-core 进程", detail: strings.TrimSpace(strings.Split(string(out), "\n")[0])}}
+		}
+	} else if out, err := exec.Command("pgrep", "-a", "xray").Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		return []result{{level: "OK", title: "rw-core 进程", detail: strings.TrimSpace(strings.Split(string(out), "\n")[0])}}
+	}
+
+	errLog := filepath.Join(logDir, "xray.err.log")
+	if data, err := os.ReadFile(errLog); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		last := lines[len(lines)-1]
+		if len(last) > 120 {
+			last = last[:120] + "…"
+		}
+		return []result{{
+			level:   "ERROR",
+			title:   "rw-core 进程",
+			detail:  "未运行；xray.err.log: " + last,
+			fixHint: "Panel 禁用→启用节点后查看 tail -30 " + errLog,
+		}}
+	}
+
+	return []result{{
+		level:   "WARN",
+		title:   "rw-core 进程",
+		detail:  "未运行（Panel 启用节点后才会 spawn）",
+		fixHint: "Panel 禁用→启用；同机部署时节点地址用 127.0.0.1",
+	}}
 }
 
 func checkGeoFiles(dir string) []result {

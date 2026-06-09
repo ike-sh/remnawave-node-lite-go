@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -150,8 +151,11 @@ func (m *Manager) torrentBlockerOptions() TorrentBlockerOptions {
 }
 
 func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
+	log.Printf("xray/start received (forceRestart=%v)", req.Internals.ForceRestart)
+
 	if err := os.MkdirAll(m.logDir, 0o755); err != nil {
 		message := err.Error()
+		log.Printf("xray/start failed: %s", message)
 		return m.startResponse(false, &message)
 	}
 
@@ -159,6 +163,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	if m.startProcessing {
 		m.mu.Unlock()
 		message := "Request already in progress"
+		log.Printf("xray/start rejected: %s", message)
 		return m.startResponse(false, &message)
 	}
 	m.startProcessing = true
@@ -183,6 +188,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 			needRestart := m.isNeedRestartCoreLocked(req.Internals.Hashes)
 			m.mu.RUnlock()
 			if !needRestart {
+				log.Printf("xray/start skipped: core already online and config unchanged")
 				return m.startResponse(true, nil)
 			}
 		} else {
@@ -198,6 +204,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	if err := m.stopProcessLocked(false); err != nil {
 		m.mu.Unlock()
 		message := err.Error()
+		log.Printf("xray/start failed: stop previous rw-core: %s", message)
 		return m.startResponse(false, &message)
 	}
 
@@ -206,6 +213,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 		m.xrayOnline = false
 		m.mu.Unlock()
 		message := err.Error()
+		log.Printf("xray/start failed: spawn rw-core: %s", message)
 		return m.startResponse(false, &message)
 	}
 	m.process = process
@@ -218,13 +226,15 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	if started {
 		m.xrayOnline = true
 		m.mu.Unlock()
+		log.Printf("xray/start succeeded: rw-core online on gRPC 127.0.0.1:%d", m.xtlsAPIPort)
 		return m.startResponse(true, nil)
 	}
 	_ = m.stopProcessLocked(false)
 	m.xrayOnline = false
 	m.mu.Unlock()
 
-	message := fmt.Sprintf("xray gRPC API on 127.0.0.1:%d did not become reachable within 20s", m.xtlsAPIPort)
+	message := fmt.Sprintf("xray gRPC API on 127.0.0.1:%d did not become reachable within 20s (see %s/xray.err.log)", m.xtlsAPIPort, m.logDir)
+	log.Printf("xray/start failed: %s", message)
 	return m.startResponse(false, &message)
 }
 

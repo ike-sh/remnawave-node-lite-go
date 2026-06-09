@@ -37,8 +37,8 @@ func TestLoadDotEnvWithDefaults(t *testing.T) {
 	if cfg.LogDir != defaultLogDir {
 		t.Fatalf("unexpected default LOG_DIR: %s (want %s)", cfg.LogDir, defaultLogDir)
 	}
-	if cfg.InternalSocketPath == "" || cfg.InternalRESTToken == "" {
-		t.Fatalf("expected generated internal socket path and token: %#v", cfg)
+	if cfg.InternalSocketPath != defaultInternalSocketPath || cfg.InternalRESTToken == "" {
+		t.Fatalf("unexpected internal defaults: %#v", cfg)
 	}
 }
 

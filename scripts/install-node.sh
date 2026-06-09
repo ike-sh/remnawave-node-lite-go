@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 一键安装脚本
 set -euo pipefail
 
-VERSION="0.8.13"
+VERSION="0.8.14"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -266,6 +266,13 @@ setup_env_file() {
     return 0
   fi
 
+  if [ -f "${NODE_ENV}.bak" ]; then
+    echo "警告：${NODE_ENV} 不存在但存在备份 ${NODE_ENV}.bak，正在恢复…" >&2
+    cp -a "${NODE_ENV}.bak" "$NODE_ENV"
+    echo "已从备份恢复 ${NODE_ENV}"
+    return 0
+  fi
+
   local low_mem="${LOW_MEMORY:-0}"
   if [ "$LOW_MEMORY" -eq 1 ]; then
     low_mem=1
@@ -279,6 +286,8 @@ setup_env_file() {
   render_env_template "$port" "$low_mem" "install-node.sh" >"$NODE_ENV"
   chmod 600 "$NODE_ENV"
   echo "已创建 ${NODE_ENV}"
+  echo "⚠ 新装未含 SECRET_KEY：请从 Panel 复制 Secret Key 写入 ${NODE_ENV} 后执行 systemctl restart remnawave-node"
+  echo "  已有配置请勿重复 install；升级请用：curl -fsSL .../upgrade.sh | sudo bash"
 }
 
 setup_secret_file() {

@@ -18,7 +18,8 @@ const (
 	defaultXtlsAPIPort = 61000
 	defaultXrayBin     = "/usr/local/bin/rw-core"
 	defaultGeoDir      = "/usr/local/share/xray"
-	defaultLogDir      = "/var/log/remnanode"
+	defaultLogDir             = "/var/log/remnanode"
+	defaultInternalSocketPath = "/run/remnanode/internal.sock"
 )
 
 // ResolveEnvPath returns the first existing env file path, preferring production default.
@@ -97,13 +98,7 @@ func Load(dotenvPath string) (Config, error) {
 		return Config{}, err
 	}
 
-	internalSocketPath := optionalString(values, "INTERNAL_SOCKET_PATH", "")
-	if internalSocketPath == "" {
-		internalSocketPath, err = randomSocketPath()
-		if err != nil {
-			return Config{}, err
-		}
-	}
+	internalSocketPath := optionalString(values, "INTERNAL_SOCKET_PATH", defaultInternalSocketPath)
 
 	internalRESTToken := optionalString(values, "INTERNAL_REST_TOKEN", "")
 	if internalRESTToken == "" {
