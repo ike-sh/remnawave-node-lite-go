@@ -76,6 +76,16 @@ git push origin v0.8.1
    - `remnanode-lite_linux_arm64.tar.gz`
    - `SHA256SUMS`
 
+### 4.1 补充 Release 说明（可选）
+
+CI 默认 Release 无正文。维护者可从仓库内说明文件同步：
+
+```bash
+gh release edit v0.8.22 --notes-file docs/releases/v0.8.22.md
+```
+
+或打开 GitHub Releases 页面手动粘贴 `docs/releases/v0.8.22.md` 内容。
+
 ## 5. 服务器验证（推荐）
 
 ### 全新安装
