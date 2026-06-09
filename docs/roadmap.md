@@ -25,7 +25,7 @@
 | contract-sync CI（跟踪 upstream） | ✅ |
 | `remnanode-lite doctor` 部署自检 | ✅ |
 | 256MB VPS 生产压测报告 | ⏳ 待实测 |
-| Docker 镜像 | ❌ 可选，未做 |
+| Docker 镜像 | ❌ **不实现**（用 Docker 请用官方 node） |
 | `CUSTOM_CORE_URL` | ❌ 可选，未做 |
 
 ---

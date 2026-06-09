@@ -300,63 +300,7 @@ setup_secret_file() {
     return 0
   fi
 
-  prompt_secret_interactive
-}
-
-prompt_secret_interactive() {
-  echo
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo " 配置 Panel Secret Key（通常很长）"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo
-  echo "请选择一种方式："
-  echo "  1) 编辑器粘贴（推荐）"
-  echo "  2) 终端多行粘贴（输入 END 结束）"
-  echo "  3) 稍后手动配置"
-  echo
-  read -r -p "选择 [1/2/3]（默认 1）： " choice || choice="1"
-  choice="${choice:-1}"
-
-  case "$choice" in
-    1)
-      install -m 0600 -D /dev/null "$SECRET_FILE"
-      if [ -n "${EDITOR:-}" ]; then
-        "$EDITOR" "$SECRET_FILE"
-      elif command -v nano >/dev/null 2>&1; then
-        nano "$SECRET_FILE"
-      elif command -v vi >/dev/null 2>&1; then
-        vi "$SECRET_FILE"
-      else
-        echo "未找到编辑器，请改用方式 2 或手动编辑 ${SECRET_FILE}" >&2
-        exit 1
-      fi
-      ;;
-    2)
-      echo
-      echo "请粘贴 Panel 下发的 Secret Key，完成后单独一行输入 END："
-      if [ "$DRY_RUN" -eq 1 ]; then
-        echo "[dry-run] heredoc -> ${SECRET_FILE}"
-      else
-        install -m 0600 -D /dev/null "$SECRET_FILE"
-        sed '/^END$/q' >"$SECRET_FILE"
-      fi
-      ;;
-    3)
-      install -m 0600 -D /dev/null "$SECRET_FILE"
-      echo "已跳过。请稍后执行："
-      echo "  sudo nano ${SECRET_FILE}"
-      echo "  sudo systemctl restart remnawave-node"
-      return 0
-      ;;
-    *)
-      echo "无效选择。" >&2
-      exit 1
-      ;;
-  esac
-
-  if ! secret_configured; then
-    echo "⚠ Secret Key 文件为空，服务启动后 Panel 无法连接。" >&2
-  fi
+  print_env_config_hint "sudo systemctl restart remnawave-node"
 }
 
 install_systemd() {

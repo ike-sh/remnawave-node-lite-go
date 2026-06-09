@@ -1,6 +1,8 @@
 # remnawave-node-lite-go
 
-Go 轻量版 Remnawave Node，目标是用**单二进制 + 一键安装脚本**替代官方 [remnawave/node](https://github.com/remnawave/node) Docker 部署，面向低内存 Linux VPS（128/256MB）。
+Go 轻量版 Remnawave Node，目标是用**单二进制 + 一键安装脚本**在裸机/VPS 上部署（**不提供 Docker 镜像**——要用 Docker 请直接用官方 [remnawave/node](https://github.com/remnawave/node)），面向低内存 Linux VPS（128/256MB）。
+
+> 仅借鉴官方 `environment` 变量命名（`NODE_PORT` / `SECRET_KEY`），部署形态始终是 systemd / OpenRC，不是容器。
 
 当前版本：**v0.8.5** | 基于官方 `@remnawave/node` v2.7.0 contract（Panel 上报 `nodeVersion=2.7.0`）
 
@@ -68,9 +70,9 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v0.8.
 > Alpine 默认无 `sudo`；已是 root 时直接 `| bash`，勿写 `| sudo bash`。  
 > Debian/Ubuntu 等 systemd 发行版请使用 `install-node.sh`。
 
-### 配置方式（对齐官方 Docker Compose）
+### 配置方式（借鉴官方 environment 变量）
 
-官方 `remnawave/node` Docker：
+官方 `remnawave/node` 容器 environment（lite-go **不实现 Docker**，仅复用变量名）：
 
 ```yaml
 environment:

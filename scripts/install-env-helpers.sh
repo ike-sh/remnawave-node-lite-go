@@ -43,7 +43,7 @@ write_secret_to_env() {
   } >"$NODE_ENV"
   rm -f "$tmp"
   chmod 600 "$NODE_ENV"
-  echo "已写入 SECRET_KEY 到 ${NODE_ENV}（对齐官方 Docker Compose）"
+  echo "已写入 SECRET_KEY 到 ${NODE_ENV}"
 }
 
 enable_secret_key_file() {
@@ -93,7 +93,7 @@ print_env_config_hint() {
   local restart_cmd="$1"
   echo
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo " 配置节点（对齐官方 Docker Compose）"
+  echo " 配置节点（编辑 node.env，变量名同官方 environment）"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo
   echo "编辑 ${NODE_ENV}，修改两项即可："
@@ -112,7 +112,7 @@ render_env_template() {
   local installer="$3"
   cat <<EOF
 # Remnawave Node Lite — 由 ${installer} 生成
-# 对齐官方 docker-compose environment，仅需修改下面两项：
+# 借鉴官方 environment 变量名，仅需修改下面两项：
 
 NODE_PORT=${port}
 SECRET_KEY=
