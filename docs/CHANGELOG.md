@@ -3,6 +3,14 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [0.8.26] - 2026-06-10
+
+### 修复
+
+- **RestoreOnBoot 单次失败即放弃**：对齐官方 `pRetry`，启动恢复 rw-core 失败时重试 10 次（间隔 2s），避免慢启动 VPS 重启后永久离线。
+- **关机前未落盘 last-start.json**：进程 SIGTERM 退出时若内存中仍有上次 start 配置，额外 flush 到磁盘（`Stop(false)` 安全网）。
+- **doctor 自检**：新增 `last-start.json` 存在性检查，便于排查「从未 xray/start 成功」导致的无法自动恢复。
+
 ## [0.8.25] - 2026-06-10
 
 ### 修复
@@ -58,6 +66,7 @@
 
 ---
 
+[0.8.26]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.26
 [0.8.25]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.25
 [0.8.24]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.24
 [0.8.23]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.23

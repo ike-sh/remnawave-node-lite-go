@@ -53,6 +53,7 @@ type Manager struct {
 	xrayVersion     *string
 	xrayOnline      bool
 	startProcessing bool
+	lastStartRequest *StartRequest
 	currentConfig   map[string]any
 	emptyConfigHash string
 	inboundHashes   map[string]*HashedSet
@@ -268,6 +269,11 @@ func (m *Manager) grpcStartupTimeout() time.Duration {
 }
 
 func (m *Manager) persistStartRequest(req StartRequest) {
+	reqCopy := req
+	m.mu.Lock()
+	m.lastStartRequest = &reqCopy
+	m.mu.Unlock()
+
 	if err := savePersistedStart(m.dataDir, req); err != nil {
 		log.Printf("warning: save persisted xray config: %v", err)
 		return
@@ -275,12 +281,30 @@ func (m *Manager) persistStartRequest(req StartRequest) {
 	log.Printf("persisted xray config to %s", filepath.Join(m.dataDir, persistedStartFile))
 }
 
+func (m *Manager) flushPersistedStart() {
+	m.mu.RLock()
+	req := m.lastStartRequest
+	m.mu.RUnlock()
+	if req == nil {
+		return
+	}
+	if err := savePersistedStart(m.dataDir, *req); err != nil {
+		log.Printf("warning: flush persisted xray config on shutdown: %v", err)
+	}
+}
+
 // Stop stops rw-core. When clearPersist is true (Panel /node/xray/stop), persisted
 // boot config is removed so the node stays disabled after reboot. Process shutdown
 // must pass clearPersist=false so RestoreOnBoot can recover rw-core on next start.
 func (m *Manager) Stop(clearPersist bool) StopResponse {
+	if !clearPersist {
+		m.flushPersistedStart()
+	}
 	m.mu.Lock()
 	err := m.stopProcessLocked(true)
+	if clearPersist {
+		m.lastStartRequest = nil
+	}
 	m.mu.Unlock()
 	if clearPersist {
 		if clearErr := clearPersistedStart(m.dataDir); clearErr != nil {
@@ -312,14 +336,31 @@ func (m *Manager) RestoreOnBoot(ctx context.Context) {
 		log.Printf("no persisted xray config at %s (Panel must xray/start once before reboot auto-restore)", filepath.Join(m.dataDir, persistedStartFile))
 		return
 	}
-	log.Printf("restoring rw-core from persisted config")
-	resp := m.Start(ctx, *req)
-	if !resp.IsStarted {
+
+	const maxAttempts = 10
+	retryInterval := 2 * time.Second
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		log.Printf("restoring rw-core from persisted config (attempt %d/%d)", attempt, maxAttempts)
+		resp := m.Start(ctx, *req)
+		if resp.IsStarted {
+			log.Printf("restore rw-core succeeded on attempt %d", attempt)
+			return
+		}
 		msg := "unknown error"
 		if resp.Error != nil {
 			msg = *resp.Error
 		}
-		log.Printf("restore rw-core failed: %s", msg)
+		log.Printf("restore rw-core failed (attempt %d/%d): %s", attempt, maxAttempts, msg)
+		if attempt == maxAttempts {
+			return
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
 }
 

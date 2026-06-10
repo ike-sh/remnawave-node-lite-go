@@ -55,6 +55,7 @@ func Run(args []string) int {
 		results = append(results, checkSecret(cfg)...)
 		results = append(results, checkXrayBinary(cfg.XrayBin)...)
 		results = append(results, checkGeoFiles(cfg.GeoDir)...)
+		results = append(results, checkPersistedStart(cfg.DataDir)...)
 		results = append(results, checkCommand("nft", "nftables 命令行（插件 IP 封禁）")...)
 		results = append(results, checkCommand("ss", "ss 命令（踢连接 drop-ips）")...)
 	}
@@ -137,6 +138,34 @@ func checkSecret(cfg config.Config) []result {
 		title:   "Secret Key",
 		detail:  "未配置（SECRET_KEY 或 SECRET_KEY_FILE 为空）",
 		fixHint: "编辑 /etc/remnanode/secret.key 粘贴 Panel 下发的 Key，然后 systemctl restart remnawave-node",
+	}}
+}
+
+func checkPersistedStart(dataDir string) []result {
+	if dataDir == "" {
+		dataDir = "/var/lib/remnanode"
+	}
+	path := filepath.Join(dataDir, "last-start.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []result{{
+				level:   "WARN",
+				title:   "重启自动恢复",
+				detail:  path + " 不存在",
+				fixHint: "Panel 禁用→启用节点一次（成功 xray/start 后生成），再 reboot 即可自动恢复 rw-core",
+			}}
+		}
+		return []result{{
+			level:   "WARN",
+			title:   "重启自动恢复",
+			detail:  "无法读取 " + path + ": " + err.Error(),
+		}}
+	}
+	return []result{{
+		level:  "OK",
+		title:  "重启自动恢复",
+		detail: fmt.Sprintf("%s 存在 (%d bytes)", path, info.Size()),
 	}}
 }
 

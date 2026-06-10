@@ -145,6 +145,39 @@ func TestStopWithoutClearPersistKeepsLastStart(t *testing.T) {
 	}
 }
 
+func TestStopFalseFlushesLastStartRequest(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := NewManager(Options{
+		XrayBin:            "definitely-missing-rw-core",
+		GeoDir:             "/tmp",
+		LogDir:             t.TempDir(),
+		DataDir:            dir,
+		InternalSocketPath: "/run/remnawave.sock",
+		InternalRESTToken:  "token",
+		XtlsAPIPort:        61000,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	req := StartRequest{
+		XrayConfig: map[string]any{"inbounds": []any{"one"}},
+		Internals: StartInternals{
+			Hashes: ConfigHash{EmptyConfig: "abc"},
+		},
+	}
+	manager.persistStartRequest(req)
+	if err := os.Remove(filepath.Join(dir, persistedStartFile)); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove persisted file: %v", err)
+	}
+
+	manager.Stop(false)
+
+	if _, err := os.Stat(filepath.Join(dir, persistedStartFile)); err != nil {
+		t.Fatalf("expected shutdown flush to recreate persisted file: %v", err)
+	}
+}
+
 func TestParseVersionLine(t *testing.T) {
 	raw := "Xray 26.3.27 (Xray, Penetrates Everything.) d2758a0 (go1.26.1 linux/amd64)\nA unified platform..."
 	if got := parseVersionLine(raw); got != "26.3.27" {
