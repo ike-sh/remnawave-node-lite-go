@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 )
@@ -240,18 +238,6 @@ func loadSecretFromFile(values map[string]string) (string, error) {
 		return "", fmt.Errorf("read SECRET_KEY_FILE %s: %w", path, err)
 	}
 	return strings.TrimSpace(string(raw)), nil
-}
-
-func randomSocketPath() (string, error) {
-	id, err := randomToken(10)
-	if err != nil {
-		return "", err
-	}
-	base := os.TempDir()
-	if runtime.GOOS == "linux" {
-		base = "/run"
-	}
-	return filepath.Join(base, "remnawave-internal-"+id+".sock"), nil
 }
 
 func randomToken(byteLen int) (string, error) {

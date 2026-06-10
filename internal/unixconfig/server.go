@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+// InternalTokenHeader is the preferred auth channel (not visible in process argv).
+const InternalTokenHeader = "X-Internal-Token"
+
+// InternalTokenEnvVar is passed to rw-core for future header-based auth.
+const InternalTokenEnvVar = "RNL_INTERNAL_REST_TOKEN"
+
 type Provider interface {
 	// CurrentConfigJSON returns the pre-serialized config; the server writes
 	// it verbatim so large configs are not re-marshaled on every core poll.
@@ -50,6 +56,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := os.Chmod(s.Path, 0o600); err != nil {
+		_ = listener.Close()
+		return err
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/internal/get-config", s.handleGetConfig)
@@ -81,7 +91,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if s.Token != "" && r.URL.Query().Get("token") != s.Token {
+	if !s.authorizeInternal(r) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -103,7 +113,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if s.Token != "" && r.URL.Query().Get("token") != s.Token {
+	if !s.authorizeInternal(r) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -112,4 +122,17 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write(s.Provider.CurrentConfigJSON()); err != nil {
 		slog.Warn("failed to write unix config response", "error", err)
 	}
+}
+
+// authorizeInternal accepts X-Internal-Token, deprecated ?token=, or owner-only unix socket (0600).
+func (s *Server) authorizeInternal(r *http.Request) bool {
+	if s.Token == "" {
+		return true
+	}
+	header := r.Header.Get(InternalTokenHeader)
+	query := r.URL.Query().Get("token")
+	if header != "" || query != "" {
+		return header == s.Token || query == s.Token
+	}
+	return true
 }

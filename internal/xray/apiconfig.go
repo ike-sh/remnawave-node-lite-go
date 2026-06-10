@@ -36,7 +36,7 @@ func generateAPIConfig(input map[string]any, xtlsAPIPort int, certs internalCert
 	result["routing"] = routingFrom(result["routing"])
 
 	if torrent.Enabled {
-		webhookURL := buildWebhookURL(torrent.SocketPath, torrent.RESTToken)
+		webhookURL := buildWebhookURL(torrent.SocketPath)
 		outbounds := arrayFrom(result["outbounds"])
 		outbounds = append(outbounds, map[string]any{
 			"tag":      torrentBlockerOutboundTag,
@@ -90,8 +90,8 @@ func generateAPIConfig(input map[string]any, xtlsAPIPort int, certs internalCert
 	return result
 }
 
-func buildWebhookURL(socketPath, token string) string {
-	return "/" + socketPath + ":/internal/webhook?token=" + token
+func buildWebhookURL(socketPath string) string {
+	return "/" + socketPath + ":/internal/webhook"
 }
 
 func apiInbound(port int, certs internalCerts) map[string]any {

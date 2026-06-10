@@ -53,6 +53,31 @@ func TestGetConfigReturnsEmptyObjectWhenMissing(t *testing.T) {
 	}
 }
 
+func TestGetConfigAcceptsHeaderToken(t *testing.T) {
+	server := &Server{Token: "good", Provider: staticProvider{}}
+	request := httptest.NewRequest(http.MethodGet, "/internal/get-config", nil)
+	request.Header.Set(InternalTokenHeader, "good")
+	response := httptest.NewRecorder()
+
+	server.handleGetConfig(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", response.Code)
+	}
+}
+
+func TestGetConfigAllowsOwnerOnlyUnixSocket(t *testing.T) {
+	server := &Server{Token: "good", Provider: staticProvider{}}
+	request := httptest.NewRequest(http.MethodGet, "/internal/get-config", nil)
+	response := httptest.NewRecorder()
+
+	server.handleGetConfig(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200 without query token (socket owner), got %d", response.Code)
+	}
+}
+
 func TestGetConfigReturnsCurrentConfig(t *testing.T) {
 	server := &Server{
 		Token: "good",

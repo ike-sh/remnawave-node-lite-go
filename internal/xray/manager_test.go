@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuildCommandArgs(t *testing.T) {
-	args := BuildCommandArgs("/run/remnawave.sock", "token value")
+	args := BuildCommandArgs("/run/remnawave.sock")
 
 	if len(args) != 4 {
 		t.Fatalf("unexpected args: %#v", args)
@@ -18,7 +18,7 @@ func TestBuildCommandArgs(t *testing.T) {
 	if args[0] != "-config" || args[2] != "-format" || args[3] != "json" {
 		t.Fatalf("unexpected args: %#v", args)
 	}
-	if got := args[1]; got != "http+unix:///run/remnawave.sock/internal/get-config?token=token+value" {
+	if got := args[1]; got != "http+unix:///run/remnawave.sock/internal/get-config" {
 		t.Fatalf("unexpected config URL: %s", got)
 	}
 }

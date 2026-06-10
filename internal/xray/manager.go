@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"remnawave-node-lite-go/internal/system"
+	"remnawave-node-lite-go/internal/unixconfig"
 	nodeversion "remnawave-node-lite-go/internal/version"
 )
 
@@ -448,20 +448,20 @@ func (m *Manager) XrayBin() string {
 func (m *Manager) CommandArgs() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return BuildCommandArgs(m.socketPath, m.token)
+	return BuildCommandArgs(m.socketPath)
 }
 
-func BuildCommandArgs(socketPath, token string) []string {
+func BuildCommandArgs(socketPath string) []string {
 	return []string{
 		"-config",
-		BuildConfigURL(socketPath, token),
+		BuildConfigURL(socketPath),
 		"-format",
 		"json",
 	}
 }
 
-func BuildConfigURL(socketPath, token string) string {
-	return fmt.Sprintf("http+unix://%s/internal/get-config?token=%s", socketPath, url.QueryEscape(token))
+func BuildConfigURL(socketPath string) string {
+	return fmt.Sprintf("http+unix://%s/internal/get-config", socketPath)
 }
 
 func (m *Manager) startProcessLocked() (*processState, error) {
@@ -476,10 +476,13 @@ func (m *Manager) startProcessLocked() (*processState, error) {
 		return nil, fmt.Errorf("open xray stderr log: %w", err)
 	}
 
-	cmd := exec.Command(m.xrayBin, BuildCommandArgs(m.socketPath, m.token)...)
+	cmd := exec.Command(m.xrayBin, BuildCommandArgs(m.socketPath)...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.Env = append(os.Environ(), "XRAY_LOCATION_ASSET="+m.geoDir)
+	cmd.Env = append(os.Environ(),
+		"XRAY_LOCATION_ASSET="+m.geoDir,
+		unixconfig.InternalTokenEnvVar+"="+m.token,
+	)
 
 	if err := cmd.Start(); err != nil {
 		_ = stdout.Close()

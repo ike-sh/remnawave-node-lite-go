@@ -3,6 +3,19 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [1.0.1] - 2026-06-10
+
+### 安全
+
+- **内部 Token 不再出现在进程参数**：rw-core `-config` URL 与 torrent webhook URL 移除 `?token=`；鉴权改为 Unix socket `0600` + 可选 `X-Internal-Token` 头；`?token=` 仍兼容旧版。
+- **Unix socket 权限**：`internal.sock` 创建后强制 `chmod 0600`。
+- **zstd 解压炸弹防护**：压缩体上限 64MB，解压后再次限制为 body limit。
+- **`/node/xray/stop`**：新增 **POST** 为推荐方法；GET 保留兼容并记录弃用日志。
+
+### 维护
+
+- 删除未使用的 `config.randomSocketPath()`。
+
 ## [1.0.0] - 2026-06-10
 
 ### 正式版

@@ -48,7 +48,7 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 		visionService:  vision.NewService(manager),
 	}
 
-	protected := validator.Middleware(bodylimit.LimitMiddleware(bodylimit.DecompressMiddleware(http.HandlerFunc(server.handleProtectedRoutes))))
+	protected := validator.Middleware(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleProtectedRoutes))))
 	mux.Handle("/node/", protected)
 	mux.Handle("/vision/", protected)
 
@@ -106,7 +106,10 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	// xray
 	case r.Method == http.MethodGet && path == "/node/xray/healthcheck":
 		writeJSON(w, http.StatusOK, envelope[xray.HealthResponse]{Response: s.manager.Health()})
-	case r.Method == http.MethodGet && path == "/node/xray/stop":
+	case (r.Method == http.MethodPost || r.Method == http.MethodGet) && path == "/node/xray/stop":
+		if r.Method == http.MethodGet {
+			slog.Warn("deprecated HTTP method for /node/xray/stop; use POST")
+		}
 		s.pluginService.ResetPlugins()
 		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: s.manager.Stop(true)})
 	case r.Method == http.MethodPost && path == "/node/xray/start":
