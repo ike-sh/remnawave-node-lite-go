@@ -107,7 +107,7 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "/node/xray/healthcheck":
 		writeJSON(w, http.StatusOK, envelope[xray.HealthResponse]{Response: s.manager.Health()})
 	case r.Method == http.MethodGet && path == "/node/xray/stop":
-		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: s.manager.Stop()})
+		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: s.manager.Stop(true)})
 	case r.Method == http.MethodPost && path == "/node/xray/start":
 		s.handleStart(w, r)
 

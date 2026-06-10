@@ -198,6 +198,11 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 			needRestart := m.isNeedRestartCoreLocked(req.Internals.Hashes)
 			m.mu.RUnlock()
 			if !needRestart {
+				m.mu.Lock()
+				m.currentConfig = fullConfig
+				m.extractUsersFromConfigLocked(req.Internals.Hashes, fullConfig)
+				m.mu.Unlock()
+				m.persistStartRequest(req)
 				log.Printf("xray/start skipped: core already online and config unchanged")
 				return m.startResponse(true, nil)
 			}
@@ -236,9 +241,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	if started {
 		m.xrayOnline = true
 		m.mu.Unlock()
-		if err := savePersistedStart(m.dataDir, req); err != nil {
-			log.Printf("warning: save persisted xray config: %v", err)
-		}
+		m.persistStartRequest(req)
 		log.Printf("xray/start succeeded: rw-core online on gRPC 127.0.0.1:%d", m.xtlsAPIPort)
 		return m.startResponse(true, nil)
 	}
@@ -264,12 +267,25 @@ func (m *Manager) grpcStartupTimeout() time.Duration {
 	return 20 * time.Second
 }
 
-func (m *Manager) Stop() StopResponse {
+func (m *Manager) persistStartRequest(req StartRequest) {
+	if err := savePersistedStart(m.dataDir, req); err != nil {
+		log.Printf("warning: save persisted xray config: %v", err)
+		return
+	}
+	log.Printf("persisted xray config to %s", filepath.Join(m.dataDir, persistedStartFile))
+}
+
+// Stop stops rw-core. When clearPersist is true (Panel /node/xray/stop), persisted
+// boot config is removed so the node stays disabled after reboot. Process shutdown
+// must pass clearPersist=false so RestoreOnBoot can recover rw-core on next start.
+func (m *Manager) Stop(clearPersist bool) StopResponse {
 	m.mu.Lock()
 	err := m.stopProcessLocked(true)
 	m.mu.Unlock()
-	if clearErr := clearPersistedStart(m.dataDir); clearErr != nil {
-		log.Printf("warning: clear persisted xray config: %v", clearErr)
+	if clearPersist {
+		if clearErr := clearPersistedStart(m.dataDir); clearErr != nil {
+			log.Printf("warning: clear persisted xray config: %v", clearErr)
+		}
 	}
 	return StopResponse{IsStopped: err == nil}
 }
@@ -293,6 +309,7 @@ func (m *Manager) RestoreOnBoot(ctx context.Context) {
 		return
 	}
 	if req == nil {
+		log.Printf("no persisted xray config at %s (Panel must xray/start once before reboot auto-restore)", filepath.Join(m.dataDir, persistedStartFile))
 		return
 	}
 	log.Printf("restoring rw-core from persisted config")

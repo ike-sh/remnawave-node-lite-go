@@ -99,7 +99,7 @@ func testXrayStartResponseShape(t *testing.T) {
 
 func testXrayStopResponseShape(t *testing.T) {
 	manager := testManager(t)
-	raw := encodeEnvelope(manager.Stop())
+	raw := encodeEnvelope(manager.Stop(true))
 	assertJSONPath(t, raw, "response.isStopped")
 }
 

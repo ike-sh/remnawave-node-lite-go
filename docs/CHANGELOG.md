@@ -3,6 +3,12 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [0.8.25] - 2026-06-10
+
+### 修复
+
+- **服务器重启后无法自动上线**：v0.8.24 引入的 `last-start.json` 在进程收到 SIGTERM 退出时被 `Stop()` 误删，导致 `RestoreOnBoot` 找不到持久化配置。现仅 Panel 调用 `/node/xray/stop`（禁用节点）时清除持久化；正常关机/重启保留配置以便自动恢复 rw-core。
+
 ## [0.8.24] - 2026-06-09
 
 ### 修复

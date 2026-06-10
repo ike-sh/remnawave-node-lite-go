@@ -123,6 +123,6 @@ func (m *Manager) StopIfOnline() bool {
 	if !online {
 		return false
 	}
-	return m.Stop().IsStopped
+	return m.Stop(false).IsStopped
 }
 

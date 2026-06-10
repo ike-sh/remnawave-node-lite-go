@@ -125,5 +125,5 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown error: %v", err)
 	}
-	_ = manager.Stop()
+	_ = manager.Stop(false)
 }

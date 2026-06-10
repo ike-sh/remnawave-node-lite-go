@@ -2,6 +2,8 @@ package xray
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -109,10 +111,37 @@ func TestStopClearsConfig(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	manager.Start(context.Background(), StartRequest{XrayConfig: map[string]any{"a": "b"}})
-	manager.Stop()
+	manager.Stop(true)
 
 	if len(manager.CurrentConfig()) != 0 {
 		t.Fatalf("expected config to be cleared")
+	}
+}
+
+func TestStopWithoutClearPersistKeepsLastStart(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := NewManager(Options{
+		XrayBin:            "definitely-missing-rw-core",
+		GeoDir:             "/tmp",
+		LogDir:             t.TempDir(),
+		DataDir:            dir,
+		InternalSocketPath: "/run/remnawave.sock",
+		InternalRESTToken:  "token",
+		XtlsAPIPort:        61000,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	req := StartRequest{XrayConfig: map[string]any{"a": "b"}}
+	if err := savePersistedStart(dir, req); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	manager.Stop(false)
+
+	if _, err := os.Stat(filepath.Join(dir, persistedStartFile)); err != nil {
+		t.Fatalf("expected persisted file to remain after shutdown stop: %v", err)
 	}
 }
 
