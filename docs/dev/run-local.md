@@ -1,10 +1,6 @@
-# Run Local
+# 本地开发
 
-This project is still an MVP. It can start `rw-core` and serve the minimal Node routes, but it does not yet implement stats, handler hot updates, nftables, or torrent blocker behavior.
-
-## Prepare `.env`
-
-Create `.env` in the repository root:
+在仓库根目录以 `.env` 或 `/etc/remnanode/node.env` 配置后本地运行 `remnanode-lite`。
 
 ```env
 NODE_PORT=2222
