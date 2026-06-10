@@ -10,11 +10,11 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 | 项目 | 说明 |
 | --- | --- |
-| 当前版本 | [v0.8.30](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.30) |
+| 当前版本 | [v1.0.0](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.0.0) |
 | Panel 契约 | `@remnawave/node` v2.7.0（上报 `nodeVersion=2.7.0`） |
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
 
-安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v0.8.30` 指定版本。
+安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v1.0.0` 指定版本。
 
 ---
 
@@ -45,16 +45,12 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/
 bash /tmp/install-alpine.sh
 ```
 
-### 安装后配置
+### 安装流程
 
-**推荐顺序（避免装完后 Panel 显示离线）：**
-
-1. 在 Panel 创建节点并复制 `SECRET_KEY`，**保持节点禁用**（或先不填真实 IP）
+1. 在 Panel 创建节点并复制 `SECRET_KEY`
 2. 在本机运行安装脚本并粘贴 Secret Key
-3. 看到 `OK: TCP :2222 已监听` 后，在 Panel **启用**节点
+3. 看到 `OK: TCP :2222 已监听` 后，在 Panel 启用节点（若已启用，约 10s 内自动上线）
 4. 防火墙仅对 Panel 地址开放 `NODE_PORT`
-
-若安装前已在 Panel 保存并启用节点，装完后需 **禁用 → 启用** 一次（Panel 仅在状态变更时重连；安装期间节点尚未监听）。
 
 手动配置（非交互安装未带 `SECRET_KEY` 时）：
 
@@ -87,6 +83,8 @@ GEO_DIR=/usr/local/share/xray
 LOG_DIR=/var/log/remnanode
 ```
 
+可选能力见 `deploy/node.env.example`：`LOW_MEMORY`、`CUSTOM_CORE_URL`、`GEO_ZAPRET_FILE` / `IP_ZAPRET_FILE` 等。
+
 ---
 
 ## 升级
@@ -105,14 +103,11 @@ sudo RNL_UPGRADE_XRAY=1 bash upgrade.sh --yes
 
 ## 卸载
 
-卸载行为取决于所选模式，**默认不会删除全部文件**。
-
 | 模式 | 操作 | 说明 |
 | --- | --- | --- |
 | 保留配置 | 安装菜单 → 卸载 → 选项 1 | 移除服务与二进制，保留 `node.env` 与 rw-core |
 | 完全卸载 | 安装菜单 → 卸载 → 选项 2 | 删除配置、日志、数据、rw-core 及 geo 数据 |
 | 命令行 | `bash uninstall.sh --full` | 等同完全卸载 |
-| 部分清理 | `bash uninstall.sh --purge --yes` | 删除配置/日志/数据，保留 rw-core |
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/scripts/uninstall.sh | bash -s -- --full
@@ -126,25 +121,32 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/
 sudo remnanode-lite doctor
 systemctl status remnawave-node
 journalctl -u remnawave-node -f
+xlogs    # rw-core 标准输出
+xerrors  # rw-core 错误输出
 ```
 
-**重启后自动恢复**：Panel 成功启用节点后会在 `/var/lib/remnanode/last-start.json` 写入配置；服务器重启后 Node 将自动拉起 rw-core（v0.8.26 起）。说明见 [docs/releases/v0.8.26.md](docs/releases/v0.8.26.md)。
+**重启后自动恢复**：Panel 成功启用节点后会在 `/var/lib/remnanode/last-start.json` 写入配置；服务器重启后 Node 将自动拉起 rw-core。
 
 ---
 
 ## 功能与兼容性
 
-实现与官方 `@remnawave/node` v2.7.0 对齐的 **28 条 REST API**，涵盖节点注册、Xray 生命周期、流量与在线统计、用户热更新、插件同步、nftables / torrent-blocker 及 Vision IP 封禁等能力。
+实现与官方 `@remnawave/node` v2.7.0 对齐的 **28 条 REST API**，涵盖：
 
-可选能力（见 `deploy/node.env.example`）：`CUSTOM_CORE_URL` 自定义 rw-core、`GEO_ZAPRET_FILE` / `IP_ZAPRET_FILE` zapret 规则。未实现：Docker 镜像。
+- 节点注册与 mTLS / JWT 认证
+- Xray 生命周期（启动、停止、配置热更新）
+- 流量与在线统计
+- 用户热更新（VLESS / Trojan / Shadowsocks）
+- 插件同步（nftables、torrent-blocker 等）
+- Vision IP 封禁
+
+未实现：Docker 镜像（项目定位为裸机轻量部署）。
 
 ---
 
-## 开发者
+## 维护者
 
-- 构建与测试：`go test ./...` · `go build -o remnanode-lite ./cmd/remnanode-lite`
-- 发布流程：[docs/release.md](docs/release.md)
-- 内部分析文档：[docs/dev/](docs/dev/)
+发布流程见 [docs/release.md](docs/release.md)。
 
 ---
 

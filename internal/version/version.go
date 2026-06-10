@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// Version is the lite-go release version (overridable via -ldflags at build time).
-var Version = "0.8.30"
+// Version is the release version (overridable via -ldflags at build time).
+var Version = "1.0.0"
 
 // ContractVersion is the upstream @remnawave/node version reported to Panel as nodeVersion.
 // Default must stay in sync with contract.version and contract-sync CI.

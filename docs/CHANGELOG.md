@@ -3,6 +3,16 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [1.0.0] - 2026-06-10
+
+### 正式版
+
+- **v1.0.0 稳定发布**：Panel 2.7.x 主流程生产验证通过（全新安装、升级、reboot 自动恢复）。
+- **文档整理**：移除内部开发/分析文档（`docs/dev/`），README 与安装提示面向生产用户重写。
+- **安装提示更新**：反映 v0.8.28+ Panel 10s 健康检查自动上线，不再要求手动禁用→启用。
+
+功能与 v0.8.30 代码等价，无行为变更。
+
 ## [0.8.30] - 2026-06-10
 
 ### 改进
@@ -108,6 +118,7 @@
 
 ---
 
+[1.0.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.0.0
 [0.8.30]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.30
 [0.8.29]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.29
 [0.8.28]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.28
