@@ -39,6 +39,10 @@ func (s *Service) HandleBlockIP(w http.ResponseWriter, r *http.Request, write wr
 		writeError(write, w, "invalid JSON body")
 		return
 	}
+	if !validateIP(req.IP) {
+		writeError(write, w, "invalid ip")
+		return
+	}
 
 	if s.provider != nil {
 		if err := s.provider.RouterAddSrcIPRule(r.Context(), req.IP, true); err != nil {
@@ -57,6 +61,10 @@ func (s *Service) HandleUnblockIP(w http.ResponseWriter, r *http.Request, write 
 	}
 	if !decodeBody(r, &req) {
 		writeError(write, w, "invalid JSON body")
+		return
+	}
+	if !validateIP(req.IP) {
+		writeError(write, w, "invalid ip")
 		return
 	}
 

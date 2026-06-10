@@ -15,18 +15,39 @@ import (
 	"time"
 )
 
+// ClaimExpectations configures optional Panel identity claim checks.
+type ClaimExpectations struct {
+	Issuer   string
+	Audience string
+	Subject  string
+}
+
+func DefaultClaimExpectations() ClaimExpectations {
+	return ClaimExpectations{
+		Issuer:   "remnawave",
+		Audience: "remnawave-node",
+		Subject:  "remnawave-backend",
+	}
+}
+
 type JWTValidator struct {
 	publicKey *rsa.PublicKey
+	claims    ClaimExpectations
 	now       func() time.Time
 }
 
 func NewJWTValidator(publicKeyPEM string) (*JWTValidator, error) {
+	return NewJWTValidatorWithClaims(publicKeyPEM, DefaultClaimExpectations())
+}
+
+func NewJWTValidatorWithClaims(publicKeyPEM string, claims ClaimExpectations) (*JWTValidator, error) {
 	publicKey, err := parseRSAPublicKey(publicKeyPEM)
 	if err != nil {
 		return nil, err
 	}
 	return &JWTValidator{
 		publicKey: publicKey,
+		claims:    claims,
 		now:       time.Now,
 	}, nil
 }
@@ -81,7 +102,48 @@ func (v *JWTValidator) Validate(token string) error {
 	if err := decodeJWTJSON(parts[1], &claims); err != nil {
 		return fmt.Errorf("decode JWT claims: %w", err)
 	}
-	return v.validateTimeClaims(claims)
+	if err := v.validateTimeClaims(claims); err != nil {
+		return err
+	}
+	return v.validateIdentityClaims(claims)
+}
+
+func (v *JWTValidator) validateIdentityClaims(claims map[string]any) error {
+	if iss, ok := claims["iss"]; ok {
+		if !claimStringEquals(iss, v.claims.Issuer) {
+			return fmt.Errorf("JWT iss claim mismatch")
+		}
+	}
+	if aud, ok := claims["aud"]; ok {
+		if !audienceContains(aud, v.claims.Audience) {
+			return fmt.Errorf("JWT aud claim mismatch")
+		}
+	}
+	if sub, ok := claims["sub"]; ok {
+		if !claimStringEquals(sub, v.claims.Subject) {
+			return fmt.Errorf("JWT sub claim mismatch")
+		}
+	}
+	return nil
+}
+
+func claimStringEquals(value any, expected string) bool {
+	typed, ok := value.(string)
+	return ok && typed == expected
+}
+
+func audienceContains(value any, expected string) bool {
+	switch typed := value.(type) {
+	case string:
+		return typed == expected
+	case []any:
+		for _, item := range typed {
+			if s, ok := item.(string); ok && s == expected {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (v *JWTValidator) validateTimeClaims(claims map[string]any) error {

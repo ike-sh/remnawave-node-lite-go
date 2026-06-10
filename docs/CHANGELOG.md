@@ -3,6 +3,23 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [1.0.2] - 2026-06-10
+
+### 安全
+
+- **JWT 身份 claim**：当 token 含 `iss`/`aud`/`sub` 时校验 Panel 约定值（`remnawave` / `remnawave-node` / `remnawave-backend`）；无 claim 的旧 token 仍可通过。
+- **Vision IP 校验**：`block-ip` / `unblock-ip` 拒绝非合法 IP。
+- **内部 Token 为空**：Unix 内部 API 在 token 未配置时一律拒绝。
+- **默认 body limit**：非 low-memory 默认由 1000MB 降为 **256MB**（可用 `BODY_LIMIT_MB` 覆盖）。
+
+### 新增
+
+- **`NODE_BIND_ADDR`**：可选绑定地址（如 `127.0.0.1`），默认仍监听全部接口。
+
+### 改进
+
+- Webhook JSON 解析失败时写 warn 日志。
+
 ## [1.0.1] - 2026-06-10
 
 ### 安全

@@ -33,6 +33,7 @@ func ResolveEnvPath() string {
 
 type Config struct {
 	NodePort               int
+	BindAddr               string
 	SecretKey              string
 	XtlsAPIPort            int
 	XrayBin                string
@@ -60,6 +61,7 @@ func Load(dotenvPath string) (Config, error) {
 
 	for _, key := range []string{
 		"NODE_PORT",
+		"NODE_BIND_ADDR",
 		"SECRET_KEY",
 		"SECRET_KEY_FILE",
 		"XTLS_API_PORT",
@@ -111,6 +113,7 @@ func Load(dotenvPath string) (Config, error) {
 
 	return Config{
 		NodePort:              nodePort,
+		BindAddr:              strings.TrimSpace(values["NODE_BIND_ADDR"]),
 		SecretKey:             secretKey,
 		XtlsAPIPort:           xtlsAPIPort,
 		XrayBin:               optionalString(values, "XRAY_BIN", defaultXrayBin),
@@ -126,6 +129,9 @@ func Load(dotenvPath string) (Config, error) {
 }
 
 func (c Config) HTTPAddr() string {
+	if c.BindAddr != "" {
+		return c.BindAddr + ":" + strconv.Itoa(c.NodePort)
+	}
 	return ":" + strconv.Itoa(c.NodePort)
 }
 

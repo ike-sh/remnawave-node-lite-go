@@ -99,7 +99,9 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	if s.Webhook != nil {
 		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			slog.Warn("invalid xray webhook JSON", "error", err)
+		} else {
 			s.Webhook.HandleXrayWebhook(payload)
 		}
 	} else {
@@ -127,7 +129,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // authorizeInternal accepts X-Internal-Token, deprecated ?token=, or owner-only unix socket (0600).
 func (s *Server) authorizeInternal(r *http.Request) bool {
 	if s.Token == "" {
-		return true
+		slog.Warn("internal REST token not configured; rejecting request")
+		return false
 	}
 	header := r.Header.Get(InternalTokenHeader)
 	query := r.URL.Query().Get("token")

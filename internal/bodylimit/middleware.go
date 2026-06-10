@@ -10,7 +10,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-const defaultMaxBytes = 1000 << 20
+const defaultMaxBytes = 256 << 20
 const lowMemoryMaxBytes = 64 << 20
 const maxCompressedZstdBytes = 64 << 20
 

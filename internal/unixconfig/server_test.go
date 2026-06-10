@@ -78,6 +78,18 @@ func TestGetConfigAllowsOwnerOnlyUnixSocket(t *testing.T) {
 	}
 }
 
+func TestGetConfigRejectsWhenTokenNotConfigured(t *testing.T) {
+	server := &Server{Token: "", Provider: staticProvider{}}
+	request := httptest.NewRequest(http.MethodGet, "/internal/get-config", nil)
+	response := httptest.NewRecorder()
+
+	server.handleGetConfig(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when token missing, got %d", response.Code)
+	}
+}
+
 func TestGetConfigReturnsCurrentConfig(t *testing.T) {
 	server := &Server{
 		Token: "good",

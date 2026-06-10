@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 卸载脚本（systemd / Alpine OpenRC）
 set -euo pipefail
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 PREFIX="/usr/local/bin"
 BIN_NAME="remnanode-lite"
 RUN_WRAPPER="${PREFIX}/remnawave-node-run"
