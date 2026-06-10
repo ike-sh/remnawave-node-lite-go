@@ -3,6 +3,12 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [0.8.27] - 2026-06-10
+
+### 修复
+
+- **`/node/xray/stop` 未清理插件状态**：对齐官方 `withPluginCleanup: true`，Panel 禁用节点时先 `ResetPlugins()`（清空 plugin state + nftables 插件表），再停止 rw-core。
+
 ## [0.8.26] - 2026-06-10
 
 ### 修复
@@ -66,6 +72,7 @@
 
 ---
 
+[0.8.27]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.27
 [0.8.26]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.26
 [0.8.25]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.25
 [0.8.24]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.24

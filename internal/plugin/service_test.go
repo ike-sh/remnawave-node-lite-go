@@ -241,3 +241,31 @@ func TestHandleSyncUnchangedConfigSkipsRestart(t *testing.T) {
 		t.Fatalf("expected no xray side effects, stop=%d remove=%d", xray.stopIfOnline, xray.removeOutbound)
 	}
 }
+
+func TestResetPluginsClearsActivePlugin(t *testing.T) {
+	t.Parallel()
+
+	state := plugin.NewState()
+	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), &mockXray{})
+
+	_, _ = state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{
+			"torrentBlocker": map[string]any{
+				"enabled":       true,
+				"blockDuration": 300,
+				"ignoreLists":   map[string]any{},
+			},
+		},
+	}))
+	if !state.HasActivePlugin() {
+		t.Fatal("expected active plugin before reset")
+	}
+
+	service.ResetPlugins()
+
+	if state.HasActivePlugin() {
+		t.Fatal("expected plugin state cleared after ResetPlugins")
+	}
+}

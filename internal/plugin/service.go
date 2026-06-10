@@ -61,7 +61,7 @@ func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write write
 	rawConfig := extractPluginConfig(req.Plugin)
 	if err := ValidatePluginConfig(rawConfig); err != nil {
 		slog.Warn("plugin config validation failed", "error", err)
-		s.resetPlugins()
+		s.ResetPlugins()
 		if s.xray != nil {
 			s.xray.StopIfOnline()
 		}
@@ -98,14 +98,15 @@ func (s *Service) handlePluginClear(write writeJSONFn, w http.ResponseWriter) {
 		return
 	}
 	slog.Info("plugin sync received empty payload, cleaning up active plugin")
-	s.resetPlugins()
+	s.ResetPlugins()
 	if s.xray != nil {
 		s.xray.StopIfOnline()
 	}
 	writeAccepted(write, w, true)
 }
 
-func (s *Service) resetPlugins() {
+// ResetPlugins clears plugin state and nftables plugin tables (official withPluginCleanup).
+func (s *Service) ResetPlugins() {
 	s.state.Reset()
 	if s.nft.Available() {
 		_ = s.nft.recreateTables()
