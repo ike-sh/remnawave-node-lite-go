@@ -2,7 +2,7 @@
 
 > 目标：将 [remnawave/node](https://github.com/remnawave/node)（Node.js + supervisord + Docker）重写为 **Go 单二进制 + 一键安装脚本**，在 Linux 服务器上无需 Docker 即可接入 Remnawave Panel。
 >
-> 参考分析：[`docs/compat-analysis.md`](compat-analysis.md)（基于官方 `@remnawave/node` v2.7.0）
+> 参考分析：[`compat-analysis.md`](compat-analysis.md)（基于官方 `@remnawave/node` v2.7.0）
 >
 > **当前版本：v0.8.22** | 估算整体完成度：**~98%**（Panel 主流程可用）
 
