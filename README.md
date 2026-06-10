@@ -10,11 +10,11 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 | 项目 | 说明 |
 | --- | --- |
-| 当前版本 | [v0.8.28](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.28) |
+| 当前版本 | [v0.8.29](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.29) |
 | Panel 契约 | `@remnawave/node` v2.7.0（上报 `nodeVersion=2.7.0`） |
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
 
-安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v0.8.28` 指定版本。
+安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v0.8.29` 指定版本。
 
 ---
 
@@ -136,7 +136,7 @@ journalctl -u remnawave-node -f
 
 实现与官方 `@remnawave/node` v2.7.0 对齐的 **28 条 REST API**，涵盖节点注册、Xray 生命周期、流量与在线统计、用户热更新、插件同步、nftables / torrent-blocker 及 Vision IP 封禁等能力。
 
-未实现项（不影响 Panel 常规接入）：Docker 镜像、`CUSTOM_CORE_URL`、geo-zapret 数据卷。
+可选能力（见 `deploy/node.env.example`）：`CUSTOM_CORE_URL` 自定义 rw-core、`GEO_ZAPRET_FILE` / `IP_ZAPRET_FILE` zapret 规则。未实现：Docker 镜像。
 
 ---
 

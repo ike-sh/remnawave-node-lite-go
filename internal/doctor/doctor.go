@@ -213,7 +213,17 @@ func checkGeoFiles(dir string) []result {
 		}
 	}
 	if len(missing) == 0 {
-		return []result{{level: "OK", title: "Geo 数据", detail: dir + " 含 geoip.dat / geosite.dat"}}
+		detail := dir + " 含 geoip.dat / geosite.dat"
+		var extras []string
+		for _, name := range []string{"geo-zapret.dat", "ip-zapret.dat"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				extras = append(extras, name)
+			}
+		}
+		if len(extras) > 0 {
+			detail += "；可选 " + strings.Join(extras, ", ")
+		}
+		return []result{{level: "OK", title: "Geo 数据", detail: detail}}
 	}
 	return []result{{
 		level:   "WARN",

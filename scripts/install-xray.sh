@@ -6,6 +6,7 @@ set -euo pipefail
 XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.3.27}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-XTLS}"
 INSTALL_SCRIPT="${INSTALL_SCRIPT:-https://raw.githubusercontent.com/remnawave/scripts/main/scripts/install-xray.sh}"
+NODE_ENV="${NODE_ENV:-/etc/remnanode/node.env}"
 
 usage() {
   cat <<'EOF'
@@ -15,7 +16,43 @@ usage() {
   XRAY_CORE_VERSION   rw-core 版本，默认 v26.3.27
   UPSTREAM_REPO       上游仓库标识，默认 XTLS
   INSTALL_SCRIPT      安装脚本 URL
+  CUSTOM_CORE_URL     自定义 rw-core 下载 URL（对齐官方 Docker entrypoint，设置后跳过官方安装脚本）
 EOF
+}
+
+load_env_var() {
+  local key="$1"
+  local file="$2"
+  [ -f "$file" ] || return 0
+  local line val
+  line="$(grep -E "^[[:space:]]*${key}=" "$file" 2>/dev/null | head -n 1 || true)"
+  [ -n "$line" ] || return 0
+  val="${line#*=}"
+  val="$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+  [ -n "$val" ] || return 0
+  printf -v "$key" '%s' "$val"
+  export "$key"
+}
+
+install_custom_core() {
+  local url="$1"
+  local target="/usr/local/bin/xray"
+  echo "CUSTOM_CORE_URL 已设置，从自定义地址下载 rw-core..."
+  echo "  URL: ${url}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$target"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$target" "$url"
+  else
+    echo "缺少 curl 或 wget，无法下载 CUSTOM_CORE_URL" >&2
+    return 1
+  fi
+  chmod +x "$target"
+  if [ ! -x "$target" ]; then
+    echo "下载完成但 $target 不可执行" >&2
+    return 1
+  fi
+  echo "自定义 rw-core 已安装到 ${target}"
 }
 
 DRY_RUN=0
@@ -42,6 +79,8 @@ require_root() {
 
 require_root
 
+load_env_var CUSTOM_CORE_URL "$NODE_ENV"
+
 if ! command -v bash >/dev/null 2>&1; then
   echo "缺少命令：bash（Debian/Ubuntu: apt install bash）" >&2
   exit 1
@@ -53,9 +92,13 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
-echo "安装 rw-core ${XRAY_CORE_VERSION} (upstream=${UPSTREAM_REPO})..."
-# 官方 install-xray.sh 使用 bash [[ 语法，不能用 Debian 默认 sh (dash)
-curl -fsSL "${INSTALL_SCRIPT}" | bash -s -- "${XRAY_CORE_VERSION}" "${UPSTREAM_REPO}"
+if [ -n "${CUSTOM_CORE_URL:-}" ]; then
+  install_custom_core "$CUSTOM_CORE_URL"
+else
+  echo "安装 rw-core ${XRAY_CORE_VERSION} (upstream=${UPSTREAM_REPO})..."
+  # 官方 install-xray.sh 使用 bash [[ 语法，不能用 Debian 默认 sh (dash)
+  curl -fsSL "${INSTALL_SCRIPT}" | bash -s -- "${XRAY_CORE_VERSION}" "${UPSTREAM_REPO}"
+fi
 
 if [ -x /usr/local/bin/xray ] && [ ! -e /usr/local/bin/rw-core ]; then
   ln -sf /usr/local/bin/xray /usr/local/bin/rw-core

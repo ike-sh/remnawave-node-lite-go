@@ -3,6 +3,18 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [0.8.29] - 2026-06-10
+
+### 新增
+
+- **`CUSTOM_CORE_URL`**：`install-xray.sh` 支持从自定义 URL 下载 rw-core（对齐官方 Docker entrypoint）；可写入 `node.env`。
+- **geo-zapret 支持**：`GEO_ZAPRET_FILE` / `IP_ZAPRET_FILE` 安装时复制到 `GEO_DIR`；`doctor` 检测可选 zapret 文件。
+
+### 修复
+
+- **gRPC 启动等待**：`waitForGRPC` 轮询间隔 500ms → **2s**（对齐官方 pRetry minTimeout）。
+- **Stats 在线/IP 语义**：`get-user-ip-list` / `get-users-ip-list` gRPC 失败时返回 **200 + 空列表**（对齐官方）；`get-user-online-status` provider 不可用时返回 200 false。
+
 ## [0.8.28] - 2026-06-10
 
 ### 修复
@@ -82,6 +94,7 @@
 
 ---
 
+[0.8.29]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.29
 [0.8.28]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.28
 [0.8.27]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.27
 [0.8.26]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.26

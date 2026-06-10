@@ -81,7 +81,11 @@ func (s *Service) HandleGetSystemStats(w http.ResponseWriter, write writeJSONFn)
 func (s *Service) HandleGetUserOnlineStatus(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	body := decodeOnlineRequest(r)
 	if s.provider == nil {
-		writeAPIError(write, w, errFailedUserOnlineStatus)
+		write(w, http.StatusOK, envelope[struct {
+			IsOnline bool `json:"isOnline"`
+		}]{Response: struct {
+			IsOnline bool `json:"isOnline"`
+		}{IsOnline: false}})
 		return
 	}
 	if body.Username == "" {
@@ -275,12 +279,21 @@ func (s *Service) HandleGetUserIPList(w http.ResponseWriter, r *http.Request, wr
 		return
 	}
 	if s.provider == nil {
-		writeAPIError(write, w, errFailedUserIPList)
+		write(w, http.StatusOK, envelope[struct {
+			IPs []ipEntryResponse `json:"ips"`
+		}]{Response: struct {
+			IPs []ipEntryResponse `json:"ips"`
+		}{IPs: []ipEntryResponse{}}})
 		return
 	}
 	items, err := s.provider.GetUserIPList(r.Context(), body.UserID, true)
 	if err != nil {
-		writeAPIError(write, w, errFailedUserIPList)
+		// Align official: all gRPC errors return HTTP 200 with empty ips.
+		write(w, http.StatusOK, envelope[struct {
+			IPs []ipEntryResponse `json:"ips"`
+		}]{Response: struct {
+			IPs []ipEntryResponse `json:"ips"`
+		}{IPs: []ipEntryResponse{}}})
 		return
 	}
 	ips := make([]ipEntryResponse, 0, len(items))
@@ -299,12 +312,20 @@ func (s *Service) HandleGetUserIPList(w http.ResponseWriter, r *http.Request, wr
 
 func (s *Service) HandleGetUsersIPList(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
 	if s.provider == nil {
-		writeAPIError(write, w, errFailedUsersIPList)
+		write(w, http.StatusOK, envelope[struct {
+			Users []userIPListResponse `json:"users"`
+		}]{Response: struct {
+			Users []userIPListResponse `json:"users"`
+		}{Users: []userIPListResponse{}}})
 		return
 	}
 	items, err := s.provider.GetUsersIPList(r.Context())
 	if err != nil {
-		writeAPIError(write, w, errFailedUsersIPList)
+		write(w, http.StatusOK, envelope[struct {
+			Users []userIPListResponse `json:"users"`
+		}]{Response: struct {
+			Users []userIPListResponse `json:"users"`
+		}{Users: []userIPListResponse{}}})
 		return
 	}
 	users := make([]userIPListResponse, 0, len(items))

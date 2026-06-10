@@ -278,6 +278,58 @@ print_env_config_hint() {
   echo "  SECRET_KEY='eyJ...' NODE_PORT=8443 bash install-*.sh --yes"
 }
 
+read_env_value() {
+  local key="$1" file="$2"
+  local line val
+  [ -f "$file" ] || return 0
+  line="$(grep -E "^[[:space:]]*${key}=" "$file" 2>/dev/null | head -n 1 || true)"
+  [ -n "$line" ] || return 0
+  val="${line#*=}"
+  val="$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+  [ -n "$val" ] || return 0
+  printf '%s' "$val"
+}
+
+install_geo_extra_files() {
+  local geo_dir="${GEO_DIR:-/usr/local/share/xray}"
+  local env_file="${NODE_ENV:-/etc/remnanode/node.env}"
+  local geo_zapret ip_zapret
+  if [ -z "${GEO_ZAPRET_FILE:-}" ]; then
+    geo_zapret="$(read_env_value GEO_ZAPRET_FILE "$env_file")"
+  else
+    geo_zapret="$GEO_ZAPRET_FILE"
+  fi
+  if [ -z "${IP_ZAPRET_FILE:-}" ]; then
+    ip_zapret="$(read_env_value IP_ZAPRET_FILE "$env_file")"
+  else
+    ip_zapret="$IP_ZAPRET_FILE"
+  fi
+
+  local copied=0
+  install_one_geo_extra() {
+    local src="$1" dest_name="$2"
+    [ -n "$src" ] || return 0
+    [ -f "$src" ] || { echo "警告：找不到 ${src}（跳过 ${dest_name}）" >&2; return 0; }
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "[dry-run] 复制 ${src} -> ${geo_dir}/${dest_name}"
+      return 0
+    fi
+    mkdir -p "$geo_dir"
+    cp -f "$src" "${geo_dir}/${dest_name}"
+    chmod 0644 "${geo_dir}/${dest_name}"
+    echo "已安装 ${dest_name} -> ${geo_dir}/${dest_name}"
+    copied=1
+  }
+
+  install_one_geo_extra "$geo_zapret" "geo-zapret.dat"
+  install_one_geo_extra "$ip_zapret" "ip-zapret.dat"
+
+  if [ "$copied" -eq 0 ]; then
+    return 0
+  fi
+  echo "提示：Xray 路由使用 ext:geo-zapret.dat:zapret / ext:ip-zapret.dat:zapret 引用上述文件。"
+}
+
 render_env_template() {
   local port="$1"
   local low_mem="$2"
@@ -300,5 +352,12 @@ INTERNAL_SOCKET_PATH=/run/remnanode/internal.sock
 INTERNAL_REST_TOKEN=
 LOW_MEMORY=${low_mem}
 BODY_LIMIT_MB=
+
+# 可选：自定义 rw-core 下载 URL（对齐官方 CUSTOM_CORE_URL）
+# CUSTOM_CORE_URL=https://example.com/xray-custom
+
+# 可选：zapret 规则文件（复制到 GEO_DIR，供 ext:geo-zapret.dat 引用）
+# GEO_ZAPRET_FILE=/path/to/geo-zapret.dat
+# IP_ZAPRET_FILE=/path/to/ip-zapret.dat
 EOF
 }

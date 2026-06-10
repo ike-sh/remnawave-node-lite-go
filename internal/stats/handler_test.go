@@ -152,14 +152,39 @@ func TestHandleGetUserIPListGRPCError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-user-ip-list", strings.NewReader(`{"userId":"u1"}`))
 	rec := httptest.NewRecorder()
 	service.HandleGetUserIPList(rec, req, writeTestJSON)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with empty ips", rec.Code)
 	}
-	var body map[string]any
+	var body struct {
+		Response struct {
+			IPs []any `json:"ips"`
+		} `json:"response"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["errorCode"] != "A009" {
-		t.Fatalf("errorCode = %v, want A009", body["errorCode"])
+	if len(body.Response.IPs) != 0 {
+		t.Fatalf("ips = %+v, want empty", body.Response.IPs)
+	}
+}
+
+func TestHandleGetUsersIPListGRPCError(t *testing.T) {
+	service := stats.NewService(mockProvider{usersErr: errors.New("grpc down")}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/node/stats/get-users-ip-list", nil)
+	rec := httptest.NewRecorder()
+	service.HandleGetUsersIPList(rec, req, writeTestJSON)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with empty users", rec.Code)
+	}
+	var body struct {
+		Response struct {
+			Users []any `json:"users"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Response.Users) != 0 {
+		t.Fatalf("users = %+v, want empty", body.Response.Users)
 	}
 }

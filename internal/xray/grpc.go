@@ -132,7 +132,8 @@ func (m *Manager) waitForGRPC(ctx context.Context, timeout time.Duration) bool {
 		if m.PingXrayGRPC(ctx) {
 			return true
 		}
-		timer := time.NewTimer(500 * time.Millisecond)
+		// Align official @remnawave/node pRetry: 2s between gRPC readiness attempts.
+		timer := time.NewTimer(2 * time.Second)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
