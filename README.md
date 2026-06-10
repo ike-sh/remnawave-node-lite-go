@@ -10,11 +10,11 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 | 项目 | 说明 |
 | --- | --- |
-| 当前版本 | [v0.8.27](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.27) |
+| 当前版本 | [v0.8.28](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.28) |
 | Panel 契约 | `@remnawave/node` v2.7.0（上报 `nodeVersion=2.7.0`） |
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
 
-安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v0.8.27` 指定版本。
+安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v0.8.28` 指定版本。
 
 ---
 
@@ -47,10 +47,20 @@ bash /tmp/install-alpine.sh
 
 ### 安装后配置
 
+**推荐顺序（避免装完后 Panel 显示离线）：**
+
+1. 在 Panel 创建节点并复制 `SECRET_KEY`，**保持节点禁用**（或先不填真实 IP）
+2. 在本机运行安装脚本并粘贴 Secret Key
+3. 看到 `OK: TCP :2222 已监听` 后，在 Panel **启用**节点
+4. 防火墙仅对 Panel 地址开放 `NODE_PORT`
+
+若安装前已在 Panel 保存并启用节点，装完后需 **禁用 → 启用** 一次（Panel 仅在状态变更时重连；安装期间节点尚未监听）。
+
+手动配置（非交互安装未带 `SECRET_KEY` 时）：
+
 1. 编辑 `/etc/remnanode/node.env`，填写 `NODE_PORT` 与 `SECRET_KEY`
 2. 重启服务：`systemctl restart remnawave-node`（Alpine：`rc-service remnawave-node restart`）
-3. 在 Panel 中添加节点，端口须与 `NODE_PORT` 一致（默认 `2222`）
-4. 在防火墙中仅对 Panel 地址开放 `NODE_PORT`
+3. 在 Panel 中启用节点，端口须与 `NODE_PORT` 一致（默认 `2222`）
 
 非交互安装示例：
 

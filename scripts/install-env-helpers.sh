@@ -151,6 +151,7 @@ prompt_secret_key() {
 
   echo
   echo "请粘贴 Panel 节点页下发的 Secret Key（整段 base64，粘贴后按 Enter）："
+  echo "（若 Panel 节点已启用，装完后请在 Panel 禁用→启用一次，或安装前保持禁用）"
   local secret=""
   if [ -t 0 ]; then
     read -r secret
@@ -176,6 +177,22 @@ cleanup_runtime() {
   rm -f /run/remnawave-internal-*.sock 2>/dev/null || true
 }
 
+print_pre_install_panel_hint() {
+  echo
+  echo "━━━━━━━━ Panel 接入提示（首次安装）━━━━━━━━"
+  echo "  Panel 在【保存/启用】节点时会立即尝试连接；安装期间（尤其下载 Xray）"
+  echo "  本机尚未监听端口，连接失败后 Panel 不会自动重试。"
+  echo
+  echo "  推荐顺序（装完即可上线，无需手动切换）："
+  echo "    1) Panel 创建节点，复制 Secret Key"
+  echo "    2) 保持节点【禁用】，或先不填真实 IP"
+  echo "    3) 完成本脚本安装"
+  echo "    4) 看到下方 OK: TCP 已监听 后，在 Panel【启用】节点"
+  echo
+  echo "  若安装前已在 Panel 保存并启用：装完后请【禁用 → 启用】一次"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
 print_panel_address_hint() {
   local port="$1"
   local pub_ip=""
@@ -190,13 +207,50 @@ print_panel_address_hint() {
   echo "  Panel 在其它服务器：地址填 Panel 能 ping/tcp 通的本机 IP"
   echo "  Panel 服务器上自测:"
   echo "    nc -zv -w 5 <节点IP> ${port}"
-  echo "  保存后：禁用 -> 启用节点"
+  echo
+  echo "  节点已就绪。若 Panel 仍显示离线："
+  echo "    · 安装前未禁用 →【禁用 → 启用】一次"
+  echo "    · 安装前已禁用 → 直接【启用】即可"
+  echo "  首次成功启用后，服务器 reboot 将自动恢复（last-start.json）"
+}
+
+wait_for_service_stable() {
+  local port="$1"
+  local max_wait="${2:-30}"
+  local i=0
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+
+  while [ "$i" -lt "$max_wait" ]; do
+    if ss -tln 2>/dev/null | grep -q ":${port} "; then
+      if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active --quiet remnawave-node.service 2>/dev/null; then
+          return 0
+        fi
+      elif command -v rc-service >/dev/null 2>&1; then
+        if rc-service remnawave-node status 2>/dev/null | grep -qi 'started'; then
+          return 0
+        fi
+      else
+        return 0
+      fi
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
 }
 
 verify_service_listening() {
   local port="$1"
   if [ "$DRY_RUN" -eq 1 ]; then
     return 0
+  fi
+  if ! wait_for_service_stable "$port" 30; then
+    echo "错误: :${port} 在 30s 内未就绪，请检查服务状态（systemctl/rc-service remnawave-node）" >&2
+    return 1
   fi
   if ss -tln 2>/dev/null | grep -q ":${port} "; then
     echo "OK: TCP :${port} 已监听"

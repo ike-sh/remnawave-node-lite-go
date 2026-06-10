@@ -3,6 +3,16 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [0.8.28] - 2026-06-10
+
+### 修复
+
+- **首次安装后 Panel 不上线（关键）**：`get-system-stats` 在 rw-core 离线时改为返回 `500 A010`（对齐官方 node），不再返回 `200 + xrayInfo:null`。Panel `NodeHealthCheckQueueProcessor` 据此走 `handleDisconnectedNode` 并每 10s 触发 `startNode`，无需手动禁用→启用。
+
+### 改进
+
+- 安装脚本新增 Panel 接入前置提示、`wait_for_service_stable` 就绪检测，README 补充推荐安装顺序。
+
 ## [0.8.27] - 2026-06-10
 
 ### 修复
@@ -72,6 +82,7 @@
 
 ---
 
+[0.8.28]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.28
 [0.8.27]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.27
 [0.8.26]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.26
 [0.8.25]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.25

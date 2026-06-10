@@ -55,18 +55,25 @@ type systemStatsResponse struct {
 type writeJSONFn func(w http.ResponseWriter, status int, value any)
 
 func (s *Service) HandleGetSystemStats(w http.ResponseWriter, write writeJSONFn) {
+	if s.provider == nil {
+		writeAPIError(write, w, errFailedSystemStats)
+		return
+	}
+
+	stats, err := s.provider.GetSysStats(context.Background())
+	if err != nil || stats == nil {
+		// Align official @remnawave/node: gRPC unavailable → isOk=false (A010).
+		// Panel NodeHealthCheckQueueProcessor then calls startNode on disconnect.
+		writeAPIError(write, w, errFailedSystemStats)
+		return
+	}
+
 	var resp systemStatsResponse
+	resp.XrayInfo = stats
 	if s.reportsCounter != nil {
 		resp.Plugins.TorrentBlocker.ReportsCount = s.reportsCounter.ReportsCount()
 	}
 	resp.System.Stats = system.GetStats()
-
-	if s.provider != nil {
-		stats, err := s.provider.GetSysStats(context.Background())
-		if err == nil && stats != nil {
-			resp.XrayInfo = stats
-		}
-	}
 
 	write(w, http.StatusOK, envelope[systemStatsResponse]{Response: resp})
 }

@@ -153,7 +153,7 @@ func checkPersistedStart(dataDir string) []result {
 				level:   "WARN",
 				title:   "重启自动恢复",
 				detail:  path + " 不存在",
-				fixHint: "Panel 禁用→启用节点一次（成功 xray/start 后生成），再 reboot 即可自动恢复 rw-core",
+				fixHint: "Panel 启用节点一次（若装完仍离线则禁用→启用）；成功 xray/start 后生成 last-start.json，reboot 即可自动恢复 rw-core",
 			}}
 		}
 		return []result{{

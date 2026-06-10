@@ -60,29 +60,22 @@ func writeTestJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func TestHandleGetSystemStatsReturnsNullXrayInfoWhenOffline(t *testing.T) {
+func TestHandleGetSystemStatsReturnsErrorWhenOffline(t *testing.T) {
 	service := stats.NewService(offlineSysStatsProvider{}, nil)
 	rec := httptest.NewRecorder()
 	service.HandleGetSystemStats(rec, writeTestJSON)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 when rw-core offline", rec.Code)
 	}
 	var body struct {
-		Response struct {
-			XrayInfo *xtls.SysStats   `json:"xrayInfo"`
-			System   struct {
-				Stats struct {
-					MemoryFree uint64 `json:"memoryFree"`
-				} `json:"stats"`
-			} `json:"system"`
-		} `json:"response"`
+		ErrorCode string `json:"errorCode"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Response.XrayInfo != nil {
-		t.Fatalf("xrayInfo = %+v, want null when rw-core offline", body.Response.XrayInfo)
+	if body.ErrorCode != "A010" {
+		t.Fatalf("errorCode = %q, want A010", body.ErrorCode)
 	}
 }
 
