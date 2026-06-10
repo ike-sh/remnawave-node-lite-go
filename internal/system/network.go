@@ -34,7 +34,8 @@ func DefaultNetworkMonitor() *NetworkMonitor {
 
 func NewNetworkMonitor() *NetworkMonitor {
 	m := &NetworkMonitor{
-		pollInterval: time.Second,
+		// 3s keeps Panel stats fresh enough while cutting idle wakeups to 1/3.
+		pollInterval: 3 * time.Second,
 		stop:         make(chan struct{}),
 	}
 	m.available = fileExists("/proc/net/dev")
@@ -88,15 +89,12 @@ func (m *NetworkMonitor) tick() {
 		if cur, ok := current[m.defaultIface]; ok {
 			if prev, ok := m.previous[m.defaultIface]; ok && !prev.timestamp.IsZero() {
 				elapsed := now.Sub(prev.timestamp).Seconds()
-				if elapsed > 0 {
+				// uint64 counter wrap / interface reset makes cur < prev; the
+				// unsigned subtraction would yield an absurdly large rate, so
+				// skip that sample instead.
+				if elapsed > 0 && cur.rxBytes >= prev.rxBytes && cur.txBytes >= prev.txBytes {
 					rxRate := float64(cur.rxBytes-prev.rxBytes) / elapsed
 					txRate := float64(cur.txBytes-prev.txBytes) / elapsed
-					if rxRate < 0 {
-						rxRate = 0
-					}
-					if txRate < 0 {
-						txRate = 0
-					}
 					m.current = &NetworkInterface{
 						Interface:     m.defaultIface,
 						RxBytesPerSec: int64(rxRate),

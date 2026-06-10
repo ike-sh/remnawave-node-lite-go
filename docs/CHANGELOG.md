@@ -3,6 +3,20 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [0.8.30] - 2026-06-10
+
+### 改进
+
+- **`GOMEMLIMIT` 内化**：仅 `LOW_MEMORY=1` 时进程自动设 180MiB 软上限；systemd/OpenRC 不再默认注入，大节点不会被误限。可用 `GOMEMLIMIT` 环境变量覆盖。
+- **rw-core 日志轮转**：`xray.out.log` / `xray.err.log` 达 10MB 自动轮转（保留一份 `.1` 备份），防止小盘 VPS 日志打满。
+- **网卡速率轮询**：`/proc/net/dev` 采样间隔 1s → **3s**，降低空闲 CPU 唤醒。
+- **配置 JSON 缓存**：internal unix socket `get-config` 复用 `xray/start` 时序列化结果，避免每次 rw-core 轮询全量 re-marshal。
+- **`xray version` 探测优化**：版本已知后 health 检查不再每次 fork 子进程；仅在未知或 core 重启后刷新。
+
+### 修复
+
+- **网卡计数器回绕**：rx/tx 字节回绕或接口重置时跳过异常采样，避免 Panel 显示离谱速率。
+
 ## [0.8.29] - 2026-06-10
 
 ### 新增
@@ -94,6 +108,7 @@
 
 ---
 
+[0.8.30]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.30
 [0.8.29]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.29
 [0.8.28]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.28
 [0.8.27]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.27

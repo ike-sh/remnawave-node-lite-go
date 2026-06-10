@@ -2,6 +2,7 @@ package xray
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,42 @@ func TestStopClearsConfig(t *testing.T) {
 
 	if len(manager.CurrentConfig()) != 0 {
 		t.Fatalf("expected config to be cleared")
+	}
+}
+
+func TestCurrentConfigJSONCachedAndCleared(t *testing.T) {
+	manager, err := NewManager(Options{
+		XrayBin:            "definitely-missing-rw-core",
+		GeoDir:             "/tmp",
+		LogDir:             t.TempDir(),
+		InternalSocketPath: "/run/remnawave.sock",
+		InternalRESTToken:  "token",
+		XtlsAPIPort:        61000,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	if got := string(manager.CurrentConfigJSON()); got != "{}" {
+		t.Fatalf("expected empty object before start, got %s", got)
+	}
+
+	manager.Start(context.Background(), StartRequest{XrayConfig: map[string]any{
+		"inbounds": []any{map[string]any{"tag": "public"}},
+	}})
+
+	raw := manager.CurrentConfigJSON()
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("cached JSON must be valid: %v", err)
+	}
+	if _, ok := decoded["inbounds"]; !ok {
+		t.Fatalf("expected inbounds in cached JSON, got %s", raw)
+	}
+
+	manager.Stop(true)
+	if got := string(manager.CurrentConfigJSON()); got != "{}" {
+		t.Fatalf("expected cache cleared after stop, got %s", got)
 	}
 }
 

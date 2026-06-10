@@ -9,6 +9,6 @@ if [ -f /etc/remnanode/node.env ]; then
 	set +a
 fi
 
-export GOMEMLIMIT="${GOMEMLIMIT:-180MiB}"
+# 内存上限由进程按 LOW_MEMORY=1 自动设置；需覆盖时在 node.env 设 GOMEMLIMIT
 cd /var/lib/remnanode
 exec /usr/local/bin/remnanode-lite

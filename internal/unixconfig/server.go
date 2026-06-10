@@ -14,7 +14,9 @@ import (
 )
 
 type Provider interface {
-	CurrentConfig() map[string]any
+	// CurrentConfigJSON returns the pre-serialized config; the server writes
+	// it verbatim so large configs are not re-marshaled on every core poll.
+	CurrentConfigJSON() []byte
 }
 
 type WebhookProcessor interface {
@@ -107,7 +109,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(s.Provider.CurrentConfig()); err != nil {
+	if _, err := w.Write(s.Provider.CurrentConfigJSON()); err != nil {
 		slog.Warn("failed to write unix config response", "error", err)
 	}
 }

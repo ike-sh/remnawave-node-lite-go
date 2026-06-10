@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -52,6 +53,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	applyMemoryLimit(cfg.LowMemory)
 	bodylimit.Configure(cfg.LowMemory, cfg.BodyLimitMB)
 	if !netadmin.HasCapNetAdmin() {
 		log.Printf("warning: CAP_NET_ADMIN not available — nftables plugin and ss -K connection drop are disabled (check systemd AmbientCapabilities)")
@@ -117,6 +119,7 @@ func main() {
 	}()
 
 	go manager.RestoreOnBoot(ctx)
+	go manager.StartLogRotation(ctx)
 
 	<-ctx.Done()
 	system.DefaultNetworkMonitor().Stop()
@@ -126,4 +129,18 @@ func main() {
 		log.Printf("shutdown error: %v", err)
 	}
 	_ = manager.Stop(false)
+}
+
+// applyMemoryLimit caps the Go runtime heap in low-memory mode (128/256MB VPS)
+// regardless of init system, replacing the GOMEMLIMIT lines previously baked
+// into the systemd unit / OpenRC launcher. An explicit GOMEMLIMIT env always
+// wins so large nodes are never accidentally throttled.
+func applyMemoryLimit(lowMemory bool) {
+	if os.Getenv("GOMEMLIMIT") != "" {
+		return
+	}
+	if lowMemory {
+		debug.SetMemoryLimit(180 << 20)
+		log.Printf("low-memory mode: Go soft memory limit set to 180MiB (override with GOMEMLIMIT)")
+	}
 }

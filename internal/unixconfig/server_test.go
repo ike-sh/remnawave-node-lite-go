@@ -11,11 +11,15 @@ type staticProvider struct {
 	config map[string]any
 }
 
-func (p staticProvider) CurrentConfig() map[string]any {
+func (p staticProvider) CurrentConfigJSON() []byte {
 	if p.config == nil {
-		return map[string]any{}
+		return []byte("{}")
 	}
-	return p.config
+	raw, err := json.Marshal(p.config)
+	if err != nil {
+		return []byte("{}")
+	}
+	return raw
 }
 
 func TestGetConfigRejectsInvalidToken(t *testing.T) {

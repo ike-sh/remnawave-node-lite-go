@@ -7,8 +7,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=-/etc/remnanode/node.env
-# 128/256MB VPS：install-node.sh --low-memory 会写入 LOW_MEMORY=1 并启用 GOMEMLIMIT
-Environment=GOMEMLIMIT=180MiB
+# 内存上限由进程按 LOW_MEMORY=1 自动设置（180MiB 软上限）；
+# 需覆盖时在 node.env 中显式设置 GOMEMLIMIT（大节点请勿设置）
 WorkingDirectory=/var/lib/remnanode
 ExecStart=/usr/local/bin/remnanode-lite
 Restart=on-failure

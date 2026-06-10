@@ -10,11 +10,11 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 | 项目 | 说明 |
 | --- | --- |
-| 当前版本 | [v0.8.29](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.29) |
+| 当前版本 | [v0.8.30](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.30) |
 | Panel 契约 | `@remnawave/node` v2.7.0（上报 `nodeVersion=2.7.0`） |
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
 
-安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v0.8.29` 指定版本。
+安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v0.8.30` 指定版本。
 
 ---
 

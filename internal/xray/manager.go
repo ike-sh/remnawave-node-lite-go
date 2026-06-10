@@ -55,6 +55,9 @@ type Manager struct {
 	startProcessing bool
 	lastStartRequest *StartRequest
 	currentConfig   map[string]any
+	// currentConfigJSON caches the serialized form served via the internal
+	// get-config socket, so each rw-core poll avoids a full re-marshal.
+	currentConfigJSON []byte
 	emptyConfigHash string
 	inboundHashes   map[string]*HashedSet
 	inboundTags     map[string]struct{}
@@ -186,6 +189,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	}()
 
 	fullConfig := generateAPIConfig(req.XrayConfig, m.xtlsAPIPort, m.internalCerts, m.torrentBlockerOptions())
+	fullConfigJSON := marshalConfigJSON(fullConfig)
 
 	m.mu.RLock()
 	online := m.xrayOnline
@@ -201,6 +205,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 			if !needRestart {
 				m.mu.Lock()
 				m.currentConfig = fullConfig
+				m.currentConfigJSON = fullConfigJSON
 				m.extractUsersFromConfigLocked(req.Internals.Hashes, fullConfig)
 				m.mu.Unlock()
 				m.persistStartRequest(req)
@@ -216,6 +221,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 
 	m.mu.Lock()
 	m.currentConfig = fullConfig
+	m.currentConfigJSON = fullConfigJSON
 	m.extractUsersFromConfigLocked(req.Internals.Hashes, fullConfig)
 	if err := m.stopProcessLocked(false); err != nil {
 		m.mu.Unlock()
@@ -242,6 +248,8 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 	if started {
 		m.xrayOnline = true
 		m.mu.Unlock()
+		// Refresh once per successful core (re)start; rw-core may have been upgraded.
+		m.refreshVersion()
 		m.persistStartRequest(req)
 		log.Printf("xray/start succeeded: rw-core online on gRPC 127.0.0.1:%d", m.xtlsAPIPort)
 		return m.startResponse(true, nil)
@@ -365,7 +373,14 @@ func (m *Manager) RestoreOnBoot(ctx context.Context) {
 }
 
 func (m *Manager) Health() HealthResponse {
-	m.refreshVersion()
+	m.mu.RLock()
+	versionKnown := m.xrayVersion != nil
+	m.mu.RUnlock()
+	if !versionKnown {
+		// rw-core binary may appear after boot (install order); probe until known.
+		// Once cached, healthcheck no longer forks `xray version` every poll.
+		m.refreshVersion()
+	}
 
 	m.mu.RLock()
 	process := m.process
@@ -402,6 +417,28 @@ func (m *Manager) CurrentConfig() map[string]any {
 	return cloneMap(m.currentConfig)
 }
 
+// CurrentConfigJSON returns the config exactly as served to rw-core,
+// serialized once per xray/start instead of on every get-config poll.
+// Callers must treat the returned slice as read-only.
+func (m *Manager) CurrentConfigJSON() []byte {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if len(m.currentConfigJSON) == 0 {
+		return []byte("{}")
+	}
+	return m.currentConfigJSON
+}
+
+func marshalConfigJSON(config map[string]any) []byte {
+	raw, err := json.Marshal(config)
+	if err != nil {
+		log.Printf("warning: marshal xray config: %v", err)
+		return nil
+	}
+	return raw
+}
+
 func (m *Manager) XrayBin() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -428,6 +465,7 @@ func BuildConfigURL(socketPath, token string) string {
 }
 
 func (m *Manager) startProcessLocked() (*processState, error) {
+	m.rotateLogs()
 	stdout, err := os.OpenFile(filepath.Join(m.logDir, "xray.out.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open xray stdout log: %w", err)
@@ -530,6 +568,7 @@ func (m *Manager) stopProcessLocked(clearConfig bool) error {
 		m.xrayOnline = false
 		if clearConfig {
 			m.currentConfig = nil
+			m.currentConfigJSON = nil
 		}
 		return nil
 	}
@@ -557,6 +596,7 @@ func (m *Manager) stopProcessLocked(clearConfig bool) error {
 	m.xrayOnline = false
 	if clearConfig {
 		m.currentConfig = nil
+		m.currentConfigJSON = nil
 		m.clearHashStateLocked()
 		m.clearInboundTagsLocked()
 	}
