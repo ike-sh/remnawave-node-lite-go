@@ -32,6 +32,8 @@ func (m *nftManager) recreateTables() error {
 		return fmt.Errorf("nftables unavailable")
 	}
 	script := fmt.Sprintf(`
+add table ip %s
+add table ip6 %s
 delete table ip %s
 delete table ip6 %s
 table ip %s {
@@ -86,6 +88,7 @@ table ip6 %s {
 	}
 }
 `, tableName, tableNameV6,
+		tableName, tableNameV6,
 		tableName,
 		torrentBlockerSet, ingressFilterIPSet, egressFilterIPSet, egressFilterPortSet,
 		ingressFilterIPSet, torrentBlockerSet,
