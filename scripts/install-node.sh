@@ -177,7 +177,7 @@ run_sibling_script() {
 
 show_menu() {
   echo
-  echo "Remnawave Node Lite ${VERSION} (contract 2.7.0)"
+  echo "Remnawave Node Lite ${VERSION} (contract 2.8.0)"
   echo "  1) 安装"
   echo "  2) 升级"
   echo "  3) 卸载"

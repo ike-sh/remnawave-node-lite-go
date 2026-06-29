@@ -1,0 +1,10 @@
+# Keep shell and service unit files LF so they run on Linux regardless of a
+# contributor's git core.autocrlf setting. A CRLF-committed *.sh breaks bash on
+# the deployed node with `$'\r': command not found` style errors.
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.service text eol=lf
+*.openrc  text eol=lf
+
+# Generated/binary ASN database must never be line-ending or text munged.
+*.bin   binary
