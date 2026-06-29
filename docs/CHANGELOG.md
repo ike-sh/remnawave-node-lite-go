@@ -19,11 +19,14 @@
 ### 修复
 
 - **重叠 CIDR 致插件失效**：ingress/egress 过滤的 nftables set 改用 `flags interval`，并在写入前去重、合并重叠区间，修复携带 CIDR 的共享列表整批加载失败、以及此前 CIDR 被静默丢弃的问题（对齐上游 2.8.0）。
+- **nftables 表首启幂等**：`recreateTables` 在 `delete table` 前补幂等 `add table`，避免全新主机首次启动时因删除不存在的表导致 `nft -f` 原子事务整体回滚、过滤表/set 建不出。
+- **安装菜单版本标签**：`install-node.sh` / `install-node-alpine.sh` 菜单残留的 `(contract 2.7.0)` 更正为 `2.8.0`。
 
 ### 维护
 
 - rw-core 默认版本升级至 **v26.6.27**（`install-xray.sh`）。
 - 契约基线对齐 v2.8.0（`contract.version`、contract-sync CI、26 条 REST API）。
+- 新增 `.gitattributes` 强制 `*.sh` / `*.service` / `*.openrc` 使用 LF 行尾，避免 CRLF 提交导致部署脚本在 Linux 失效。
 
 ## [1.0.2] - 2026-06-10
 

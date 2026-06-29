@@ -22,7 +22,7 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 - Linux（Debian / Ubuntu 等 systemd 发行版，或 Alpine + OpenRC）
 - Panel 下发的 `SECRET_KEY`（含 mTLS 证书与 JWT 公钥）
-- [rw-core](https://github.com/XTLS/Xray-core)（安装脚本可自动安装）
+- [rw-core](https://github.com/XTLS/Xray-core) **≥ v26.6.27**（2.8.0 抽象套接字 API 的硬性要求；安装脚本默认安装该版本）
 - 可选：`nft`、`ss`（插件 IP 封禁与连接踢除，需 `CAP_NET_ADMIN`）
 
 ---
