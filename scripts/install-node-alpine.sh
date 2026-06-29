@@ -578,10 +578,10 @@ do_install() {
   local arch
   arch="$(detect_arch)"
 
-  install_packages
-  setup_directories
-  confirm_install
-  print_pre_install_panel_hint
+	install_packages
+	confirm_install
+	setup_directories
+	print_pre_install_panel_hint
   download_binary "$arch"
   apply_capabilities
   install_xray

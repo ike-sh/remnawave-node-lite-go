@@ -539,9 +539,9 @@ do_install() {
   local arch
   arch="$(detect_arch)"
 
-  setup_directories
-  confirm_install
-  print_pre_install_panel_hint
+	confirm_install
+	setup_directories
+	print_pre_install_panel_hint
   download_binary "$arch"
   install_xray
   install_geo_extra_files
