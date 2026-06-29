@@ -12,19 +12,14 @@ import (
 func (m *Manager) statsAPI(ctx context.Context, requireOnline bool) (*xtls.StatsAPI, func(), error) {
 	m.mu.RLock()
 	online := m.xrayOnline
-	port := m.xtlsAPIPort
-	certs := m.internalCerts
+	socket := m.xtlsSocket
 	m.mu.RUnlock()
 
 	if requireOnline && !online {
 		return nil, nil, fmt.Errorf("xray is not online")
 	}
 
-	client, err := xtls.NewClient(fmt.Sprintf("127.0.0.1:%d", port), xtls.TLSCredentials{
-		CACertPEM:     certs.CACertPEM,
-		ClientCertPEM: certs.ClientCertPEM,
-		ClientKeyPEM:  certs.ClientKeyPEM,
-	})
+	client, err := xtls.NewClient(socket)
 	if err != nil {
 		return nil, nil, err
 	}

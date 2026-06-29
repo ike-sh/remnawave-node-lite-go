@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 卸载脚本（systemd / Alpine OpenRC）
 set -euo pipefail
 
-VERSION="1.0.2"
+VERSION="1.1.0"
 PREFIX="/usr/local/bin"
 BIN_NAME="remnanode-lite"
 RUN_WRAPPER="${PREFIX}/remnawave-node-run"
@@ -12,6 +12,7 @@ ETC_DIR="/etc/remnanode"
 LOG_DIR="/var/log/remnanode"
 DATA_DIR="/var/lib/remnanode"
 GEO_DIR="/usr/local/share/xray"
+ASN_DIR="/usr/local/share/asn"
 XRAY_BIN="/usr/local/bin/rw-core"
 XRAY_LEGACY="/usr/local/bin/xray"
 
@@ -227,6 +228,7 @@ print_plan() {
   if [ "$PURGE_XRAY" -eq 1 ]; then
     echo "  • 删除 rw-core：${XRAY_BIN}"
     echo "  • 删除 geo：${GEO_DIR}"
+    echo "  • 删除 ASN 数据：${ASN_DIR}"
     [ -e "$XRAY_LEGACY" ] && echo "  • 删除 xray：${XRAY_LEGACY}"
   fi
   echo
@@ -307,6 +309,7 @@ remove_xray() {
     run rm -f "$XRAY_LEGACY"
   fi
   run rm -rf "$GEO_DIR"
+  run rm -rf "$ASN_DIR"
 }
 
 main() {

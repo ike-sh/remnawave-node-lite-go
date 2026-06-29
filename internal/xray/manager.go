@@ -2,6 +2,8 @@ package xray
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,15 +22,14 @@ import (
 )
 
 type Options struct {
-	XrayBin              string
-	GeoDir               string
-	LogDir               string
-	DataDir              string
-	InternalSocketPath   string
-	InternalRESTToken    string
-	XtlsAPIPort          int
-	DisableHashCheck     bool
-	LowMemory            bool
+	XrayBin            string
+	GeoDir             string
+	LogDir             string
+	DataDir            string
+	InternalSocketPath string
+	InternalRESTToken  string
+	DisableHashCheck   bool
+	LowMemory          bool
 }
 
 type TorrentBlockerConfigProvider interface {
@@ -44,24 +45,23 @@ type Manager struct {
 	dataDir          string
 	socketPath       string
 	token            string
-	xtlsAPIPort      int
+	xtlsSocket       string
 	disableHashCheck bool
 	lowMemory        bool
-	internalCerts    internalCerts
 	torrentBlocker   TorrentBlockerConfigProvider
 
-	xrayVersion     *string
-	xrayOnline      bool
-	startProcessing bool
+	xrayVersion      *string
+	xrayOnline       bool
+	startProcessing  bool
 	lastStartRequest *StartRequest
-	currentConfig   map[string]any
+	currentConfig    map[string]any
 	// currentConfigJSON caches the serialized form served via the internal
 	// get-config socket, so each rw-core poll avoids a full re-marshal.
 	currentConfigJSON []byte
-	emptyConfigHash string
-	inboundHashes   map[string]*HashedSet
-	inboundTags     map[string]struct{}
-	process         *processState
+	emptyConfigHash   string
+	inboundHashes     map[string]*HashedSet
+	inboundTags       map[string]struct{}
+	process           *processState
 }
 
 type processState struct {
@@ -120,9 +120,9 @@ type HealthResponse struct {
 }
 
 func NewManager(opts Options) (*Manager, error) {
-	certs, err := generateInternalCerts()
+	socket, err := generateXtlsSocketName()
 	if err != nil {
-		return nil, fmt.Errorf("generate internal Xray certificates: %w", err)
+		return nil, fmt.Errorf("generate xtls api socket name: %w", err)
 	}
 	manager := &Manager{
 		xrayBin:          opts.XrayBin,
@@ -131,13 +131,23 @@ func NewManager(opts Options) (*Manager, error) {
 		dataDir:          opts.DataDir,
 		socketPath:       opts.InternalSocketPath,
 		token:            opts.InternalRESTToken,
-		xtlsAPIPort:      opts.XtlsAPIPort,
+		xtlsSocket:       socket,
 		disableHashCheck: opts.DisableHashCheck,
 		lowMemory:        opts.LowMemory,
-		internalCerts:    certs,
 	}
 	manager.refreshVersion()
 	return manager, nil
+}
+
+// generateXtlsSocketName returns a process-unique abstract socket name for the
+// Xray gRPC API. The random suffix mirrors upstream 2.8.0 and avoids collisions
+// when several nodes share a host.
+func generateXtlsSocketName() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return "remnanode-xtls-" + hex.EncodeToString(buf), nil
 }
 
 func (m *Manager) SetTorrentBlockerProvider(provider TorrentBlockerConfigProvider) {
@@ -188,7 +198,7 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 		m.mu.Unlock()
 	}()
 
-	fullConfig := generateAPIConfig(req.XrayConfig, m.xtlsAPIPort, m.internalCerts, m.torrentBlockerOptions())
+	fullConfig := generateAPIConfig(req.XrayConfig, m.xtlsSocket, m.torrentBlockerOptions())
 	fullConfigJSON := marshalConfigJSON(fullConfig)
 
 	m.mu.RLock()
@@ -251,14 +261,14 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 		// Refresh once per successful core (re)start; rw-core may have been upgraded.
 		m.refreshVersion()
 		m.persistStartRequest(req)
-		log.Printf("xray/start succeeded: rw-core online on gRPC 127.0.0.1:%d", m.xtlsAPIPort)
+		log.Printf("xray/start succeeded: rw-core online on gRPC @%s", m.xtlsSocket)
 		return m.startResponse(true, nil)
 	}
 	_ = m.stopProcessLocked(false)
 	m.xrayOnline = false
 	m.mu.Unlock()
 
-	message := fmt.Sprintf("xray gRPC API on 127.0.0.1:%d did not become reachable within %s (see %s/xray.err.log)", m.xtlsAPIPort, m.grpcStartupTimeout(), m.logDir)
+	message := fmt.Sprintf("xray gRPC API on @%s did not become reachable within %s (see %s/xray.err.log)", m.xtlsSocket, m.grpcStartupTimeout(), m.logDir)
 	if hint := m.rwCoreExitHint(); hint != "" {
 		message += "; " + hint
 	}

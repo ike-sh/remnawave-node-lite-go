@@ -17,13 +17,13 @@ type interfaceSample struct {
 
 // NetworkMonitor polls /proc/net/dev on Linux for default interface rates.
 type NetworkMonitor struct {
-	mu            sync.RWMutex
-	available     bool
-	defaultIface  string
-	previous      map[string]interfaceSample
-	current       *NetworkInterface
-	pollInterval  time.Duration
-	stop          chan struct{}
+	mu           sync.RWMutex
+	available    bool
+	defaultIface string
+	previous     map[string]interfaceSample
+	current      *NetworkInterface
+	pollInterval time.Duration
+	stop         chan struct{}
 }
 
 var defaultMonitor = NewNetworkMonitor()

@@ -55,6 +55,7 @@ func Run(args []string) int {
 		results = append(results, checkSecret(cfg)...)
 		results = append(results, checkXrayBinary(cfg.XrayBin)...)
 		results = append(results, checkGeoFiles(cfg.GeoDir)...)
+		results = append(results, checkASNDatabase(cfg.ASNDBPath)...)
 		results = append(results, checkPersistedStart(cfg.DataDir)...)
 		results = append(results, checkCommand("nft", "nftables 命令行（插件 IP 封禁）")...)
 		results = append(results, checkCommand("ss", "ss 命令（踢连接 drop-ips）")...)
@@ -157,9 +158,9 @@ func checkPersistedStart(dataDir string) []result {
 			}}
 		}
 		return []result{{
-			level:   "WARN",
-			title:   "重启自动恢复",
-			detail:  "无法读取 " + path + ": " + err.Error(),
+			level:  "WARN",
+			title:  "重启自动恢复",
+			detail: "无法读取 " + path + ": " + err.Error(),
 		}}
 	}
 	return []result{{
@@ -193,9 +194,9 @@ func checkXrayBinary(bin string) []result {
 	out, err := exec.Command(bin, "version").Output()
 	if err != nil {
 		return []result{{
-			level:   "WARN",
-			title:   "rw-core",
-			detail:  bin + " 存在但 version 命令失败",
+			level:  "WARN",
+			title:  "rw-core",
+			detail: bin + " 存在但 version 命令失败",
 		}}
 	}
 	line := strings.TrimSpace(strings.Split(string(out), "\n")[0])
@@ -231,6 +232,21 @@ func checkGeoFiles(dir string) []result {
 		detail:  "缺少 " + strings.Join(missing, ", "),
 		fixHint: "重新运行 install-xray.sh 或从 Xray 发行版复制到 " + dir,
 	}}
+}
+
+func checkASNDatabase(path string) []result {
+	if path == "" {
+		path = "/usr/local/share/asn/asn-prefixes.bin"
+	}
+	if _, err := os.Stat(path); err != nil {
+		return []result{{
+			level:   "WARN",
+			title:   "ASN 数据库",
+			detail:  path + " 不存在（插件 asList 共享列表降级为空）",
+			fixHint: "设置 ASN_DB_URL 重跑 install-xray.sh，或用 cmd/asn-builder 生成后放到该路径",
+		}}
+	}
+	return []result{{level: "OK", title: "ASN 数据库", detail: path}}
 }
 
 func checkCommand(name, purpose string) []result {

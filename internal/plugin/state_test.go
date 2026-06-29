@@ -105,8 +105,8 @@ func TestUpdateFromSyncSkipsUnchangedHash(t *testing.T) {
 func TestNewSyncPluginFromEnvelopeRoundTrip(t *testing.T) {
 	t.Parallel()
 	raw := map[string]any{
-		"uuid": "id",
-		"name": "n",
+		"uuid":   "id",
+		"name":   "n",
 		"config": map[string]any{"a": float64(1)},
 	}
 	payload, err := plugin.NewSyncPluginFromEnvelope(raw)

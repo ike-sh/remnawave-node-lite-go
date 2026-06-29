@@ -9,10 +9,9 @@ import (
 func TestLoadDotEnvWithDefaults(t *testing.T) {
 	t.Setenv("NODE_PORT", "")
 	t.Setenv("SECRET_KEY", "")
-	t.Setenv("XTLS_API_PORT", "")
 	t.Setenv("XRAY_BIN", "")
 	t.Setenv("GEO_DIR", "")
-	for _, key := range []string{"NODE_PORT", "SECRET_KEY", "XTLS_API_PORT", "XRAY_BIN", "GEO_DIR"} {
+	for _, key := range []string{"NODE_PORT", "SECRET_KEY", "XRAY_BIN", "GEO_DIR"} {
 		os.Unsetenv(key)
 	}
 
@@ -27,9 +26,6 @@ func TestLoadDotEnvWithDefaults(t *testing.T) {
 	}
 	if cfg.NodePort != 3000 {
 		t.Fatalf("unexpected NODE_PORT: %d", cfg.NodePort)
-	}
-	if cfg.XtlsAPIPort != 61000 {
-		t.Fatalf("unexpected default XTLS_API_PORT: %d", cfg.XtlsAPIPort)
 	}
 	if cfg.XrayBin != defaultXrayBin || cfg.GeoDir != defaultGeoDir {
 		t.Fatalf("unexpected defaults: %#v", cfg)

@@ -3,17 +3,17 @@
 # 封装官方 Remnawave install-xray.sh
 set -euo pipefail
 
-XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.3.27}"
+XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.6.27}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-XTLS}"
 INSTALL_SCRIPT="${INSTALL_SCRIPT:-https://raw.githubusercontent.com/remnawave/scripts/main/scripts/install-xray.sh}"
 NODE_ENV="${NODE_ENV:-/etc/remnanode/node.env}"
 
 usage() {
   cat <<'EOF'
-用法：install-xray.sh [--version v26.3.27] [--upstream XTLS] [--dry-run]
+用法：install-xray.sh [--version v26.6.27] [--upstream XTLS] [--dry-run]
 
 环境变量：
-  XRAY_CORE_VERSION   rw-core 版本，默认 v26.3.27
+  XRAY_CORE_VERSION   rw-core 版本，默认 v26.6.27（Node 2.8.0 要求 ≥ 26.6.27）
   UPSTREAM_REPO       上游仓库标识，默认 XTLS
   INSTALL_SCRIPT      安装脚本 URL
   CUSTOM_CORE_URL     自定义 rw-core 下载 URL（对齐官方 Docker entrypoint，设置后跳过官方安装脚本）
@@ -53,6 +53,28 @@ install_custom_core() {
     return 1
   fi
   echo "自定义 rw-core 已安装到 ${target}"
+}
+
+# ASN 前缀数据库（插件 asList 共享列表解析；对齐官方 2.8.0 的 /usr/local/share/asn）。
+# 未提供 ASN_DB_URL 时跳过；运行时缺失该文件则 asList 自动降级为空。
+ASN_DB_URL="${ASN_DB_URL:-}"
+ASN_DB_PATH="${ASN_DB_PATH:-/usr/local/share/asn/asn-prefixes.bin}"
+install_asn_db() {
+  if [ -z "${ASN_DB_URL}" ]; then
+    echo "提示：未设置 ASN_DB_URL，跳过 ASN 数据库安装（插件 asList 将降级为空）。"
+    return 0
+  fi
+  mkdir -p "$(dirname "${ASN_DB_PATH}")"
+  echo "下载 ASN 前缀数据库：${ASN_DB_URL}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${ASN_DB_URL}" -o "${ASN_DB_PATH}" || { echo "警告：ASN 数据库下载失败，asList 将降级为空。" >&2; return 0; }
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "${ASN_DB_PATH}" "${ASN_DB_URL}" || { echo "警告：ASN 数据库下载失败，asList 将降级为空。" >&2; return 0; }
+  else
+    echo "警告：缺少 curl/wget，跳过 ASN 数据库下载。" >&2
+    return 0
+  fi
+  echo "ASN 数据库已安装到 ${ASN_DB_PATH}"
 }
 
 DRY_RUN=0
@@ -117,5 +139,7 @@ for dat in geoip.dat geosite.dat; do
     echo "警告：缺少 /usr/local/share/xray/${dat}" >&2
   fi
 done
+
+install_asn_db
 
 echo "rw-core 安装完成。"

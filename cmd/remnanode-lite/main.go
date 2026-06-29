@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"remnawave-node-lite-go/internal/asn"
 	"remnawave-node-lite-go/internal/auth"
 	"remnawave-node-lite-go/internal/bodylimit"
 	"remnawave-node-lite-go/internal/config"
@@ -76,7 +77,6 @@ func main() {
 		DataDir:            cfg.DataDir,
 		InternalSocketPath: cfg.InternalSocketPath,
 		InternalRESTToken:  cfg.InternalRESTToken,
-		XtlsAPIPort:        cfg.XtlsAPIPort,
 		DisableHashCheck:   cfg.DisableHashedSetCheck,
 		LowMemory:          cfg.LowMemory,
 	})
@@ -85,6 +85,13 @@ func main() {
 	}
 
 	pluginState := plugin.NewState()
+	if asnDB, err := asn.Open(cfg.ASNDBPath); err != nil {
+		log.Printf("ASN database unavailable (%s): %v — asList shared lists resolve empty", cfg.ASNDBPath, err)
+	} else {
+		pluginState.SetASNResolver(asnDB)
+		defer asnDB.Close()
+		log.Printf("ASN database loaded from %s", cfg.ASNDBPath)
+	}
 	dropper := connections.NewDropper(pluginState.IsWhitelisted)
 	pluginService := plugin.NewService(pluginState, dropper, manager)
 

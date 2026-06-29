@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// ValidatePluginConfig performs structural validation aligned with @remnawave/node-plugins@0.4.4.
+// ValidatePluginConfig performs structural validation aligned with @remnawave/node-plugins@0.4.5.
 func ValidatePluginConfig(config map[string]any) error {
 	if config == nil {
 		return fmt.Errorf("plugin config is required")

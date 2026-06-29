@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"remnawave-node-lite-go/internal/auth"
@@ -20,7 +19,6 @@ import (
 	"remnawave-node-lite-go/internal/plugin"
 	"remnawave-node-lite-go/internal/secret"
 	"remnawave-node-lite-go/internal/stats"
-	"remnawave-node-lite-go/internal/vision"
 	"remnawave-node-lite-go/internal/xray"
 )
 
@@ -30,7 +28,6 @@ type Server struct {
 	statsService   *stats.Service
 	handlerService *nodehandler.Service
 	pluginService  *plugin.Service
-	visionService  *vision.Service
 }
 
 func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator, manager *xray.Manager, pluginService *plugin.Service, dropper *connections.Dropper) (*Server, error) {
@@ -45,12 +42,10 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 		statsService:   stats.NewService(manager, pluginService),
 		handlerService: nodehandler.NewService(manager, dropper),
 		pluginService:  pluginService,
-		visionService:  vision.NewService(manager),
 	}
 
-	protected := validator.Middleware(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleProtectedRoutes))))
+	protected := validator.Middleware(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes))))
 	mux.Handle("/node/", protected)
-	mux.Handle("/vision/", protected)
 
 	server.httpServer = &http.Server{
 		Addr:              cfg.HTTPAddr(),
@@ -75,27 +70,6 @@ func (s *Server) ListenAndServeTLS() error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
-}
-
-func (s *Server) handleProtectedRoutes(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/vision/") {
-		s.handleVisionRoutes(w, r)
-		return
-	}
-	s.handleNodeRoutes(w, r)
-}
-
-func (s *Server) handleVisionRoutes(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	write := writeJSON
-	switch {
-	case r.Method == http.MethodPost && path == "/vision/block-ip":
-		s.visionService.HandleBlockIP(w, r, write)
-	case r.Method == http.MethodPost && path == "/vision/unblock-ip":
-		s.visionService.HandleUnblockIP(w, r, write)
-	default:
-		http.NotFound(w, r)
-	}
 }
 
 func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {

@@ -1,15 +1,13 @@
 package xray
 
 import (
-	"strings"
-
 	"remnawave-node-lite-go/internal/netadmin"
 )
 
 const (
-	apiTag                       = "REMNAWAVE_API"
-	apiInboundTag                = "REMNAWAVE_API_INBOUND"
-	torrentBlockerOutboundTag    = "RW_TB_OUTBOUND_BLOCK"
+	apiTag                    = "REMNAWAVE_API"
+	apiInboundTag             = "REMNAWAVE_API_INBOUND"
+	torrentBlockerOutboundTag = "RW_TB_OUTBOUND_BLOCK"
 )
 
 type TorrentBlockerOptions struct {
@@ -19,7 +17,7 @@ type TorrentBlockerOptions struct {
 	RESTToken       string
 }
 
-func generateAPIConfig(input map[string]any, xtlsAPIPort int, certs internalCerts, torrent TorrentBlockerOptions) map[string]any {
+func generateAPIConfig(input map[string]any, xtlsSocket string, torrent TorrentBlockerOptions) map[string]any {
 	result := cloneMap(input)
 
 	result["stats"] = map[string]any{}
@@ -28,7 +26,7 @@ func generateAPIConfig(input map[string]any, xtlsAPIPort int, certs internalCert
 		"tag":      apiTag,
 	}
 	result["inbounds"] = append(
-		[]any{apiInbound(xtlsAPIPort, certs)},
+		[]any{apiInbound(xtlsSocket)},
 		arrayFrom(result["inbounds"])...,
 	)
 	result["outbounds"] = arrayFrom(result["outbounds"])
@@ -50,7 +48,7 @@ func generateAPIConfig(input map[string]any, xtlsAPIPort int, certs internalCert
 			"protocol":    []any{"bittorrent"},
 			"outboundTag": torrentBlockerOutboundTag,
 			"webhook": map[string]any{
-				"url":             webhookURL,
+				"url":           webhookURL,
 				"deduplication": 5,
 			},
 		}
@@ -76,7 +74,7 @@ func generateAPIConfig(input map[string]any, xtlsAPIPort int, certs internalCert
 				ruleTag, _ := rule["ruleTag"].(string)
 				if _, ok := tagSet[ruleTag]; ok {
 					rule["webhook"] = map[string]any{
-						"url":             webhookURL,
+						"url":           webhookURL,
 						"deduplication": 5,
 					}
 					rules[i] = rule
@@ -94,34 +92,14 @@ func buildWebhookURL(socketPath string) string {
 	return "/" + socketPath + ":/internal/webhook"
 }
 
-func apiInbound(port int, certs internalCerts) map[string]any {
+// apiInbound exposes the Xray gRPC API on a Linux abstract unix socket via the
+// tunnel inbound, matching remnawave/node 2.8.0 (XRAY_API_INBOUND_MODEL). The
+// leading "@" selects the abstract namespace; a local socket needs no TLS.
+func apiInbound(socketName string) map[string]any {
 	return map[string]any{
 		"tag":      apiInboundTag,
-		"port":     port,
-		"listen":   "127.0.0.1",
-		"protocol": "dokodemo-door",
-		"settings": map[string]any{
-			"address": "127.0.0.1",
-		},
-		"streamSettings": map[string]any{
-			"security": "tls",
-			"tlsSettings": map[string]any{
-				"alpn":              []any{"h2"},
-				"serverName":        "internal.remnawave.local",
-				"disableSystemRoot": true,
-				"rejectUnknownSni":  true,
-				"certificates": []any{
-					map[string]any{
-						"certificate": pemLines(certs.ServerCertPEM),
-						"key":         pemLines(certs.ServerKeyPEM),
-					},
-					map[string]any{
-						"usage":       "verify",
-						"certificate": pemLines(certs.CACertPEM),
-					},
-				},
-			},
-		},
+		"listen":   "@" + socketName,
+		"protocol": "tunnel",
 	}
 }
 
@@ -168,7 +146,16 @@ func routingFrom(existing any) map[string]any {
 			"outboundTag": apiTag,
 		},
 	}
-	rules = append(rules, arrayFrom(routing["rules"])...)
+	// Drop any pre-existing REMNAWAVE_API rule before re-injecting ours, matching
+	// upstream generate-api-config.ts (prevents duplicate API routing rules).
+	for _, item := range arrayFrom(routing["rules"]) {
+		if rule, ok := item.(map[string]any); ok {
+			if tag, _ := rule["outboundTag"].(string); tag == apiTag {
+				continue
+			}
+		}
+		rules = append(rules, item)
+	}
 	routing["rules"] = rules
 
 	return routing
@@ -182,16 +169,4 @@ func arrayFrom(value any) []any {
 		return typed
 	}
 	return []any{}
-}
-
-func pemLines(value string) []any {
-	normalized := strings.ReplaceAll(value, "\r\n", "\n")
-	parts := strings.Split(normalized, "\n")
-	lines := make([]any, 0, len(parts))
-	for _, part := range parts {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			lines = append(lines, trimmed)
-		}
-	}
-	return lines
 }

@@ -13,7 +13,6 @@ import (
 	"remnawave-node-lite-go/internal/nodehandler"
 	"remnawave-node-lite-go/internal/plugin"
 	"remnawave-node-lite-go/internal/stats"
-	"remnawave-node-lite-go/internal/vision"
 	"remnawave-node-lite-go/internal/xray"
 	"remnawave-node-lite-go/internal/xtls"
 )
@@ -45,8 +44,6 @@ var responseShapeTests = map[string]func(t *testing.T){
 	"/node/plugin/nftables/block-ips":       testPluginBlockIPsResponseShape,
 	"/node/plugin/nftables/unblock-ips":     testPluginUnblockIPsResponseShape,
 	"/node/plugin/nftables/recreate-tables": testPluginRecreateTablesResponseShape,
-	"/vision/block-ip":                      testVisionBlockIPResponseShape,
-	"/vision/unblock-ip":                    testVisionUnblockIPResponseShape,
 }
 
 func TestOfficialResponseShapes(t *testing.T) {
@@ -71,7 +68,6 @@ func testManager(t *testing.T) *xray.Manager {
 		LogDir:             t.TempDir(),
 		InternalSocketPath: "/run/remnawave.sock",
 		InternalRESTToken:  "token",
-		XtlsAPIPort:        61000,
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
@@ -340,26 +336,6 @@ func testPluginRecreateTablesResponseShape(t *testing.T) {
 	assertJSONPath(t, rec.Body.Bytes(), "response.accepted")
 }
 
-func testVisionBlockIPResponseShape(t *testing.T) {
-	service := vision.NewService(nil)
-	req := httptest.NewRequest(http.MethodPost, "/vision/block-ip", strings.NewReader(`{"ip":"203.0.113.10","username":"u1"}`))
-	rec := httptest.NewRecorder()
-	service.HandleBlockIP(rec, req, writeTestJSON)
-	raw := rec.Body.Bytes()
-	assertJSONPath(t, raw, "response.success")
-	assertJSONPath(t, raw, "response.error")
-}
-
-func testVisionUnblockIPResponseShape(t *testing.T) {
-	service := vision.NewService(nil)
-	req := httptest.NewRequest(http.MethodPost, "/vision/unblock-ip", strings.NewReader(`{"ip":"203.0.113.10","username":"u1"}`))
-	rec := httptest.NewRecorder()
-	service.HandleUnblockIP(rec, req, writeTestJSON)
-	raw := rec.Body.Bytes()
-	assertJSONPath(t, raw, "response.success")
-	assertJSONPath(t, raw, "response.error")
-}
-
 type stubStatsProvider struct{}
 
 func (stubStatsProvider) GetSysStats(context.Context) (*xtls.SysStats, error) {
@@ -368,7 +344,9 @@ func (stubStatsProvider) GetSysStats(context.Context) (*xtls.SysStats, error) {
 func (stubStatsProvider) GetAllUsersStats(context.Context, bool) ([]xtls.UserTraffic, error) {
 	return []xtls.UserTraffic{{Username: "u1", Uplink: 1, Downlink: 2}}, nil
 }
-func (stubStatsProvider) GetUserOnlineStatus(context.Context, string) (bool, error) { return false, nil }
+func (stubStatsProvider) GetUserOnlineStatus(context.Context, string) (bool, error) {
+	return false, nil
+}
 func (stubStatsProvider) GetInboundStats(context.Context, string, bool) (xtls.TagTraffic, error) {
 	return xtls.TagTraffic{Tag: "in-1"}, nil
 }

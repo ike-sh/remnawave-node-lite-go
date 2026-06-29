@@ -13,7 +13,7 @@ type IPListProvider interface {
 }
 
 type Dropper struct {
-	available   bool
+	available     bool
 	isWhitelisted func(ip string) bool
 }
 

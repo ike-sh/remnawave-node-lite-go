@@ -12,13 +12,13 @@ import (
 )
 
 const (
-	DefaultEnvPath     = "/etc/remnanode/node.env"
-	defaultXtlsAPIPort = 61000
-	defaultXrayBin     = "/usr/local/bin/rw-core"
-	defaultGeoDir      = "/usr/local/share/xray"
+	DefaultEnvPath            = "/etc/remnanode/node.env"
+	defaultXrayBin            = "/usr/local/bin/rw-core"
+	defaultGeoDir             = "/usr/local/share/xray"
 	defaultLogDir             = "/var/log/remnanode"
-	defaultDataDir              = "/var/lib/remnanode"
+	defaultDataDir            = "/var/lib/remnanode"
 	defaultInternalSocketPath = "/run/remnanode/internal.sock"
+	defaultASNDBPath          = "/usr/local/share/asn/asn-prefixes.bin"
 )
 
 // ResolveEnvPath returns the first existing env file path, preferring production default.
@@ -32,19 +32,19 @@ func ResolveEnvPath() string {
 }
 
 type Config struct {
-	NodePort               int
-	BindAddr               string
-	SecretKey              string
-	XtlsAPIPort            int
-	XrayBin                string
-	GeoDir                 string
-	LogDir                 string
-	DataDir                string
-	InternalSocketPath     string
-	InternalRESTToken      string
-	DisableHashedSetCheck  bool
-	LowMemory              bool
-	BodyLimitMB            int
+	NodePort              int
+	BindAddr              string
+	SecretKey             string
+	XrayBin               string
+	GeoDir                string
+	LogDir                string
+	DataDir               string
+	InternalSocketPath    string
+	InternalRESTToken     string
+	ASNDBPath             string
+	DisableHashedSetCheck bool
+	LowMemory             bool
+	BodyLimitMB           int
 }
 
 func Load(dotenvPath string) (Config, error) {
@@ -64,13 +64,13 @@ func Load(dotenvPath string) (Config, error) {
 		"NODE_BIND_ADDR",
 		"SECRET_KEY",
 		"SECRET_KEY_FILE",
-		"XTLS_API_PORT",
 		"XRAY_BIN",
 		"GEO_DIR",
 		"LOG_DIR",
 		"DATA_DIR",
 		"INTERNAL_SOCKET_PATH",
 		"INTERNAL_REST_TOKEN",
+		"ASN_DB_PATH",
 		"DISABLE_HASHED_SET_CHECK",
 		"LOW_MEMORY",
 		"BODY_LIMIT_MB",
@@ -96,11 +96,6 @@ func Load(dotenvPath string) (Config, error) {
 		return Config{}, errors.New("SECRET_KEY or SECRET_KEY_FILE is required")
 	}
 
-	xtlsAPIPort, err := optionalInt(values, "XTLS_API_PORT", defaultXtlsAPIPort)
-	if err != nil {
-		return Config{}, err
-	}
-
 	internalSocketPath := optionalString(values, "INTERNAL_SOCKET_PATH", defaultInternalSocketPath)
 
 	internalRESTToken := optionalString(values, "INTERNAL_REST_TOKEN", "")
@@ -115,13 +110,13 @@ func Load(dotenvPath string) (Config, error) {
 		NodePort:              nodePort,
 		BindAddr:              strings.TrimSpace(values["NODE_BIND_ADDR"]),
 		SecretKey:             secretKey,
-		XtlsAPIPort:           xtlsAPIPort,
 		XrayBin:               optionalString(values, "XRAY_BIN", defaultXrayBin),
 		GeoDir:                optionalString(values, "GEO_DIR", defaultGeoDir),
 		LogDir:                optionalString(values, "LOG_DIR", defaultLogDir),
 		DataDir:               optionalString(values, "DATA_DIR", defaultDataDir),
 		InternalSocketPath:    internalSocketPath,
 		InternalRESTToken:     internalRESTToken,
+		ASNDBPath:             optionalString(values, "ASN_DB_PATH", defaultASNDBPath),
 		DisableHashedSetCheck: optionalBool(values, "DISABLE_HASHED_SET_CHECK", false),
 		LowMemory:             optionalBool(values, "LOW_MEMORY", false),
 		BodyLimitMB:           optionalIntDefault(values, "BODY_LIMIT_MB", 0),
@@ -187,18 +182,6 @@ func requiredInt(values map[string]string, key string) (int, error) {
 	raw := strings.TrimSpace(values[key])
 	if raw == "" {
 		return 0, fmt.Errorf("%s is required", key)
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
-	}
-	return value, nil
-}
-
-func optionalInt(values map[string]string, key string, fallback int) (int, error) {
-	raw := strings.TrimSpace(values[key])
-	if raw == "" {
-		return fallback, nil
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {

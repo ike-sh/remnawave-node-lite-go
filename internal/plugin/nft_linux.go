@@ -36,8 +36,8 @@ delete table ip %s
 delete table ip6 %s
 table ip %s {
 	set %s { type ipv4_addr; flags timeout; }
-	set %s { type ipv4_addr; }
-	set %s { type ipv4_addr; }
+	set %s { type ipv4_addr; flags interval; }
+	set %s { type ipv4_addr; flags interval; }
 	set %s { type inet_service; }
 
 	chain input {
@@ -62,8 +62,8 @@ table ip %s {
 
 table ip6 %s {
 	set %s { type ipv6_addr; flags timeout; }
-	set %s { type ipv6_addr; }
-	set %s { type ipv6_addr; }
+	set %s { type ipv6_addr; flags interval; }
+	set %s { type ipv6_addr; flags interval; }
 	set %s { type inet_service; }
 
 	chain input {
@@ -128,7 +128,7 @@ func (m *nftManager) syncIngressFilter(ips []string) error {
 	if !m.available {
 		return nil
 	}
-	v4, v6 := splitIPVersions(ips)
+	v4, v6 := normalizeFilterPrefixes(ips)
 	if len(v4) > 0 {
 		if err := runNFTScript(fmt.Sprintf(
 			"add element ip %s %s { %s }",
@@ -152,7 +152,7 @@ func (m *nftManager) syncEgressFilter(ips []string, ports []int) error {
 	if !m.available {
 		return nil
 	}
-	v4, v6 := splitIPVersions(ips)
+	v4, v6 := normalizeFilterPrefixes(ips)
 	if len(v4) > 0 {
 		if err := runNFTScript(fmt.Sprintf(
 			"add element ip %s %s { %s }",

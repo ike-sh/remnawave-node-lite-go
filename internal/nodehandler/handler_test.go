@@ -20,8 +20,8 @@ type stubProvider struct {
 func (s *stubProvider) AddInboundTag(tag string) {
 	s.inboundTags = append(s.inboundTags, tag)
 }
-func (s *stubProvider) InboundTags() []string { return s.inboundTags }
-func (s *stubProvider) AddUserToInboundHash(string, string) {}
+func (s *stubProvider) InboundTags() []string                    { return s.inboundTags }
+func (s *stubProvider) AddUserToInboundHash(string, string)      {}
 func (s *stubProvider) RemoveUserFromInboundHash(string, string) {}
 func (s *stubProvider) GetUserIPList(context.Context, string, bool) ([]xtls.IPEntry, error) {
 	return nil, nil
@@ -92,10 +92,10 @@ func TestHandleAddUsersAlwaysSuccess(t *testing.T) {
 
 type failingInboundProvider struct{}
 
-func (failingInboundProvider) AddInboundTag(string)                            {}
-func (failingInboundProvider) InboundTags() []string                           { return nil }
-func (failingInboundProvider) AddUserToInboundHash(string, string)             {}
-func (failingInboundProvider) RemoveUserFromInboundHash(string, string)        {}
+func (failingInboundProvider) AddInboundTag(string)                     {}
+func (failingInboundProvider) InboundTags() []string                    { return nil }
+func (failingInboundProvider) AddUserToInboundHash(string, string)      {}
+func (failingInboundProvider) RemoveUserFromInboundHash(string, string) {}
 func (failingInboundProvider) GetUserIPList(context.Context, string, bool) ([]xtls.IPEntry, error) {
 	return nil, nil
 }

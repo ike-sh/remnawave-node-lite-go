@@ -3,6 +3,28 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [1.1.0] - 2026-06-30
+
+对齐上游 `@remnawave/node` v2.8.0。
+
+### 重大变更
+
+- **移除 Vision 模块**：上游 2.8.0 删除 `/vision/block-ip`、`/vision/unblock-ip`，IP 封禁能力转由 nftables 插件承担；本版同步移除相关路由、xray RoutingService 动态规则封装与内部证书链路。
+- **Xray gRPC API 改用抽象 Unix 套接字**：内部 API inbound 从 `dokodemo-door + 127.0.0.1:XTLS_API_PORT + mTLS` 改为 `tunnel + @abstract-socket`（对齐 2.8.0），不再监听本地 TCP 端口、不再生成内部 mTLS 证书；`XTLS_API_PORT` 配置项废弃。**要求 rw-core ≥ v26.6.27**。
+
+### 新增
+
+- **插件 AS 列表（asList）**：`sharedLists` 支持 `type: asList`，将 AS 号解析为 IPv4/IPv6 CIDR 前缀后注入 nftables / torrent-blocker 规则。ASN 数据取自 `/usr/local/share/asn/asn-prefixes.bin`（缺失则优雅降级为空）；新增 `cmd/asn-builder` 从 ip2asn 数据集生成该库；安装脚本支持 `ASN_DB_URL` 可选下载。
+
+### 修复
+
+- **重叠 CIDR 致插件失效**：ingress/egress 过滤的 nftables set 改用 `flags interval`，并在写入前去重、合并重叠区间，修复携带 CIDR 的共享列表整批加载失败、以及此前 CIDR 被静默丢弃的问题（对齐上游 2.8.0）。
+
+### 维护
+
+- rw-core 默认版本升级至 **v26.6.27**（`install-xray.sh`）。
+- 契约基线对齐 v2.8.0（`contract.version`、contract-sync CI、26 条 REST API）。
+
 ## [1.0.2] - 2026-06-10
 
 ### 安全
@@ -148,6 +170,7 @@
 
 ---
 
+[1.1.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.1.0
 [1.0.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.0.0
 [0.8.30]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.30
 [0.8.29]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.29

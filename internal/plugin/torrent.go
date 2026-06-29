@@ -193,7 +193,7 @@ func resolveIPList(items []string, shared map[string][]string) []string {
 	return out
 }
 
-func buildSharedIPMap(rawConfig map[string]any) map[string][]string {
+func buildSharedIPMap(rawConfig map[string]any, resolver ASNResolver) map[string][]string {
 	shared := make(map[string][]string)
 	lists, ok := rawConfig["sharedLists"].([]any)
 	if !ok {
@@ -204,9 +204,6 @@ func buildSharedIPMap(rawConfig map[string]any) map[string][]string {
 		if !ok {
 			continue
 		}
-		if entryType, _ := entry["type"].(string); entryType != "ipList" {
-			continue
-		}
 		name, _ := entry["name"].(string)
 		if name == "" {
 			continue
@@ -215,13 +212,18 @@ func buildSharedIPMap(rawConfig map[string]any) map[string][]string {
 		if !strings.HasPrefix(name, "ext:") {
 			key = "ext:" + name
 		}
-		shared[key] = toStringSlice(entry["items"])
+		switch entryType, _ := entry["type"].(string); entryType {
+		case "ipList":
+			shared[key] = toStringSlice(entry["items"])
+		case "asList":
+			shared[key] = resolveASList(entry["items"], resolver)
+		}
 	}
 	return shared
 }
 
 func (s *Service) syncFilters(cfg map[string]any) {
-	shared := buildSharedIPMap(cfg)
+	shared := buildSharedIPMap(cfg, s.state.asnResolver())
 	if ingress, ok := cfg["ingressFilter"].(map[string]any); ok {
 		if enabled, _ := ingress["enabled"].(bool); enabled {
 			ips := resolveIPList(toStringSlice(ingress["blockedIps"]), shared)

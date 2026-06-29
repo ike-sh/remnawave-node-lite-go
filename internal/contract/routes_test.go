@@ -3,8 +3,9 @@ package contract_test
 import (
 	"testing"
 )
+
 // Official @remnawave/node REST paths (from libs/contract/api/routes.ts).
-// Baseline: upstream v2.7.0 (2026-03-28) — contract-sync CI tracks main weekly.
+// Baseline: upstream v2.8.0 (2026-06-29) — contract-sync CI tracks main weekly.
 var officialRoutes = []string{
 	"/node/xray/start",
 	"/node/xray/stop",
@@ -32,8 +33,6 @@ var officialRoutes = []string{
 	"/node/plugin/nftables/block-ips",
 	"/node/plugin/nftables/unblock-ips",
 	"/node/plugin/nftables/recreate-tables",
-	"/vision/block-ip",
-	"/vision/unblock-ip",
 }
 
 // liteGoImplemented marks routes wired in this repository.
@@ -41,31 +40,29 @@ var liteGoImplemented = map[string]bool{
 	"/node/xray/start":                      true,
 	"/node/xray/stop":                       true,
 	"/node/xray/healthcheck":                true,
-	"/node/stats/get-user-online-status":      true,
-	"/node/stats/get-users-stats":             true,
-	"/node/stats/get-system-stats":            true,
-	"/node/stats/get-inbound-stats":           true,
-	"/node/stats/get-outbound-stats":          true,
-	"/node/stats/get-all-outbounds-stats":    true,
-	"/node/stats/get-all-inbounds-stats":      true,
-	"/node/stats/get-combined-stats":          true,
-	"/node/stats/get-user-ip-list":            true,
-	"/node/stats/get-users-ip-list":           true,
-	"/node/handler/add-user":                  true,
-	"/node/handler/remove-user":               true,
-	"/node/handler/get-inbound-users-count":   true,
-	"/node/handler/get-inbound-users":         true,
-	"/node/handler/add-users":                 true,
-	"/node/handler/remove-users":              true,
-	"/node/handler/drop-users-connections":    true,
-	"/node/handler/drop-ips":                  true,
-	"/node/plugin/sync":                       true,
-	"/node/plugin/torrent-blocker/collect":    true,
-	"/node/plugin/nftables/block-ips":         true,
-	"/node/plugin/nftables/unblock-ips":       true,
-	"/node/plugin/nftables/recreate-tables":   true,
-	"/vision/block-ip":                        true,
-	"/vision/unblock-ip":                      true,
+	"/node/stats/get-user-online-status":    true,
+	"/node/stats/get-users-stats":           true,
+	"/node/stats/get-system-stats":          true,
+	"/node/stats/get-inbound-stats":         true,
+	"/node/stats/get-outbound-stats":        true,
+	"/node/stats/get-all-outbounds-stats":   true,
+	"/node/stats/get-all-inbounds-stats":    true,
+	"/node/stats/get-combined-stats":        true,
+	"/node/stats/get-user-ip-list":          true,
+	"/node/stats/get-users-ip-list":         true,
+	"/node/handler/add-user":                true,
+	"/node/handler/remove-user":             true,
+	"/node/handler/get-inbound-users-count": true,
+	"/node/handler/get-inbound-users":       true,
+	"/node/handler/add-users":               true,
+	"/node/handler/remove-users":            true,
+	"/node/handler/drop-users-connections":  true,
+	"/node/handler/drop-ips":                true,
+	"/node/plugin/sync":                     true,
+	"/node/plugin/torrent-blocker/collect":  true,
+	"/node/plugin/nftables/block-ips":       true,
+	"/node/plugin/nftables/unblock-ips":     true,
+	"/node/plugin/nftables/recreate-tables": true,
 }
 
 func TestOfficialRoutesCoverage(t *testing.T) {

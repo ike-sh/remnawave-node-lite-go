@@ -35,14 +35,14 @@ jobs:
             echo "::error::contract.version ($local_ver) != upstream ($ver) — update internal/version/contract.version and version.go ContractVersion default"
             exit 1
           fi
-          if [ "$ver" != "2.7.0" ]; then
+          if [ "$ver" != "2.8.0" ]; then
             echo "::notice::Upstream node bumped to $ver — review contract diff manually"
           fi
           python3 <<'PY'
           import re, pathlib
           text = pathlib.Path("/tmp/remnawave-node/libs/contract/api/routes.ts").read_text()
           paths = set()
-          for m in re.finditer(r"`(\$\{ROOT\}/[^`]+|/vision/[^`]+)`", text):
+          for m in re.finditer(r"`(\$\{ROOT\}/[^`]+)`", text):
               p = m.group(1).replace("${ROOT}", "")
               paths.add(p)
           for p in sorted(paths):
@@ -52,7 +52,7 @@ jobs:
 
       - name: Extract lite-go implemented routes
         run: |
-          grep -E '^\s*"/node/|^\s*"/vision/' internal/contract/routes_test.go \
+          grep -E '^\s*"/node/' internal/contract/routes_test.go \
             | sed 's/.*"\(\/[^"]*\)".*/\1/' \
             | sort -u > /tmp/lite-routes.txt
 

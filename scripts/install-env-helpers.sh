@@ -340,7 +340,6 @@ SECRET_KEY=
 # 可选：密钥极长时可改用独立文件（取消下行注释并清空 SECRET_KEY）
 # SECRET_KEY_FILE=${SECRET_FILE}
 
-XTLS_API_PORT=61000
 XRAY_BIN=/usr/local/bin/rw-core
 GEO_DIR=/usr/local/share/xray
 LOG_DIR=${LOG_DIR}

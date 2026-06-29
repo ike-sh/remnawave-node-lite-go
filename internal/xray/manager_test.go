@@ -24,17 +24,12 @@ func TestBuildCommandArgs(t *testing.T) {
 }
 
 func TestGenerateAPIConfigInjectsRemnawaveAPI(t *testing.T) {
-	certs, err := generateInternalCerts()
-	if err != nil {
-		t.Fatalf("generateInternalCerts: %v", err)
-	}
-
 	config := generateAPIConfig(map[string]any{
 		"inbounds": []any{map[string]any{"tag": "public"}},
 		"routing": map[string]any{
 			"rules": []any{map[string]any{"outboundTag": "direct"}},
 		},
-	}, 61000, certs, TorrentBlockerOptions{})
+	}, "remnanode-xtls-test", TorrentBlockerOptions{})
 
 	inbounds, ok := config["inbounds"].([]any)
 	if !ok || len(inbounds) != 2 {
@@ -44,7 +39,7 @@ func TestGenerateAPIConfigInjectsRemnawaveAPI(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected API inbound type: %#v", inbounds[0])
 	}
-	if apiInbound["tag"] != apiInboundTag || apiInbound["listen"] != "127.0.0.1" || apiInbound["port"] != 61000 {
+	if apiInbound["tag"] != apiInboundTag || apiInbound["listen"] != "@remnanode-xtls-test" || apiInbound["protocol"] != "tunnel" {
 		t.Fatalf("unexpected API inbound: %#v", apiInbound)
 	}
 	if _, ok := config["stats"].(map[string]any); !ok {
@@ -72,9 +67,7 @@ func TestStartStoresFullConfigWhenCommandFails(t *testing.T) {
 		GeoDir:             "/tmp",
 		LogDir:             t.TempDir(),
 		InternalSocketPath: "/run/remnawave.sock",
-		InternalRESTToken:  "token",
-		XtlsAPIPort:        61000,
-	})
+		InternalRESTToken:  "token"})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -105,9 +98,7 @@ func TestStopClearsConfig(t *testing.T) {
 		GeoDir:             "/tmp",
 		LogDir:             t.TempDir(),
 		InternalSocketPath: "/run/remnawave.sock",
-		InternalRESTToken:  "token",
-		XtlsAPIPort:        61000,
-	})
+		InternalRESTToken:  "token"})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -125,9 +116,7 @@ func TestCurrentConfigJSONCachedAndCleared(t *testing.T) {
 		GeoDir:             "/tmp",
 		LogDir:             t.TempDir(),
 		InternalSocketPath: "/run/remnawave.sock",
-		InternalRESTToken:  "token",
-		XtlsAPIPort:        61000,
-	})
+		InternalRESTToken:  "token"})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -163,9 +152,7 @@ func TestStopWithoutClearPersistKeepsLastStart(t *testing.T) {
 		LogDir:             t.TempDir(),
 		DataDir:            dir,
 		InternalSocketPath: "/run/remnawave.sock",
-		InternalRESTToken:  "token",
-		XtlsAPIPort:        61000,
-	})
+		InternalRESTToken:  "token"})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -190,9 +177,7 @@ func TestStopFalseFlushesLastStartRequest(t *testing.T) {
 		LogDir:             t.TempDir(),
 		DataDir:            dir,
 		InternalSocketPath: "/run/remnawave.sock",
-		InternalRESTToken:  "token",
-		XtlsAPIPort:        61000,
-	})
+		InternalRESTToken:  "token"})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}

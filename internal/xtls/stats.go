@@ -14,16 +14,16 @@ import (
 )
 
 type SysStats struct {
-	NumGoroutine int    `json:"numGoroutine"`
-	NumGC        int    `json:"numGC"`
-	Alloc        int64  `json:"alloc"`
-	TotalAlloc   int64  `json:"totalAlloc"`
-	Sys          int64  `json:"sys"`
-	Mallocs      int64  `json:"mallocs"`
-	Frees        int64  `json:"frees"`
-	LiveObjects  int64  `json:"liveObjects"`
-	PauseTotalNs int64  `json:"pauseTotalNs"`
-	Uptime       int64  `json:"uptime"`
+	NumGoroutine int   `json:"numGoroutine"`
+	NumGC        int   `json:"numGC"`
+	Alloc        int64 `json:"alloc"`
+	TotalAlloc   int64 `json:"totalAlloc"`
+	Sys          int64 `json:"sys"`
+	Mallocs      int64 `json:"mallocs"`
+	Frees        int64 `json:"frees"`
+	LiveObjects  int64 `json:"liveObjects"`
+	PauseTotalNs int64 `json:"pauseTotalNs"`
+	Uptime       int64 `json:"uptime"`
 }
 
 type UserTraffic struct {

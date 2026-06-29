@@ -79,17 +79,3 @@ func TestHandleNodeRoutesUnknownPath(t *testing.T) {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
-
-func TestHandleVisionRoutesUnknownPath(t *testing.T) {
-	t.Parallel()
-
-	server := &Server{}
-	req := httptest.NewRequest(http.MethodGet, "/vision/unknown", nil)
-	rec := httptest.NewRecorder()
-
-	server.handleVisionRoutes(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
-	}
-}

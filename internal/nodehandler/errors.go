@@ -12,8 +12,8 @@ type apiError struct {
 }
 
 var (
-	errInternalServer      = apiError{Code: "A001", Message: "Server error", HTTPStatus: http.StatusInternalServerError}
-	errFailedInboundUsers  = apiError{Code: "A014", Message: "Failed to get inbound users", HTTPStatus: http.StatusInternalServerError}
+	errInternalServer     = apiError{Code: "A001", Message: "Server error", HTTPStatus: http.StatusInternalServerError}
+	errFailedInboundUsers = apiError{Code: "A014", Message: "Failed to get inbound users", HTTPStatus: http.StatusInternalServerError}
 )
 
 func writeHandlerAPIError(write writeJSONFn, w http.ResponseWriter, err apiError, message string) {

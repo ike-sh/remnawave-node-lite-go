@@ -10,11 +10,11 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 | 项目 | 说明 |
 | --- | --- |
-| 当前版本 | [v1.0.2](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.0.2) |
-| Panel 契约 | `@remnawave/node` v2.7.0（上报 `nodeVersion=2.7.0`） |
+| 当前版本 | [v1.1.0](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.1.0) |
+| Panel 契约 | `@remnawave/node` v2.8.0（上报 `nodeVersion=2.8.0`） |
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
 
-安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v1.0.2` 指定版本。
+安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v1.1.0` 指定版本。
 
 ---
 
@@ -77,7 +77,6 @@ SECRET_KEY='eyJ...' NODE_PORT=2222 \
 ```env
 NODE_PORT=2222
 SECRET_KEY="eyJ..."
-XTLS_API_PORT=61000
 XRAY_BIN=/usr/local/bin/rw-core
 GEO_DIR=/usr/local/share/xray
 LOG_DIR=/var/log/remnanode
@@ -131,14 +130,13 @@ xerrors  # rw-core 错误输出
 
 ## 功能与兼容性
 
-实现与官方 `@remnawave/node` v2.7.0 对齐的 **28 条 REST API**，涵盖：
+实现与官方 `@remnawave/node` v2.8.0 对齐的 **26 条 REST API**，涵盖：
 
 - 节点注册与 mTLS / JWT 认证
 - Xray 生命周期（启动、停止、配置热更新）
 - 流量与在线统计
 - 用户热更新（VLESS / Trojan / Shadowsocks）
-- 插件同步（nftables、torrent-blocker 等）
-- Vision IP 封禁
+- 插件同步（nftables、torrent-blocker、AS/IP 共享列表等）
 
 未实现：Docker 镜像（项目定位为裸机轻量部署）。
 

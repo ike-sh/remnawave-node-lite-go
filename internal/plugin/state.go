@@ -8,11 +8,11 @@ import (
 )
 
 const (
-	tableName            = "remnanode"
-	torrentBlockerSet    = "torrent-blocker"
-	ingressFilterIPSet   = "ingress-filter-ip"
-	egressFilterIPSet    = "egress-filter-ip"
-	egressFilterPortSet  = "egress-filter-port"
+	tableName           = "remnanode"
+	torrentBlockerSet   = "torrent-blocker"
+	ingressFilterIPSet  = "ingress-filter-ip"
+	egressFilterIPSet   = "egress-filter-ip"
+	egressFilterPortSet = "egress-filter-port"
 )
 
 type TorrentReport struct {
@@ -37,12 +37,27 @@ type State struct {
 	whitelistIPs map[string]struct{}
 	reports      []TorrentReport
 	torrent      torrentSettings
+	asn          ASNResolver
 }
 
 func NewState() *State {
 	return &State{
 		whitelistIPs: make(map[string]struct{}),
 	}
+}
+
+// SetASNResolver installs the resolver used to expand asList shared lists into
+// CIDR prefixes. Call once during startup before requests are served.
+func (s *State) SetASNResolver(r ASNResolver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asn = r
+}
+
+func (s *State) asnResolver() ASNResolver {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.asn
 }
 
 func (s *State) IsWhitelisted(ip string) bool {
@@ -154,7 +169,7 @@ func (s *State) UpdateFromSync(plugin *SyncPlugin) (changed bool, accepted bool)
 		rawConfig = nil
 	}
 
-	shared := buildSharedIPMap(rawConfig)
+	shared := buildSharedIPMap(rawConfig, s.asn)
 
 	s.whitelistIPs = make(map[string]struct{})
 	if connectionDrop, ok := rawConfig["connectionDrop"].(map[string]any); ok {

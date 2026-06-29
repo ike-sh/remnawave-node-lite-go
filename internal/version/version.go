@@ -7,12 +7,12 @@ import (
 )
 
 // Version is the release version (overridable via -ldflags at build time).
-var Version = "1.0.2"
+var Version = "1.1.0"
 
 // ContractVersion is the upstream @remnawave/node version reported to Panel as nodeVersion.
 // Default must stay in sync with contract.version and contract-sync CI.
 // Overridable via -ldflags at build time.
-var ContractVersion = "2.7.0"
+var ContractVersion = "2.8.0"
 
 const releaseRepo = "ike-sh/remnawave-node-lite-go"
 

@@ -101,8 +101,8 @@ func TestValidatePluginConfigRejectsCIDRInWhitelist(t *testing.T) {
 	t.Parallel()
 	err := ValidatePluginConfig(map[string]any{
 		"connectionDrop": map[string]any{
-			"enabled":       true,
-			"whitelistIps":  []any{"10.0.0.0/8"},
+			"enabled":      true,
+			"whitelistIps": []any{"10.0.0.0/8"},
 		},
 	})
 	if err == nil {
@@ -122,7 +122,7 @@ func TestBuildSharedIPMapUsesExtPrefix(t *testing.T) {
 			},
 		},
 	}
-	m := buildSharedIPMap(cfg)
+	m := buildSharedIPMap(cfg, nil)
 	if _, ok := m["ext:mylist"]; !ok {
 		t.Fatalf("expected ext:mylist key, got %#v", m)
 	}

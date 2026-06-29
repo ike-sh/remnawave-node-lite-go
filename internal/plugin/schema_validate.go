@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Validation aligned with @remnawave/node-plugins@0.4.4 (NodePluginSchema).
+// Validation aligned with @remnawave/node-plugins@0.4.5 (NodePluginSchema).
 
 func isPlainIP(value string) bool {
 	return net.ParseIP(value) != nil
@@ -63,6 +63,19 @@ func validateStringArray(field string, raw any, itemCheck func(string) bool) err
 	return nil
 }
 
+func validateASNArray(field string, raw any) error {
+	items, ok := raw.([]any)
+	if !ok {
+		return fmt.Errorf("%s must be an array", field)
+	}
+	for i, item := range items {
+		if _, ok := parseASN(item); !ok {
+			return fmt.Errorf("%s[%d] must be a positive AS number", field, i)
+		}
+	}
+	return nil
+}
+
 func validateSharedLists(raw any) error {
 	if raw == nil {
 		return nil
@@ -80,12 +93,17 @@ func validateSharedLists(raw any) error {
 		if !strings.HasPrefix(name, "ext:") {
 			return fmt.Errorf("sharedLists[%d].name must start with ext:", i)
 		}
-		listType, _ := obj["type"].(string)
-		if listType != "ipList" {
-			return fmt.Errorf("sharedLists[%d].type must be ipList", i)
-		}
-		if err := validateStringArray(fmt.Sprintf("sharedLists[%d].items", i), obj["items"], isSharedListItem); err != nil {
-			return err
+		switch listType, _ := obj["type"].(string); listType {
+		case "ipList":
+			if err := validateStringArray(fmt.Sprintf("sharedLists[%d].items", i), obj["items"], isSharedListItem); err != nil {
+				return err
+			}
+		case "asList":
+			if err := validateASNArray(fmt.Sprintf("sharedLists[%d].items", i), obj["items"]); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("sharedLists[%d].type must be ipList or asList", i)
 		}
 	}
 	return nil
