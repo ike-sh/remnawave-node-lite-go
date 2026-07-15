@@ -110,7 +110,7 @@ func (r *RemoveUserRequest) Validate() []Issue {
 }
 
 type AddUsersRequest struct {
-	AffectedInboundTags *[]string              `json:"affectedInboundTags"`
+	AffectedInboundTags *[]*string             `json:"affectedInboundTags"`
 	Users               *[]AddUsersUserRequest `json:"users"`
 }
 
@@ -137,6 +137,10 @@ func (r *AddUsersRequest) Validate() []Issue {
 	issues := make([]Issue, 0)
 	if r.AffectedInboundTags == nil {
 		issues = append(issues, MissingIssue([]any{"affectedInboundTags"}, "array"))
+	} else {
+		for index, tag := range *r.AffectedInboundTags {
+			issues = append(issues, requireString(tag, []any{"affectedInboundTags", index})...)
+		}
 	}
 	if r.Users == nil {
 		return append(issues, MissingIssue([]any{"users"}, "array"))
@@ -200,7 +204,7 @@ func (r *RemoveUsersRequest) Validate() []Issue {
 }
 
 type DropUsersConnectionsRequest struct {
-	UserIDs *[]string `json:"userIds"`
+	UserIDs *[]*string `json:"userIds"`
 }
 
 func (r *DropUsersConnectionsRequest) Validate() []Issue {
@@ -210,11 +214,15 @@ func (r *DropUsersConnectionsRequest) Validate() []Issue {
 	if len(*r.UserIDs) == 0 {
 		return []Issue{tooSmallArrayIssue([]any{"userIds"}, 1)}
 	}
-	return nil
+	issues := make([]Issue, 0)
+	for index, userID := range *r.UserIDs {
+		issues = append(issues, requireString(userID, []any{"userIds", index})...)
+	}
+	return issues
 }
 
 type DropIPsRequest struct {
-	IPs *[]string `json:"ips"`
+	IPs *[]*string `json:"ips"`
 }
 
 func (r *DropIPsRequest) Validate() []Issue {
@@ -224,7 +232,11 @@ func (r *DropIPsRequest) Validate() []Issue {
 	if len(*r.IPs) == 0 {
 		return []Issue{tooSmallArrayIssue([]any{"ips"}, 1)}
 	}
-	return nil
+	issues := make([]Issue, 0)
+	for index, ip := range *r.IPs {
+		issues = append(issues, requireString(ip, []any{"ips", index})...)
+	}
+	return issues
 }
 
 func isHandlerUserType(value string) bool {

@@ -73,9 +73,12 @@ func TestHandlerRequestsRejectContractViolations(t *testing.T) {
 		{name: "remove user bad UUID", path: "/node/handler/remove-user", body: `{"username":"u","hashData":{"vlessUuid":"bad"}}`},
 		{name: "add users bad nested UUID", path: "/node/handler/add-users", body: `{"affectedInboundTags":[],"users":[{"inboundData":[],"userData":{"userId":"u","hashUuid":"bad","vlessUuid":"bad","trojanPassword":"","ssPassword":""}}]}`},
 		{name: "add users invalid flow", path: "/node/handler/add-users", body: `{"affectedInboundTags":[],"users":[{"inboundData":[{"type":"vless","tag":"in","flow":"invalid"}],"userData":{"userId":"u","hashUuid":"00000000-0000-4000-8000-000000000001","vlessUuid":"00000000-0000-4000-8000-000000000002","trojanPassword":"","ssPassword":""}}]}`},
+		{name: "add users null affected inbound tag", path: "/node/handler/add-users", body: `{"affectedInboundTags":[null],"users":[]}`},
 		{name: "remove users bad UUID", path: "/node/handler/remove-users", body: `{"users":[{"userId":"u","hashUuid":"bad"}]}`},
 		{name: "drop users empty", path: "/node/handler/drop-users-connections", body: `{"userIds":[]}`},
+		{name: "drop users null item", path: "/node/handler/drop-users-connections", body: `{"userIds":[null]}`},
 		{name: "drop IPs empty", path: "/node/handler/drop-ips", body: `{"ips":[]}`},
+		{name: "drop IPs null item", path: "/node/handler/drop-ips", body: `{"ips":[null]}`},
 	}
 
 	for _, test := range tests {

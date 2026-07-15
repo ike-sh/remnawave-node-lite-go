@@ -100,9 +100,12 @@ func TestHandlerValidationPrecedesAllSideEffects(t *testing.T) {
 		{name: "inbound users missing", path: "/node/handler/get-inbound-users", body: `{}`},
 		{name: "add users missing", path: "/node/handler/add-users", body: `{}`},
 		{name: "add users invalid nested UUID", path: "/node/handler/add-users", body: `{"affectedInboundTags":[],"users":[{"inboundData":[],"userData":{"userId":"u","hashUuid":"bad","vlessUuid":"bad","trojanPassword":"","ssPassword":""}}]}`},
+		{name: "add users null affected inbound tag", path: "/node/handler/add-users", body: `{"affectedInboundTags":[null],"users":[]}`},
 		{name: "remove users missing", path: "/node/handler/remove-users", body: `{}`},
 		{name: "drop users empty", path: "/node/handler/drop-users-connections", body: `{"userIds":[]}`},
+		{name: "drop users null item", path: "/node/handler/drop-users-connections", body: `{"userIds":[null]}`},
 		{name: "drop IPs empty", path: "/node/handler/drop-ips", body: `{"ips":[]}`},
+		{name: "drop IPs null item", path: "/node/handler/drop-ips", body: `{"ips":[null]}`},
 		{name: "trailing JSON", path: "/node/handler/drop-ips", body: `{"ips":["x"]}{"ips":["y"]}`},
 	}
 

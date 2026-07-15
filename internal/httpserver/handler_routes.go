@@ -76,7 +76,7 @@ func (s *Server) handleDropUsersConnections(w http.ResponseWriter, r *http.Reque
 	if !decodeNodeRequest(w, r, &request) {
 		return
 	}
-	writeNodeResponse(w, s.handlerService.DropUsersConnections(r.Context(), *request.UserIDs))
+	writeNodeResponse(w, s.handlerService.DropUsersConnections(r.Context(), stringValues(*request.UserIDs)))
 }
 
 func (s *Server) handleDropIPs(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +84,7 @@ func (s *Server) handleDropIPs(w http.ResponseWriter, r *http.Request) {
 	if !decodeNodeRequest(w, r, &request) {
 		return
 	}
-	writeNodeResponse(w, s.handlerService.DropIPs(r.Context(), *request.IPs))
+	writeNodeResponse(w, s.handlerService.DropIPs(r.Context(), stringValues(*request.IPs)))
 }
 
 func mapAddUserRequest(request nodeapi.AddUserRequest) nodehandler.AddUserRequest {
@@ -139,9 +139,19 @@ func mapAddUsersRequest(request nodeapi.AddUsersRequest) nodehandler.AddUsersReq
 		})
 	}
 	return nodehandler.AddUsersRequest{
-		AffectedInboundTags: append([]string(nil), (*request.AffectedInboundTags)...),
+		AffectedInboundTags: stringValues(*request.AffectedInboundTags),
 		Users:               users,
 	}
+}
+
+func stringValues(values []*string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != nil {
+			result = append(result, *value)
+		}
+	}
+	return result
 }
 
 func stringValue(value *string) string {
