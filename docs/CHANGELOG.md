@@ -11,10 +11,14 @@
 
 - 固化官方 Node `2.8.0@596f015` 的 26 条路由、Zod 请求/响应、错误格式和副作用为可执行契约。
 - 新增默认只读、需 mTLS/JWT 的 `contract-probe`，用于官方 Node 与 Go Node 的黑盒语义差分。
+- 新增统一 Node API 边界，覆盖 Zod 等价的必填字段、联合类型、UUID/IP、枚举、nullable/default 和数组长度校验。
 
 ### 修复
 
 - 路由测试改为校验真实 dispatcher 注册表；`/node/xray/stop` 收敛为官方定义的仅 GET，不再错误接受 POST。
+- stats、handler、plugin 与 Xray start 不再吞掉 JSON 解码和类型错误；畸形、尾随或不完整请求会在任何 provider、进程、nftables、连接和状态副作用前返回 400。
+- 已知应用错误补齐官方要求的 `timestamp`、`path`、`message` 与 `errorCode`，底层 SDK 错误不再替换官方 A001/A010-A017 文案。
+- 对齐官方边界细节：未知对象字段剥离、`forceRestart` 默认 false、空字符串与无最小长度数组、五种用户联合类型、数值型 nftables timeout。
 
 ### 维护
 
@@ -22,6 +26,7 @@
 - Go module、安装脚本、发布地址和文档归属切换到本仓库。
 - 建立行为兼容、架构修复和 512 MiB 小内存验收路线。
 - 契约 CI 验证固定官方提交、版本和所有引用的源码证据文件。
+- HTTP transport 与 stats、用户 handler、plugin 业务服务分离，业务层不再依赖 `net/http` 或自行解码 JSON。
 
 ## 参考仓库历史
 

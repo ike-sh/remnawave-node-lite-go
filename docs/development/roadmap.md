@@ -31,6 +31,15 @@
 - 请求体上限和资源保护允许形成有文档的安全偏差，但必须返回明确错误，不能静默降级。
 - nftables 插件使用独立表，可与 firewalld 共存；端口开放由系统管理员负责。
 
+## 当前进度
+
+| 里程碑 | 状态 | 本地 checkpoint |
+| --- | --- | --- |
+| M0 自有项目基线 | 已完成 | `checkpoint-m00-project-baseline` |
+| M1 契约证据 | 已完成 | `checkpoint-m01-contract-evidence` |
+| M2 API 边界 | 已完成 | `checkpoint-m02-api-boundary` |
+| M3-M8 | 待推进 | - |
+
 ## 里程碑
 
 ### M0 - 自有项目基线

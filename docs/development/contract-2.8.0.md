@@ -23,6 +23,14 @@
 - 未映射的 Nest 异常使用通用 `statusCode`、`message`、可选 `error` 响应。
 - 本项目可因资源保护设置更小的请求上限，但偏差必须明确、可观测且不得在校验前产生副作用。
 
+## Go API 边界实现
+
+M2 已将 20 个带请求 DTO 的路由统一接入 `internal/nodeapi`。解码器只接受一个 JSON 文档，保留 Zod object 的未知字段剥离语义，并为缺字段、错类型、联合类型 discriminant、UUID/IP、枚举、nullable/default 和 `minItems` 生成统一验证响应。6 个官方无请求 DTO 的路由继续忽略 body。
+
+`internal/httpserver` 只负责 decode、validate、command 映射和 response envelope；stats、用户 handler 与 plugin 服务不再接收 `http.ResponseWriter`、`*http.Request` 或自行解码 JSON。Xray 配置直接解码为一份 map 后转交 manager，不经过 RawMessage 和二次反序列化。
+
+transport 测试为 provider、连接 dropper、plugin service 和 Xray manager 注入计数 spy，验证每类非法请求的调用数为 0；合法请求则经过真实 dispatcher 后由独立官方响应 schema 再次校验。
+
 ## 路由清单
 
 表中只列核心约束；完整类型、nullable、枚举、UUID、IP、日期和数组长度约束以 `internal/contract/official_schemas.go` 的可执行 schema 为准。
@@ -74,9 +82,7 @@
 
 | 范围 | 当前偏差 | 收敛里程碑 |
 | --- | --- | --- |
-| DTO | 多数 handler 只做 `encoding/json` 解码，缺字段、错类型、UUID/IP、枚举和最小数组约束未完整执行 | M2 |
-| DTO | 各模块自行解码，尾随 JSON、错误 envelope 和未知字段语义不一致 | M2 |
-| 原子性 | 部分用户操作可能在完整校验前查询、删除用户或踢连接 | M2/M5 |
+| 用户操作 | 请求校验已先于副作用，但合法批量操作仍可能部分成功，失败聚合与状态提交语义尚未事务化 | M5 |
 | Xray | 仍存在 `last-start.json` 离线恢复和不清晰的并发生命周期 | M3 |
 | 插件 | 状态可能先于 nftables 成功提交，部分 nft 错误被吞，清理不完整 | M4 |
 | 并发 | 用户 IP 查询存在 N+1 RPC 和无界 goroutine；连接踢除结果不够真实 | M5 |
