@@ -20,6 +20,7 @@
 - DTO 校验失败返回 HTTP 400：`statusCode=400`、`message="Validation failed"`、`errors=[...]`。
 - 成功响应统一返回 HTTP 200，顶层为 `{ "response": ... }`。
 - 已知应用错误包含 `timestamp`、`path`、`message` 和 `errorCode`；当前已定义 A001-A017 中的相关错误。
+- 未映射的 Nest 异常使用通用 `statusCode`、`message`、可选 `error` 响应。
 - 本项目可因资源保护设置更小的请求上限，但偏差必须明确、可观测且不得在校验前产生副作用。
 
 ## 路由清单
@@ -99,3 +100,30 @@ REMNANODE_OFFICIAL_SOURCE=/tmp/remnawave-node-official-2.8.0-codex \
 ```
 
 测试会验证：26 条 method/path 与真实 dispatcher 完全相同；所有合法请求样例；缺字段、错类型、额外字段、未知联合类型、UUID/IP/minItems；实际 Go handler 的完整成功响应 schema；官方统一错误 schema。
+
+## 黑盒差分入口
+
+列出路由及默认安全级别：
+
+```bash
+go run ./cmd/contract-probe -list
+```
+
+准备由同一 CA 签发的 Panel 客户端证书，并用第一个 target 作为官方基准：
+
+```bash
+export REMNANODE_CONTRACT_CA=/secure/ca.pem
+export REMNANODE_CONTRACT_CERT=/secure/panel-client-cert.pem
+export REMNANODE_CONTRACT_KEY=/secure/panel-client-key.pem
+
+go run ./cmd/contract-probe \
+  -token-file /secure/panel.jwt \
+  -target official=https://127.0.0.1:2222 \
+  -target candidate=https://127.0.0.1:3222
+```
+
+如果证书只包含 DNS 名称而 target 使用 IP，需额外传入 `-server-name <证书名称>`；探针不提供跳过证书验证的选项。
+
+默认只执行 11 条无破坏性请求：健康检查、`reset=false` 的统计和 inbound 用户只读查询。探针比较状态、响应类别、应用错误码和 schema，不比较机器指标、流量值、响应大小、SHA-256 或耗时；报告不包含 JWT 和原始响应 body。
+
+启动/停止、用户增删、连接踢除、IP 统计重置、报告 drain 和 nftables 操作必须同时显式指定 `-routes` 与 `-allow-mutating`，并只应在隔离验收环境执行。

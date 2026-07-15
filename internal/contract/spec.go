@@ -32,6 +32,7 @@ type ErrorContract struct {
 	ValidationStatus    int
 	ValidationResponse  *Schema
 	ApplicationResponse *Schema
+	GenericHTTPResponse *Schema
 	AuthFailure         string
 	UnknownRoute        string
 }
@@ -40,6 +41,7 @@ var OfficialErrors = ErrorContract{
 	ValidationStatus:    http.StatusBadRequest,
 	ValidationResponse:  validationErrorSchema(),
 	ApplicationResponse: applicationErrorSchema(),
+	GenericHTTPResponse: genericHTTPErrorSchema(),
 	AuthFailure:         "destroy TLS socket without an HTTP response",
 	UnknownRoute:        "destroy TLS socket without an HTTP response",
 }
@@ -302,4 +304,35 @@ func ValidateResponse(path string, raw []byte) error {
 		return fmt.Errorf("unknown contract route %q", path)
 	}
 	return route.Response.ValidateJSON(raw)
+}
+
+// SafeForProbe reports whether the canonical request is read-only. Routes
+// omitted here either mutate state directly or can reset/drain counters.
+func (r RouteContract) SafeForProbe() bool {
+	switch r.ID {
+	case "xray.healthcheck",
+		"stats.user-online-status",
+		"stats.users",
+		"stats.system",
+		"stats.inbound",
+		"stats.outbound",
+		"stats.all-outbounds",
+		"stats.all-inbounds",
+		"stats.combined",
+		"handler.inbound-users-count",
+		"handler.inbound-users":
+		return true
+	default:
+		return false
+	}
+}
+
+func DefaultProbeRoutes() []RouteContract {
+	routes := make([]RouteContract, 0, len(officialRoutes))
+	for _, route := range officialRoutes {
+		if route.SafeForProbe() {
+			routes = append(routes, route)
+		}
+	}
+	return routes
 }

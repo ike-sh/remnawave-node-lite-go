@@ -372,3 +372,11 @@ func applicationErrorSchema() *Schema {
 		"errorCode": stringValue(),
 	}, "timestamp", "path", "message", "errorCode")
 }
+
+func genericHTTPErrorSchema() *Schema {
+	return object(map[string]*Schema{
+		"statusCode": numberValue(),
+		"message":    oneOf(stringValue(), array(stringValue())),
+		"error":      stringValue(),
+	}, "statusCode", "message")
+}

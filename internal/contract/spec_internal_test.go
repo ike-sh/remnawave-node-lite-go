@@ -120,6 +120,10 @@ func TestOfficialErrorSchemas(t *testing.T) {
 	if err := OfficialErrors.ApplicationResponse.ValidateJSON(application); err != nil {
 		t.Fatalf("application error schema: %v", err)
 	}
+	generic := []byte(`{"statusCode":500,"message":"Unknown error","error":"Internal Server Error"}`)
+	if err := OfficialErrors.GenericHTTPResponse.ValidateJSON(generic); err != nil {
+		t.Fatalf("generic HTTP error schema: %v", err)
+	}
 }
 
 func TestSchemaRejectsTrailingJSON(t *testing.T) {
