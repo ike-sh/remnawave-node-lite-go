@@ -63,8 +63,10 @@ func runNode() (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	if err := bodylimit.Configure(cfg.LowMemory, cfg.BodyLimitMB); err != nil {
+		return fmt.Errorf("configure request body limit: %w", err)
+	}
 	applyMemoryLimit(cfg.LowMemory)
-	bodylimit.Configure(cfg.LowMemory, cfg.BodyLimitMB)
 	if !netadmin.HasCapNetAdmin() {
 		log.Printf("warning: CAP_NET_ADMIN not available — nftables plugin and ss -K connection drop are disabled (check systemd AmbientCapabilities)")
 	}
@@ -195,7 +197,7 @@ func runNode() (runErr error) {
 	}
 }
 
-// applyMemoryLimit caps the Go runtime heap in low-memory mode (128/256MB VPS)
+// applyMemoryLimit caps the Go runtime heap in low-memory mode (up to 512 MiB)
 // regardless of init system, replacing the GOMEMLIMIT lines previously baked
 // into the systemd unit / OpenRC launcher. An explicit GOMEMLIMIT env always
 // wins so large nodes are never accidentally throttled.

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -115,5 +116,55 @@ func TestLoadInternalOverrides(t *testing.T) {
 	}
 	if cfg.InternalSocketPath != "/tmp/node.sock" || cfg.InternalRESTToken != "token" || cfg.LogDir != "/tmp/logs" {
 		t.Fatalf("unexpected internal config: %#v", cfg)
+	}
+}
+
+func TestLoadStrictOptionalValues(t *testing.T) {
+	for _, key := range []string{"LOW_MEMORY", "BODY_LIMIT_MB", "DISABLE_HASHED_SET_CHECK"} {
+		t.Setenv(key, "")
+	}
+	path := filepath.Join(t.TempDir(), ".env")
+	content := "NODE_PORT=3000\nSECRET_KEY=abc\nLOW_MEMORY=YES\nDISABLE_HASHED_SET_CHECK=no\nBODY_LIMIT_MB=16\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.LowMemory || cfg.DisableHashedSetCheck || cfg.BodyLimitMB != 16 {
+		t.Fatalf("unexpected optional values: %#v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidOptionalValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		line      string
+		wantError string
+	}{
+		{name: "low memory boolean", line: "LOW_MEMORY=enabled", wantError: "LOW_MEMORY must be a boolean"},
+		{name: "hash check boolean", line: "DISABLE_HASHED_SET_CHECK=disabled", wantError: "DISABLE_HASHED_SET_CHECK must be a boolean"},
+		{name: "body limit text", line: "BODY_LIMIT_MB=large", wantError: "BODY_LIMIT_MB must be an integer"},
+		{name: "body limit integer overflow", line: "BODY_LIMIT_MB=999999999999999999999999", wantError: "BODY_LIMIT_MB must be an integer"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, key := range []string{"LOW_MEMORY", "BODY_LIMIT_MB", "DISABLE_HASHED_SET_CHECK"} {
+				t.Setenv(key, "")
+			}
+			path := filepath.Join(t.TempDir(), ".env")
+			content := "NODE_PORT=3000\nSECRET_KEY=abc\n" + test.line + "\n"
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("Load error = %v, want containing %q", err, test.wantError)
+			}
+		})
 	}
 }

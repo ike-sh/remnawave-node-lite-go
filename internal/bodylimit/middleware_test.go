@@ -65,10 +65,35 @@ func TestZstdReadCloserAllowsExactLimitAndRejectsOverflow(t *testing.T) {
 }
 
 func TestLowMemoryBodyLimit(t *testing.T) {
-	Configure(true, 0)
-	t.Cleanup(func() { Configure(false, 0) })
+	if err := Configure(true, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = Configure(false, 0) })
 	if got := MaxBytesLimit(); got != lowMemoryMaxBytes {
 		t.Fatalf("low-memory body limit = %d, want %d", got, lowMemoryMaxBytes)
+	}
+}
+
+func TestConfiguredBodyLimitValidation(t *testing.T) {
+	if err := Configure(false, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = Configure(false, 0) })
+
+	for _, value := range []int{-1, maxConfiguredMB + 1} {
+		if err := Configure(false, value); err == nil {
+			t.Fatalf("Configure(%d) succeeded", value)
+		}
+		if got := MaxBytesLimit(); got != defaultMaxBytes {
+			t.Fatalf("invalid Configure(%d) changed limit to %d", value, got)
+		}
+	}
+
+	if err := Configure(false, maxConfiguredMB); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := MaxBytesLimit(), int64(maxConfiguredMB)<<20; got != want {
+		t.Fatalf("configured limit = %d, want %d", got, want)
 	}
 }
 

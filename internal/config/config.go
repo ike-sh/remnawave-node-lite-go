@@ -102,6 +102,18 @@ func Load(dotenvPath string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	disableHashedSetCheck, err := optionalBool(values, "DISABLE_HASHED_SET_CHECK", false)
+	if err != nil {
+		return Config{}, err
+	}
+	lowMemory, err := optionalBool(values, "LOW_MEMORY", false)
+	if err != nil {
+		return Config{}, err
+	}
+	bodyLimitMB, err := optionalIntDefault(values, "BODY_LIMIT_MB", 0)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		NodePort:              nodePort,
@@ -113,9 +125,9 @@ func Load(dotenvPath string) (Config, error) {
 		InternalSocketPath:    internalSocketPath,
 		InternalRESTToken:     internalRESTToken,
 		ASNDBPath:             optionalString(values, "ASN_DB_PATH", defaultASNDBPath),
-		DisableHashedSetCheck: optionalBool(values, "DISABLE_HASHED_SET_CHECK", false),
-		LowMemory:             optionalBool(values, "LOW_MEMORY", false),
-		BodyLimitMB:           optionalIntDefault(values, "BODY_LIMIT_MB", 0),
+		DisableHashedSetCheck: disableHashedSetCheck,
+		LowMemory:             lowMemory,
+		BodyLimitMB:           bodyLimitMB,
 	}, nil
 }
 
@@ -193,24 +205,31 @@ func optionalString(values map[string]string, key string, fallback string) strin
 	return fallback
 }
 
-func optionalBool(values map[string]string, key string, fallback bool) bool {
+func optionalBool(values map[string]string, key string, fallback bool) (bool, error) {
 	raw := strings.TrimSpace(values[key])
 	if raw == "" {
-		return fallback
+		return fallback, nil
 	}
-	return raw == "true" || raw == "1" || raw == "yes"
+	switch strings.ToLower(raw) {
+	case "true", "1", "yes":
+		return true, nil
+	case "false", "0", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be a boolean (true/false, 1/0, or yes/no)", key)
+	}
 }
 
-func optionalIntDefault(values map[string]string, key string, fallback int) int {
+func optionalIntDefault(values map[string]string, key string, fallback int) (int, error) {
 	raw := strings.TrimSpace(values[key])
 	if raw == "" {
-		return fallback
+		return fallback, nil
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
-	return value
+	return value, nil
 }
 
 func loadSecretFromFile(values map[string]string) (string, error) {

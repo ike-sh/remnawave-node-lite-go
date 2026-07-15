@@ -3,6 +3,7 @@ package bodylimit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -19,6 +20,7 @@ const (
 	maxCompressedZstdBytes   = 64 << 20
 	maxZstdWindowBytes       = 32 << 20
 	maxConcurrentZstdDecodes = 2
+	maxConfiguredMB          = 1024
 	zstdSlotWait             = 5 * time.Second
 )
 
@@ -30,16 +32,20 @@ func init() {
 	maxBytes.Store(defaultMaxBytes)
 }
 
-func Configure(lowMemory bool, bodyLimitMB int) {
+func Configure(lowMemory bool, bodyLimitMB int) error {
+	if bodyLimitMB < 0 || bodyLimitMB > maxConfiguredMB {
+		return fmt.Errorf("BODY_LIMIT_MB must be between 1 and %d MiB, or 0 for the default", maxConfiguredMB)
+	}
 	if bodyLimitMB > 0 {
 		maxBytes.Store(int64(bodyLimitMB) << 20)
-		return
+		return nil
 	}
 	if lowMemory {
 		maxBytes.Store(lowMemoryMaxBytes)
-		return
+		return nil
 	}
 	maxBytes.Store(defaultMaxBytes)
+	return nil
 }
 
 func MaxBytesLimit() int64 {
