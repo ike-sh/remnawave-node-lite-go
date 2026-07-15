@@ -84,7 +84,7 @@ func (s *Server) handleDropIPs(w http.ResponseWriter, r *http.Request) {
 	if !decodeNodeRequest(w, r, &request) {
 		return
 	}
-	writeNodeResponse(w, s.handlerService.DropIPs(*request.IPs))
+	writeNodeResponse(w, s.handlerService.DropIPs(r.Context(), *request.IPs))
 }
 
 func mapAddUserRequest(request nodeapi.AddUserRequest) nodehandler.AddUserRequest {

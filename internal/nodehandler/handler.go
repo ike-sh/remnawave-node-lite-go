@@ -24,7 +24,7 @@ type Provider interface {
 }
 
 type ConnectionDropper interface {
-	DropIPs(ips []string) bool
+	DropIPs(ctx context.Context, ips []string) bool
 	DropUsers(ctx context.Context, provider connections.IPListProvider, userIDs []string) bool
 }
 
@@ -175,7 +175,7 @@ func (s *Service) RemoveUser(ctx context.Context, request RemoveUserRequest) (re
 		result := s.provider.HandlerRemoveUser(ctx, tag, request.Username)
 		results = append(results, s.commitRemoved(result, tag, request.VlessUUID))
 	}
-	s.dropIPs(userIPs)
+	s.dropIPs(ctx, userIPs)
 	return requireAllResults(results), nil
 }
 
@@ -232,7 +232,7 @@ func (s *Service) RemoveUsers(ctx context.Context, request RemoveUsersRequest) (
 			result := s.provider.HandlerRemoveUser(ctx, tag, user.UserID)
 			results = append(results, s.commitRemoved(result, tag, user.HashUUID))
 		}
-		s.dropIPs(userIPs)
+		s.dropIPs(ctx, userIPs)
 	}
 	return requireAllResults(results), nil
 }
@@ -270,10 +270,10 @@ func (s *Service) DropUsersConnections(ctx context.Context, userIDs []string) Su
 	return SuccessResponse{Success: success}
 }
 
-func (s *Service) DropIPs(ips []string) SuccessResponse {
+func (s *Service) DropIPs(ctx context.Context, ips []string) SuccessResponse {
 	success := true
 	if s.dropper != nil {
-		success = s.dropper.DropIPs(ips)
+		success = s.dropper.DropIPs(ctx, ips)
 	}
 	return SuccessResponse{Success: success}
 }
@@ -330,9 +330,9 @@ func collectUserIPs(ctx context.Context, provider Provider, username string) []s
 	return ips
 }
 
-func (s *Service) dropIPs(ips []string) {
+func (s *Service) dropIPs(ctx context.Context, ips []string) {
 	if s.dropper != nil && len(ips) != 0 {
-		s.dropper.DropIPs(ips)
+		s.dropper.DropIPs(ctx, ips)
 	}
 }
 

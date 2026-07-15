@@ -19,12 +19,14 @@ jobs:
       - name: go test
         run: go test ./...
 
-      - name: nftables integration in isolated network namespace
+      - name: network administration integration in isolated namespaces
         run: |
           sudo apt-get update
-          sudo apt-get install --yes nftables
+          sudo apt-get install --yes iproute2 nftables
           sudo env "PATH=$PATH" REMNANODE_NFT_INTEGRATION=1 \
             go test ./internal/plugin -run '^TestNFTManagerInNetworkNamespace$' -count=1 -v
+          sudo env "PATH=$PATH" REMNANODE_SOCKET_KILL_INTEGRATION=1 \
+            go test ./internal/netadmin -run '^TestKillSocketsInNetworkNamespace$' -count=1 -v
 
       - name: go build
         run: go build -o /dev/null ./cmd/remnanode-lite

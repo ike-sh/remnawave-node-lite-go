@@ -262,7 +262,7 @@ func testRemoveUsersResponseShape(t *testing.T) []byte {
 
 func testDropIPsResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	return encodeEnvelope(service.DropIPs([]string{"203.0.113.10"}))
+	return encodeEnvelope(service.DropIPs(context.Background(), []string{"203.0.113.10"}))
 }
 
 func testAddUserResponseShape(t *testing.T) []byte {

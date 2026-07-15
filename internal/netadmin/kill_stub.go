@@ -2,6 +2,11 @@
 
 package netadmin
 
-func KillSocketsByIP(ip string) error {
-	return nil
+import (
+	"context"
+	"errors"
+)
+
+func KillSocketsByIP(context.Context, string) error {
+	return errors.New("socket destruction is only supported on Linux")
 }

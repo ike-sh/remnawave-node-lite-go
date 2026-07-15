@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -240,7 +241,7 @@ func (s *Service) BlockIPs(items []BlockIP) AcceptedResponse {
 		for _, item := range items {
 			ips = append(ips, item.IP)
 		}
-		s.dropper.DropIPs(ips)
+		s.dropper.DropIPs(context.Background(), ips)
 	}
 	return AcceptedResponse{Accepted: true}
 }

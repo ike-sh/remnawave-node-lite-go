@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"log/slog"
 	"math"
 	"net"
@@ -73,7 +74,7 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 		} else {
 			blocked = true
 			if s.dropper != nil {
-				s.dropper.DropIPs([]string{ip})
+				s.dropper.DropIPs(context.Background(), []string{ip})
 			}
 		}
 	}

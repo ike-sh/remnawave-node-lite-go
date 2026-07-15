@@ -74,7 +74,7 @@ type countingDropper struct {
 	calls *atomic.Int64
 }
 
-func (d countingDropper) DropIPs([]string) bool {
+func (d countingDropper) DropIPs(context.Context, []string) bool {
 	d.calls.Add(1)
 	return true
 }
