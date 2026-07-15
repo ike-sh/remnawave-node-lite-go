@@ -32,9 +32,31 @@ func TestKillSocketsInNetworkNamespace(t *testing.T) {
 	}
 
 	runIP(t, "link", "set", "lo", "up")
-	runIP(t, "address", "add", "198.51.100.1/32", "dev", "lo")
+	tests := []struct {
+		name          string
+		network       string
+		listenAddress string
+		localAddress  string
+		prefix        string
+	}{
+		{name: "ipv4", network: "tcp4", listenAddress: "127.0.0.1:0", localAddress: "198.51.100.1", prefix: "198.51.100.1/32"},
+		{name: "ipv6", network: "tcp6", listenAddress: "[::1]:0", localAddress: "2001:db8::1", prefix: "2001:db8::1/128"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runIP(t, "address", "add", test.prefix, "dev", "lo")
+			t.Cleanup(func() {
+				runIP(t, "address", "delete", test.prefix, "dev", "lo")
+			})
+			runSocketKillCase(t, test.network, test.listenAddress, test.localAddress)
+		})
+	}
+}
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+func runSocketKillCase(t *testing.T, network, listenAddress, localAddress string) {
+	t.Helper()
+
+	listener, err := net.Listen(network, listenAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,9 +75,9 @@ func TestKillSocketsInNetworkNamespace(t *testing.T) {
 
 	dialer := net.Dialer{
 		Timeout:   time.Second,
-		LocalAddr: &net.TCPAddr{IP: net.ParseIP("198.51.100.1")},
+		LocalAddr: &net.TCPAddr{IP: net.ParseIP(localAddress)},
 	}
-	client, err := dialer.Dial("tcp4", listener.Addr().String())
+	client, err := dialer.Dial(network, listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +95,7 @@ func TestKillSocketsInNetworkNamespace(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := KillSocketsByIP(ctx, "198.51.100.1"); err != nil {
+	if err := KillSocketsByIP(ctx, localAddress); err != nil {
 		t.Fatalf("KillSocketsByIP: %v", err)
 	}
 

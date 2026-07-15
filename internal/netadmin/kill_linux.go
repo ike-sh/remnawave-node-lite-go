@@ -17,13 +17,18 @@ func KillSocketsByIP(ctx context.Context, ip string) error {
 	if err != nil {
 		return fmt.Errorf("parse socket-kill IP %q: %w", ip, err)
 	}
+	addr = addr.Unmap()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	family := "-4"
-	if !addr.Unmap().Is4() {
+	target := addr.String()
+	if !addr.Is4() {
 		family = "-6"
+		// ss treats the final colon-separated component as a port unless an
+		// IPv6 address is bracketed in its filter expression.
+		target = "[" + target + "]"
 	}
 
 	var errs []error
@@ -32,7 +37,7 @@ func KillSocketsByIP(ctx context.Context, ip string) error {
 			errs = append(errs, err)
 			break
 		}
-		output, err := exec.CommandContext(ctx, "ss", family, "-K", direction, addr.String()).CombinedOutput()
+		output, err := exec.CommandContext(ctx, "ss", family, "-K", direction, target).CombinedOutput()
 		if err != nil {
 			detail := strings.TrimSpace(string(output))
 			if len(detail) > 512 {

@@ -35,6 +35,44 @@ func TestKillSocketsByIPPropagatesSSFailures(t *testing.T) {
 	}
 }
 
+func TestKillSocketsByIPBracketsIPv6ForSS(t *testing.T) {
+	dir := t.TempDir()
+	ssPath := filepath.Join(dir, "ss")
+	script := `#!/bin/sh
+case "$*" in
+  "-6 -K src [2001:db8::1]"|"-6 -K dst [2001:db8::1]") exit 0 ;;
+  *) echo "unexpected:$*" >&2; exit 23 ;;
+esac
+`
+	if err := os.WriteFile(ssPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	if err := KillSocketsByIP(context.Background(), "2001:0db8::1"); err != nil {
+		t.Fatalf("canonical IPv6 socket kill failed: %v", err)
+	}
+}
+
+func TestKillSocketsByIPUnmapsIPv4MappedAddress(t *testing.T) {
+	dir := t.TempDir()
+	ssPath := filepath.Join(dir, "ss")
+	script := `#!/bin/sh
+case "$*" in
+  "-4 -K src 203.0.113.10"|"-4 -K dst 203.0.113.10") exit 0 ;;
+  *) echo "unexpected:$*" >&2; exit 23 ;;
+esac
+`
+	if err := os.WriteFile(ssPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	if err := KillSocketsByIP(context.Background(), "::ffff:203.0.113.10"); err != nil {
+		t.Fatalf("IPv4-mapped socket kill failed: %v", err)
+	}
+}
+
 func TestKillSocketsByIPRejectsInvalidInput(t *testing.T) {
 	if err := KillSocketsByIP(context.Background(), "not-an-ip"); err == nil {
 		t.Fatal("invalid IP must not be accepted")
