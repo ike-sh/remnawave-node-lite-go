@@ -16,7 +16,9 @@ import (
 
 type recordingXrayController struct {
 	startCalls atomic.Int64
+	stopCalls  atomic.Int64
 	request    xray.StartRequest
+	events     *[]string
 }
 
 func (x *recordingXrayController) Start(_ context.Context, request xray.StartRequest) xray.StartResponse {
@@ -32,6 +34,10 @@ func (x *recordingXrayController) Start(_ context.Context, request xray.StartReq
 }
 
 func (x *recordingXrayController) Stop() xray.StopResponse {
+	x.stopCalls.Add(1)
+	if x.events != nil {
+		*x.events = append(*x.events, "stop-xray")
+	}
 	return xray.StopResponse{IsStopped: true}
 }
 
@@ -94,6 +100,33 @@ func TestXrayStartRouteProducesOfficialResponseShape(t *testing.T) {
 	}
 	if manager.startCalls.Load() != 1 {
 		t.Fatalf("manager start calls = %d, want 1", manager.startCalls.Load())
+	}
+}
+
+func TestXrayStopResetsPluginsBeforeStoppingProcess(t *testing.T) {
+	t.Parallel()
+
+	route, _ := contractspec.FindRouteByPath("/node/xray/stop")
+	events := []string{}
+	manager := &recordingXrayController{events: &events}
+	plugins := &recordingPluginController{events: &events}
+	server := &Server{manager: manager, pluginService: plugins}
+	req := httptest.NewRequest(route.Method, route.Path, nil)
+	rec := httptest.NewRecorder()
+
+	server.handleNodeRoutes(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if err := contractspec.ValidateResponse(route.Path, rec.Body.Bytes()); err != nil {
+		t.Fatalf("response violates official schema: %v\n%s", err, rec.Body.Bytes())
+	}
+	if manager.stopCalls.Load() != 1 || plugins.calls.Load() != 1 {
+		t.Fatalf("calls: stop=%d reset=%d", manager.stopCalls.Load(), plugins.calls.Load())
+	}
+	if len(events) != 2 || events[0] != "reset-plugins" || events[1] != "stop-xray" {
+		t.Fatalf("stop order = %#v", events)
 	}
 }
 

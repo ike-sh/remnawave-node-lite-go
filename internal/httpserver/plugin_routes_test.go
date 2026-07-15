@@ -16,11 +16,15 @@ type recordingPluginController struct {
 	calls      atomic.Int64
 	syncPlugin *plugin.SyncPlugin
 	blockItems []plugin.BlockIP
+	events     *[]string
 }
 
 func (p *recordingPluginController) hit() { p.calls.Add(1) }
 func (p *recordingPluginController) ResetPlugins() {
 	p.hit()
+	if p.events != nil {
+		*p.events = append(*p.events, "reset-plugins")
+	}
 }
 func (p *recordingPluginController) Sync(request *plugin.SyncPlugin) plugin.AcceptedResponse {
 	p.hit()
