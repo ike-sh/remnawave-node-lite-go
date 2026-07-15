@@ -2,6 +2,7 @@ package xray
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -79,5 +80,34 @@ func TestRotateLogIfNeededReplacesOldBackup(t *testing.T) {
 	}
 	if !bytes.Equal(backup, payload) {
 		t.Fatalf("backup must be replaced with new content, got %q", backup[:16])
+	}
+}
+
+func TestStartLogRotationChecksExistingLogsImmediately(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "xray.out.log")
+	payload := bytes.Repeat([]byte("z"), maxLogSize)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatalf("write oversized log: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	manager := &Manager{logDir: dir}
+	manager.StartLogRotation(ctx)
+
+	backup, err := os.Stat(path + ".1")
+	if err != nil {
+		t.Fatalf("stat immediate backup: %v", err)
+	}
+	if backup.Size() != int64(len(payload)) {
+		t.Fatalf("backup size = %d, want %d", backup.Size(), len(payload))
+	}
+	current, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat current log: %v", err)
+	}
+	if current.Size() != 0 {
+		t.Fatalf("current log size = %d, want 0", current.Size())
 	}
 }

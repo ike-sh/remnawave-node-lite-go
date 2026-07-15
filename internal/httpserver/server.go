@@ -66,6 +66,7 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 	server.httpServer = &http.Server{
 		Addr:              cfg.HTTPAddr(),
 		Handler:           rejectUnknownPaths(protected),
+		ErrorLog:          newHTTPErrorLogger(),
 		TLSConfig:         tlsConfig,
 		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
 		ReadHeaderTimeout: 10 * time.Second,

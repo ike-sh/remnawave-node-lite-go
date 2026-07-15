@@ -12,7 +12,7 @@ const (
 	// maxLogSize triggers rotation per log file; one ".1" backup is kept,
 	// so worst-case disk usage is ~2x maxLogSize per file.
 	maxLogSize       = 10 << 20
-	logCheckInterval = 10 * time.Minute
+	logCheckInterval = time.Minute
 )
 
 var rotatedLogFiles = []string{"xray.out.log", "xray.err.log", "openrc.log", "openrc.err.log"}
@@ -22,6 +22,7 @@ var rotatedLogFiles = []string{"xray.out.log", "xray.err.log", "openrc.log", "op
 // descriptor held by the running rw-core process stays valid because every
 // append write seeks to the (new) end of file.
 func (m *Manager) StartLogRotation(ctx context.Context) {
+	m.rotateLogs()
 	ticker := time.NewTicker(logCheckInterval)
 	defer ticker.Stop()
 	for {
