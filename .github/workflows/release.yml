@@ -1,5 +1,9 @@
 name: release
 
+env:
+  ASN_SOURCE_URL: https://github.com/remnawave/asn-index/releases/download/latest/asn-prefixes.json
+  ASN_SOURCE_SHA256: 78db1c6b8bc86861a9c4bbca07229fcc4ee8b4fe8fa5b7c6069161f66c365cfc
+
 on:
   push:
     tags:
@@ -12,9 +16,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -51,16 +55,42 @@ jobs:
               "Extract and install to /usr/local/bin/remnanode-lite" \
               > "${out_dir}/README.txt"
 
-            tar -C "${out_dir}" -czf "dist/remnanode-lite_linux_${arch}.tar.gz" remnanode-lite README.txt
+            mkdir -p "${out_dir}/support/deploy" "${out_dir}/support/scripts"
+            install -m 0644 deploy/remnawave-node.service "${out_dir}/support/deploy/"
+            install -m 0755 deploy/remnawave-node.openrc "${out_dir}/support/deploy/"
+            install -m 0644 scripts/install-env-helpers.sh "${out_dir}/support/scripts/"
+            install -m 0755 \
+              scripts/install-xray.sh \
+              scripts/upgrade.sh \
+              scripts/uninstall.sh \
+              "${out_dir}/support/scripts/"
+
+            tar -C "${out_dir}" -czf "dist/remnanode-lite_linux_${arch}.tar.gz" \
+              remnanode-lite README.txt support
             rm -rf "${out_dir}"
           done
 
-          cd dist
-          sha256sum *.tar.gz > SHA256SUMS
+          curl --fail --location --silent --show-error \
+            --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
+            "${ASN_SOURCE_URL}" -o /tmp/asn-prefixes.json
+          printf '%s  %s\n' "${ASN_SOURCE_SHA256}" /tmp/asn-prefixes.json | sha256sum --check --strict
+          go run ./cmd/asn-builder \
+            -format remnawave-json \
+            -in /tmp/asn-prefixes.json \
+            -out dist/asn-prefixes.bin
+          rm -f /tmp/asn-prefixes.json
 
-      - uses: softprops/action-gh-release@v2
+          cd dist
+          sha256sum \
+            remnanode-lite_linux_amd64.tar.gz \
+            remnanode-lite_linux_arm64.tar.gz \
+            asn-prefixes.bin \
+            > SHA256SUMS
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dist/remnanode-lite_linux_amd64.tar.gz
             dist/remnanode-lite_linux_arm64.tar.gz
+            dist/asn-prefixes.bin
             dist/SHA256SUMS
