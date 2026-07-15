@@ -40,7 +40,8 @@
 | M2 API 边界 | 已完成 | `checkpoint-m02-api-boundary` |
 | M3 Xray 生命周期 | 已完成 | `checkpoint-m03-xray-lifecycle` |
 | M4 插件与 nftables | 已完成 | `checkpoint-m04-plugin-nftables` |
-| M5-M8 | 待推进 | - |
+| M5 用户、连接与统计 | 已完成 | `checkpoint-m05-users-connections-stats` |
+| M6-M8 | 待推进 | - |
 
 ## 里程碑
 

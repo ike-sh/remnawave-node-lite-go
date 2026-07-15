@@ -12,7 +12,7 @@
 - 固化官方 Node `2.8.0@596f015` 的 26 条路由、Zod 请求/响应、错误格式和副作用为可执行契约。
 - 新增默认只读、需 mTLS/JWT 的 `contract-probe`，用于官方 Node 与 Go Node 的黑盒语义差分。
 - 新增统一 Node API 边界，覆盖 Zod 等价的必填字段、联合类型、UUID/IP、枚举、nullable/default 和数组长度校验。
-- 新增 Linux network namespace nftables 集成门禁，真实覆盖双栈规则替换、封禁、解封、重建与退出清理。
+- 新增 Linux network namespace nftables 与 socket-kill 集成门禁，真实覆盖双栈规则替换、封禁、解封、重建、退出清理和 TCP 连接关闭。
 
 ### 修复
 
@@ -27,6 +27,10 @@
 - nftables 初始化、双栈批处理、ingress/torrent 解封、recreate 重放、错误传播和退出清表统一收口；缺失元素的多种 nft 错误文案均按幂等成功处理。
 - nft 不可用时合法配置仍按官方语义接受，但 torrent effective state 保持禁用；reset 不再丢弃未 collect reports，ASN/shared list 降级会写入明确日志。
 - listener 异常不再从 goroutine 调用 `log.Fatalf` 跳过清理；统一关闭路径先停止 rw-core，再删除本项目 nftables 表。
+- 用户热更新改为可取消的串行 mutation；只有 rw-core RPC 成功且 Xray generation 未变化时才提交 inbound hash，清理失败不再继续添加该用户，批量部分失败会返回真实错误并保持可重试。
+- 连接踢除会规范化并去重 IP，保护非法、特殊、本机和白名单地址；缺少 capability、IP 查询失败、超时或任一 `ss -K` 失败不再伪报成功。
+- `get-users-ip-list` 优先使用单次批量 RPC；旧 core 只在 `UNIMPLEMENTED` 时降级到最多 8 个固定 worker，并缓存 capability，消除 N+1 无界 goroutine。
+- 所有内部 Handler/Stats unary gRPC 调用增加取消传播和有界 deadline；默认 5 秒，健康探测 3 秒，批量 legacy 查询共享总预算。
 
 ### 维护
 

@@ -60,6 +60,14 @@ M4 以官方 `plugin.service.ts`、`nft.service.ts`、`plugin-state.service.ts`�
 
 nft backend 在单个 `nft -f` 原子事务内替换 IPv4/IPv6 私有表和过滤元素，批量处理 block，unblock 同时覆盖 torrent/ingress 的双栈 set。进程退出先停止 rw-core，再删除 `remnanode`/`remnanode6`，listener 失败也会进入同一清理路径。Linux network namespace 集成测试真实覆盖初始化、两次 plan 替换、双栈 block、重复 block/unblock、recreate 和 close；M4 checkpoint 已在 Linux arm64 6.8 内核与 nftables 上通过，amd64 测试二进制已交叉编译并纳入同一 CI 门控。
 
+## Go 用户、连接与统计实现
+
+M5 将所有用户 mutation 放入可取消的串行 gate。每次 add/remove 先完成 rw-core Handler RPC，只有 RPC 成功且 Xray generation 未变化时才更新本地 inbound hash；清理失败时不继续为该用户添加新账号，批量请求的任一失败都会返回 `success=false` 和首个明确错误。多个远端 RPC 不能形成真正的跨调用事务，已经成功的前序操作不会伪装成回滚，但本地状态不会领先于 rw-core，同一 Panel 请求可以安全重试。
+
+连接踢除会先规范化和去重 IP，跳过白名单，并拒绝非法地址、unspecified、loopback、link-local、multicast、IPv4 广播和本机接口地址。每个目标的 `ss -K` 同时检查 source/destination，最长执行 3 秒；缺少 `CAP_NET_ADMIN`、用户 IP 查询失败或任一命令失败都会返回真实的 `success=false`。CI 在独立 Linux network namespace 中建立真实 TCP 连接并验证 socket 被关闭；M5 checkpoint 已在 Linux arm64 6.8 内核上通过该门禁。
+
+`get-users-ip-list` 优先使用 rw-core 的单次 `GetUsersStats` 扩展 RPC；旧 core 返回 `UNIMPLEMENTED` 后会缓存 capability 并降级为最多 8 个固定 worker，不再为每个在线用户创建 goroutine。所有 Handler/Stats unary RPC 默认共享最多 5 秒 deadline，健康探测为 3 秒，调用方已有的更早 deadline 和取消信号保持生效；legacy 批量查询使用单一总预算，不会为每个用户重新续期。
+
 ## 路由清单
 
 表中只列核心约束；完整类型、nullable、枚举、UUID、IP、日期和数组长度约束以 `internal/contract/official_schemas.go` 的可执行 schema 为准。
@@ -111,8 +119,6 @@ nft backend 在单个 `nft -f` 原子事务内替换 IPv4/IPv6 私有表和过�
 
 | 范围 | 当前偏差 | 收敛里程碑 |
 | --- | --- | --- |
-| 用户操作 | 请求校验已先于副作用，但合法批量操作仍可能部分成功，失败聚合与状态提交语义尚未事务化 | M5 |
-| 并发 | 用户 IP 查询存在 N+1 RPC 和无界 goroutine；连接踢除结果不够真实 | M5 |
 | 资源 | 配置及解码过程存在多份大对象，未完成 512 MiB 峰值验收 | M6 |
 | 传输 | 当前 TLS 最低版本为 1.2；认证失败和未知路由返回 HTTP，而官方销毁 socket | M7 |
 | 系统 | systemd 权限过宽，安装资产和辅助数据尚未全部固定摘要 | M7 |
