@@ -3,6 +3,7 @@ package plugin
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"sort"
 	"strings"
@@ -17,18 +18,22 @@ type XrayController interface {
 
 type Service struct {
 	state   *State
-	nft     *nftManager
+	nft     firewallBackend
 	dropper *connections.Dropper
 	xray    XrayController
 }
 
 func NewService(state *State, dropper *connections.Dropper, xray XrayController) *Service {
-	return &Service{
+	service := &Service{
 		state:   state,
 		nft:     newNFTManager(),
 		dropper: dropper,
 		xray:    xray,
 	}
+	if err := service.nft.Initialize(); err != nil && !errors.Is(err, errNFTablesUnavailable) {
+		slog.Warn("nftables initialization failed", "error", err)
+	}
+	return service
 }
 
 type AcceptedResponse struct {
@@ -72,10 +77,7 @@ func (s *Service) Sync(request *SyncPlugin) AcceptedResponse {
 	nowEnabled := s.state.TorrentBlockerEnabled()
 	nowIncludeTags := s.state.TorrentBlockerIncludeRuleTags()
 	if changed && s.nft.Available() {
-		_ = s.nft.recreateTables()
-		if rawConfig != nil {
-			s.syncFilters(rawConfig)
-		}
+		_ = s.nft.Apply(buildFirewallConfig(rawConfig, s.state.asnResolver()))
 	}
 
 	s.applyTorrentRestart(wasEnabled, nowEnabled, prevIncludeTags, nowIncludeTags)
@@ -98,7 +100,7 @@ func (s *Service) clearPlugin() AcceptedResponse {
 func (s *Service) ResetPlugins() {
 	s.state.Reset()
 	if s.nft.Available() {
-		_ = s.nft.recreateTables()
+		_ = s.nft.Apply(firewallConfig{})
 	}
 }
 
@@ -131,13 +133,15 @@ func (s *Service) BlockIPs(items []BlockIP) AcceptedResponse {
 	if !s.nft.Available() {
 		return AcceptedResponse{Accepted: false}
 	}
-	for _, item := range items {
-		if err := s.nft.blockIP(item.IP, item.Timeout); err != nil {
-			return AcceptedResponse{Accepted: false}
+	if err := s.nft.BlockIPs(items); err != nil {
+		return AcceptedResponse{Accepted: false}
+	}
+	if s.dropper != nil {
+		ips := make([]string, 0, len(items))
+		for _, item := range items {
+			ips = append(ips, item.IP)
 		}
-		if s.dropper != nil {
-			s.dropper.DropIPs([]string{item.IP})
-		}
+		s.dropper.DropIPs(ips)
 	}
 	return AcceptedResponse{Accepted: true}
 }
@@ -146,10 +150,8 @@ func (s *Service) UnblockIPs(ips []string) AcceptedResponse {
 	if !s.nft.Available() {
 		return AcceptedResponse{Accepted: false}
 	}
-	for _, ip := range ips {
-		if err := s.nft.unblockIP(ip); err != nil {
-			return AcceptedResponse{Accepted: false}
-		}
+	if err := s.nft.UnblockIPs(ips); err != nil {
+		return AcceptedResponse{Accepted: false}
 	}
 	return AcceptedResponse{Accepted: true}
 }
@@ -158,7 +160,7 @@ func (s *Service) RecreateTables() AcceptedResponse {
 	if !s.nft.Available() {
 		return AcceptedResponse{Accepted: false}
 	}
-	if err := s.nft.recreateTables(); err != nil {
+	if err := s.nft.Apply(firewallConfig{}); err != nil {
 		return AcceptedResponse{Accepted: false}
 	}
 	return AcceptedResponse{Accepted: true}

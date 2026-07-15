@@ -125,7 +125,7 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 	duration := s.state.torrentBlockDuration()
 	blocked := false
 	if s.nft.Available() {
-		if err := s.nft.blockIP(ip, float64(duration)); err != nil {
+		if err := s.nft.BlockIPs([]BlockIP{{IP: ip, Timeout: float64(duration)}}); err != nil {
 			slog.Warn("torrent blocker failed to block ip", "ip", ip, "error", err)
 		} else {
 			blocked = true
@@ -222,21 +222,21 @@ func buildSharedIPMap(rawConfig map[string]any, resolver ASNResolver) map[string
 	return shared
 }
 
-func (s *Service) syncFilters(cfg map[string]any) {
-	shared := buildSharedIPMap(cfg, s.state.asnResolver())
+func buildFirewallConfig(cfg map[string]any, resolver ASNResolver) firewallConfig {
+	shared := buildSharedIPMap(cfg, resolver)
+	var config firewallConfig
 	if ingress, ok := cfg["ingressFilter"].(map[string]any); ok {
 		if enabled, _ := ingress["enabled"].(bool); enabled {
-			ips := resolveIPList(toStringSlice(ingress["blockedIps"]), shared)
-			_ = s.nft.syncIngressFilter(ips)
+			config.ingressIPs = resolveIPList(toStringSlice(ingress["blockedIps"]), shared)
 		}
 	}
 	if egress, ok := cfg["egressFilter"].(map[string]any); ok {
 		if enabled, _ := egress["enabled"].(bool); enabled {
-			ips := resolveIPList(toStringSlice(egress["blockedIps"]), shared)
-			ports := toIntSlice(egress["blockedPorts"])
-			_ = s.nft.syncEgressFilter(ips, ports)
+			config.egressIPs = resolveIPList(toStringSlice(egress["blockedIps"]), shared)
+			config.egressPorts = toIntSlice(egress["blockedPorts"])
 		}
 	}
+	return config
 }
 
 func toIntSlice(value any) []int {
