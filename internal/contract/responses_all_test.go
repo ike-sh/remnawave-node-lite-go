@@ -296,10 +296,15 @@ func testGetInboundUsersCountResponseShape(t *testing.T) []byte {
 
 func testPluginSyncResponseShape(t *testing.T) []byte {
 	service := pluginService()
-	req := officialRequest(t, "/node/plugin/sync")
-	rec := httptest.NewRecorder()
-	service.HandleSync(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	request, err := plugin.NewSyncPlugin(
+		"00000000-0000-4000-8000-000000000001",
+		"node-plugin",
+		map[string]any{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(service.Sync(request))
 }
 
 func testPluginCollectReportsResponseShape(t *testing.T) []byte {
@@ -328,17 +333,12 @@ func testPluginCollectReportsResponseShape(t *testing.T) []byte {
 	}
 	state.AddReport(report)
 	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), nil)
-	rec := httptest.NewRecorder()
-	service.HandleCollectReports(rec, writeTestJSON)
-	return rec.Body.Bytes()
+	return encodeEnvelope(service.CollectReports())
 }
 
 func testPluginBlockIPsResponseShape(t *testing.T) []byte {
 	service := pluginService()
-	req := officialRequest(t, "/node/plugin/nftables/block-ips")
-	rec := httptest.NewRecorder()
-	service.HandleBlockIPs(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	return encodeEnvelope(service.BlockIPs([]plugin.BlockIP{{IP: "203.0.113.10", Timeout: 60}}))
 }
 
 func pluginService() *plugin.Service {
@@ -348,18 +348,12 @@ func pluginService() *plugin.Service {
 
 func testPluginUnblockIPsResponseShape(t *testing.T) []byte {
 	service := pluginService()
-	req := officialRequest(t, "/node/plugin/nftables/unblock-ips")
-	rec := httptest.NewRecorder()
-	service.HandleUnblockIPs(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	return encodeEnvelope(service.UnblockIPs([]string{"203.0.113.10"}))
 }
 
 func testPluginRecreateTablesResponseShape(t *testing.T) []byte {
 	service := pluginService()
-	req := officialRequest(t, "/node/plugin/nftables/recreate-tables")
-	rec := httptest.NewRecorder()
-	service.HandleRecreateTables(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	return encodeEnvelope(service.RecreateTables())
 }
 
 type stubStatsProvider struct{}

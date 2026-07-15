@@ -125,7 +125,7 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 	duration := s.state.torrentBlockDuration()
 	blocked := false
 	if s.nft.Available() {
-		if err := s.nft.blockIP(ip, duration); err != nil {
+		if err := s.nft.blockIP(ip, float64(duration)); err != nil {
 			slog.Warn("torrent blocker failed to block ip", "ip", ip, "error", err)
 		} else {
 			blocked = true

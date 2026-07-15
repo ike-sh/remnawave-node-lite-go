@@ -102,7 +102,7 @@ table ip6 %s {
 	return runNFTScript(script)
 }
 
-func (m *nftManager) blockIP(ip string, timeoutSeconds int) error {
+func (m *nftManager) blockIP(ip string, timeoutSeconds float64) error {
 	if !m.available {
 		return fmt.Errorf("nftables unavailable")
 	}
@@ -195,9 +195,9 @@ func tableFamily(table string) string {
 	return "ip"
 }
 
-func formatNFTElement(ip string, timeoutSeconds int) string {
+func formatNFTElement(ip string, timeoutSeconds float64) string {
 	if timeoutSeconds > 0 {
-		return fmt.Sprintf("%s timeout %ds", ip, timeoutSeconds)
+		return fmt.Sprintf("%s timeout %ss", ip, strconv.FormatFloat(timeoutSeconds, 'f', -1, 64))
 	}
 	return ip
 }

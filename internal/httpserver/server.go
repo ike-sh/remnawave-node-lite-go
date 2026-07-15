@@ -27,7 +27,17 @@ type Server struct {
 	manager        *xray.Manager
 	statsService   *stats.Service
 	handlerService *nodehandler.Service
-	pluginService  *plugin.Service
+	pluginService  pluginController
+}
+
+type pluginController interface {
+	ResetPlugins()
+	Sync(request *plugin.SyncPlugin) plugin.AcceptedResponse
+	CollectReports() plugin.CollectReportsResponse
+	BlockIPs(items []plugin.BlockIP) plugin.AcceptedResponse
+	UnblockIPs(ips []string) plugin.AcceptedResponse
+	RecreateTables() plugin.AcceptedResponse
+	ReportsCount() int
 }
 
 func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator, manager *xray.Manager, pluginService *plugin.Service, dropper *connections.Dropper) (*Server, error) {
@@ -73,7 +83,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
-	write := writeJSON
 	route, ok := lookupNodeRoute(r.Method, r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
@@ -132,15 +141,15 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 
 	// plugin
 	case routePluginSync:
-		s.pluginService.HandleSync(w, r, write)
+		s.handlePluginSync(w, r)
 	case routePluginCollectTorrentReports:
-		s.pluginService.HandleCollectReports(w, write)
+		s.handlePluginCollectReports(w)
 	case routePluginBlockIPs:
-		s.pluginService.HandleBlockIPs(w, r, write)
+		s.handlePluginBlockIPs(w, r)
 	case routePluginUnblockIPs:
-		s.pluginService.HandleUnblockIPs(w, r, write)
+		s.handlePluginUnblockIPs(w, r)
 	case routePluginRecreateTables:
-		s.pluginService.HandleRecreateTables(w, r, write)
+		s.handlePluginRecreateTables(w)
 	}
 }
 

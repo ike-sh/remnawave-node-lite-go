@@ -2,6 +2,7 @@ package nodeapi
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 )
@@ -25,6 +26,21 @@ func validateUUID(value *string, path []any) []Issue {
 	}
 	if !uuidPattern.MatchString(*value) {
 		return []Issue{invalidUUIDIssue(path)}
+	}
+	return nil
+}
+
+func validateIP(value *string, path []any) []Issue {
+	if value == nil {
+		return []Issue{MissingIssue(path, "string")}
+	}
+	if net.ParseIP(*value) == nil {
+		return []Issue{{
+			Code:       "invalid_string",
+			Validation: "ip",
+			Path:       nonNilPath(path),
+			Message:    "Invalid ip",
+		}}
 	}
 	return nil
 }

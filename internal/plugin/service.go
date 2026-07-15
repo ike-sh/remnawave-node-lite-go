@@ -3,9 +3,7 @@ package plugin
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"log/slog"
-	"net/http"
 	"sort"
 	"strings"
 
@@ -33,54 +31,46 @@ func NewService(state *State, dropper *connections.Dropper, xray XrayController)
 	}
 }
 
-type envelope[T any] struct {
-	Response T `json:"response"`
+type AcceptedResponse struct {
+	Accepted bool `json:"accepted"`
 }
 
-type writeJSONFn func(w http.ResponseWriter, status int, value any)
+type CollectReportsResponse struct {
+	Reports []TorrentReport `json:"reports"`
+}
 
-func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	var req struct {
-		Plugin *SyncPlugin `json:"plugin"`
-	}
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
-	}
+type BlockIP struct {
+	IP      string
+	Timeout float64
+}
 
-	if req.Plugin == nil {
-		s.handlePluginClear(write, w)
-		return
+func (s *Service) Sync(request *SyncPlugin) AcceptedResponse {
+	if request == nil {
+		return s.clearPlugin()
 	}
-
-	if isUnchangedPluginConfig(req.Plugin, s.state) {
-		writeAccepted(write, w, true)
-		return
+	if isUnchangedPluginConfig(request, s.state) {
+		return AcceptedResponse{Accepted: true}
 	}
 
-	rawConfig := extractPluginConfig(req.Plugin)
+	rawConfig := extractPluginConfig(request)
 	if err := ValidatePluginConfig(rawConfig); err != nil {
 		slog.Warn("plugin config validation failed", "error", err)
 		s.ResetPlugins()
 		if s.xray != nil {
 			s.xray.StopIfOnline()
 		}
-		writeAccepted(write, w, false)
-		return
+		return AcceptedResponse{Accepted: false}
 	}
 
 	wasEnabled := s.state.TorrentBlockerEnabled()
 	prevIncludeTags := append([]string(nil), s.state.TorrentBlockerIncludeRuleTags()...)
-
-	changed, accepted := s.state.UpdateFromSync(req.Plugin)
+	changed, accepted := s.state.UpdateFromSync(request)
 	if !accepted {
-		writeAccepted(write, w, false)
-		return
+		return AcceptedResponse{Accepted: false}
 	}
 
 	nowEnabled := s.state.TorrentBlockerEnabled()
 	nowIncludeTags := s.state.TorrentBlockerIncludeRuleTags()
-
 	if changed && s.nft.Available() {
 		_ = s.nft.recreateTables()
 		if rawConfig != nil {
@@ -89,20 +79,19 @@ func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write write
 	}
 
 	s.applyTorrentRestart(wasEnabled, nowEnabled, prevIncludeTags, nowIncludeTags)
-	writeAccepted(write, w, true)
+	return AcceptedResponse{Accepted: true}
 }
 
-func (s *Service) handlePluginClear(write writeJSONFn, w http.ResponseWriter) {
+func (s *Service) clearPlugin() AcceptedResponse {
 	if !s.state.HasActivePlugin() {
-		writeAccepted(write, w, false)
-		return
+		return AcceptedResponse{Accepted: false}
 	}
 	slog.Info("plugin sync received empty payload, cleaning up active plugin")
 	s.ResetPlugins()
 	if s.xray != nil {
 		s.xray.StopIfOnline()
 	}
-	writeAccepted(write, w, true)
+	return AcceptedResponse{Accepted: true}
 }
 
 // ResetPlugins clears plugin state and nftables plugin tables (official withPluginCleanup).
@@ -130,95 +119,53 @@ func (s *Service) applyTorrentRestart(wasEnabled, nowEnabled bool, prevIncludeTa
 	}
 }
 
-func (s *Service) HandleCollectReports(w http.ResponseWriter, write writeJSONFn) {
+func (s *Service) CollectReports() CollectReportsResponse {
 	reports := s.state.FlushReports()
 	if reports == nil {
 		reports = []TorrentReport{}
 	}
-	write(w, http.StatusOK, envelope[struct {
-		Reports []TorrentReport `json:"reports"`
-	}]{Response: struct {
-		Reports []TorrentReport `json:"reports"`
-	}{Reports: reports}})
+	return CollectReportsResponse{Reports: reports}
 }
 
-func (s *Service) HandleBlockIPs(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	var req struct {
-		IPs []struct {
-			IP      string `json:"ip"`
-			Timeout int    `json:"timeout"`
-		} `json:"ips"`
-	}
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
-	}
-
+func (s *Service) BlockIPs(items []BlockIP) AcceptedResponse {
 	if !s.nft.Available() {
-		writeAccepted(write, w, false)
-		return
+		return AcceptedResponse{Accepted: false}
 	}
-
-	for _, item := range req.IPs {
+	for _, item := range items {
 		if err := s.nft.blockIP(item.IP, item.Timeout); err != nil {
-			writeAccepted(write, w, false)
-			return
+			return AcceptedResponse{Accepted: false}
 		}
 		if s.dropper != nil {
 			s.dropper.DropIPs([]string{item.IP})
 		}
 	}
-	writeAccepted(write, w, true)
+	return AcceptedResponse{Accepted: true}
 }
 
-func (s *Service) HandleUnblockIPs(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	var req struct {
-		IPs []string `json:"ips"`
-	}
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
-	}
+func (s *Service) UnblockIPs(ips []string) AcceptedResponse {
 	if !s.nft.Available() {
-		writeAccepted(write, w, false)
-		return
+		return AcceptedResponse{Accepted: false}
 	}
-	for _, ip := range req.IPs {
+	for _, ip := range ips {
 		if err := s.nft.unblockIP(ip); err != nil {
-			writeAccepted(write, w, false)
-			return
+			return AcceptedResponse{Accepted: false}
 		}
 	}
-	writeAccepted(write, w, true)
+	return AcceptedResponse{Accepted: true}
 }
 
-func (s *Service) HandleRecreateTables(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
+func (s *Service) RecreateTables() AcceptedResponse {
 	if !s.nft.Available() {
-		writeAccepted(write, w, false)
-		return
+		return AcceptedResponse{Accepted: false}
 	}
 	if err := s.nft.recreateTables(); err != nil {
-		writeAccepted(write, w, false)
-		return
+		return AcceptedResponse{Accepted: false}
 	}
-	writeAccepted(write, w, true)
+	return AcceptedResponse{Accepted: true}
 }
 
 func (s *Service) ReportsCount() int {
 	return s.state.ReportsCount()
-}
-
-func writeAccepted(write writeJSONFn, w http.ResponseWriter, accepted bool) {
-	write(w, http.StatusOK, envelope[struct {
-		Accepted bool `json:"accepted"`
-	}]{Response: struct {
-		Accepted bool `json:"accepted"`
-	}{Accepted: accepted}})
-}
-
-func decodeBody(r *http.Request, target any) bool {
-	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(target) == nil
 }
 
 func hashIncludeRuleTags(tags []string) string {
@@ -229,8 +176,4 @@ func hashIncludeRuleTags(tags []string) string {
 	}
 	sum := sha256.Sum256([]byte(strings.Join(sorted, ",")))
 	return hex.EncodeToString(sum[:])
-}
-
-func writeError(write writeJSONFn, w http.ResponseWriter, message string) {
-	write(w, http.StatusBadRequest, map[string]any{"message": message})
 }

@@ -16,7 +16,7 @@ func (m *nftManager) recreateTables() error {
 	return nil
 }
 
-func (m *nftManager) blockIP(ip string, timeoutSeconds int) error {
+func (m *nftManager) blockIP(ip string, timeoutSeconds float64) error {
 	return nil
 }
 

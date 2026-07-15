@@ -1,10 +1,6 @@
 package plugin_test
 
 import (
-	"bytes"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
@@ -26,46 +22,36 @@ func (m *mockXray) RemoveTorrentBlockerOutbound() error {
 	return nil
 }
 
-func TestHandleSyncDisableUsesRemoveOutboundWhenNoIncludeTags(t *testing.T) {
+func TestSyncDisableUsesRemoveOutboundWhenNoIncludeTags(t *testing.T) {
 	t.Parallel()
 
 	state := plugin.NewState()
 	xray := &mockXray{}
 	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
+	_, _ = state.UpdateFromSync(torrentPlugin(t, true, nil))
 
-	_, _ = state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
-		"uuid": "00000000-0000-4000-8000-000000000001",
-		"name": "test",
-		"config": map[string]any{
-			"torrentBlocker": map[string]any{
-				"enabled":       true,
-				"blockDuration": 300,
-				"ignoreLists":   map[string]any{},
-			},
-		},
-	}))
+	response := service.Sync(torrentPlugin(t, false, nil))
 
-	body, _ := json.Marshal(map[string]any{
-		"plugin": map[string]any{
-			"uuid": "00000000-0000-4000-8000-000000000001",
-			"name": "test",
-			"config": map[string]any{
-				"torrentBlocker": map[string]any{
-					"enabled":       false,
-					"blockDuration": 0,
-					"ignoreLists":   map[string]any{},
-				},
-			},
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	write := func(w http.ResponseWriter, status int, value any) {
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(value)
+	if !response.Accepted {
+		t.Fatal("sync was not accepted")
 	}
+	if xray.removeOutbound != 1 {
+		t.Fatalf("RemoveTorrentBlockerOutbound calls = %d, want 1", xray.removeOutbound)
+	}
+	if xray.stopIfOnline != 0 {
+		t.Fatalf("StopIfOnline calls = %d, want 0", xray.stopIfOnline)
+	}
+}
 
-	service.HandleSync(rec, req, write)
+func TestSyncDisableWithStaleIncludeRuleTagsUsesRemoveOutbound(t *testing.T) {
+	t.Parallel()
+
+	state := plugin.NewState()
+	xray := &mockXray{}
+	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
+	_, _ = state.UpdateFromSync(torrentPlugin(t, true, []any{"rule-a"}))
+
+	service.Sync(torrentPlugin(t, false, []any{"rule-a"}))
 
 	if xray.removeOutbound != 1 {
 		t.Fatalf("RemoveTorrentBlockerOutbound calls = %d, want 1", xray.removeOutbound)
@@ -75,130 +61,38 @@ func TestHandleSyncDisableUsesRemoveOutboundWhenNoIncludeTags(t *testing.T) {
 	}
 }
 
-func TestHandleSyncDisableWithStaleIncludeRuleTagsUsesRemoveOutbound(t *testing.T) {
+func TestSyncIncludeRuleTagsChangeRestartsXray(t *testing.T) {
 	t.Parallel()
 
 	state := plugin.NewState()
 	xray := &mockXray{}
 	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
+	_, _ = state.UpdateFromSync(torrentPlugin(t, true, []any{"rule-a"}))
 
-	_, _ = state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
-		"uuid": "00000000-0000-4000-8000-000000000001",
-		"name": "test",
-		"config": map[string]any{
-			"torrentBlocker": map[string]any{
-				"enabled":         true,
-				"blockDuration":   300,
-				"ignoreLists":     map[string]any{},
-				"includeRuleTags": []any{"rule-a"},
-			},
-		},
-	}))
-
-	body, _ := json.Marshal(map[string]any{
-		"plugin": map[string]any{
-			"uuid": "00000000-0000-4000-8000-000000000001",
-			"name": "test",
-			"config": map[string]any{
-				"torrentBlocker": map[string]any{
-					"enabled":         false,
-					"blockDuration":   0,
-					"ignoreLists":     map[string]any{},
-					"includeRuleTags": []any{"rule-a"},
-				},
-			},
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	write := func(w http.ResponseWriter, status int, value any) {
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(value)
-	}
-
-	service.HandleSync(rec, req, write)
-
-	if xray.removeOutbound != 1 {
-		t.Fatalf("RemoveTorrentBlockerOutbound calls = %d, want 1", xray.removeOutbound)
-	}
-	if xray.stopIfOnline != 0 {
-		t.Fatalf("StopIfOnline calls = %d, want 0", xray.stopIfOnline)
-	}
-}
-
-func TestHandleSyncIncludeRuleTagsChangeRestartsXray(t *testing.T) {
-	t.Parallel()
-
-	state := plugin.NewState()
-	xray := &mockXray{}
-	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
-
-	_, _ = state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
-		"uuid": "00000000-0000-4000-8000-000000000001",
-		"name": "test",
-		"config": map[string]any{
-			"torrentBlocker": map[string]any{
-				"enabled":         true,
-				"blockDuration":   300,
-				"ignoreLists":     map[string]any{},
-				"includeRuleTags": []any{"rule-a"},
-			},
-		},
-	}))
-
-	body, _ := json.Marshal(map[string]any{
-		"plugin": map[string]any{
-			"uuid": "00000000-0000-4000-8000-000000000001",
-			"name": "test",
-			"config": map[string]any{
-				"torrentBlocker": map[string]any{
-					"enabled":         true,
-					"blockDuration":   300,
-					"ignoreLists":     map[string]any{},
-					"includeRuleTags": []any{"rule-b"},
-				},
-			},
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	write := func(w http.ResponseWriter, status int, value any) {
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(value)
-	}
-
-	service.HandleSync(rec, req, write)
+	service.Sync(torrentPlugin(t, true, []any{"rule-b"}))
 
 	if xray.stopIfOnline != 1 {
 		t.Fatalf("StopIfOnline calls = %d, want 1", xray.stopIfOnline)
 	}
 }
 
-func TestHandleSyncInvalidConfigStopsXray(t *testing.T) {
+func TestSyncInvalidConfigStopsXray(t *testing.T) {
 	t.Parallel()
 
 	state := plugin.NewState()
 	xray := &mockXray{}
 	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
-
-	body, _ := json.Marshal(map[string]any{
-		"plugin": map[string]any{
-			"uuid": "00000000-0000-4000-8000-000000000001",
-			"name": "test",
-			"config": map[string]any{
-				"sharedLists": "invalid",
-			},
-		},
+	request := mustSyncPlugin(t, map[string]any{
+		"uuid":   "00000000-0000-4000-8000-000000000001",
+		"name":   "test",
+		"config": map[string]any{"sharedLists": "invalid"},
 	})
-	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	write := func(w http.ResponseWriter, status int, value any) {
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(value)
+
+	response := service.Sync(request)
+
+	if response.Accepted {
+		t.Fatal("invalid config was accepted")
 	}
-
-	service.HandleSync(rec, req, write)
-
 	if xray.stopIfOnline != 1 {
 		t.Fatalf("StopIfOnline calls = %d, want 1", xray.stopIfOnline)
 	}
@@ -207,36 +101,20 @@ func TestHandleSyncInvalidConfigStopsXray(t *testing.T) {
 	}
 }
 
-func TestHandleSyncUnchangedConfigSkipsRestart(t *testing.T) {
+func TestSyncUnchangedConfigSkipsRestart(t *testing.T) {
 	t.Parallel()
 
 	state := plugin.NewState()
 	xray := &mockXray{}
 	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
+	request := torrentPlugin(t, true, nil)
+	_, _ = state.UpdateFromSync(request)
 
-	pluginConfig := map[string]any{
-		"uuid": "00000000-0000-4000-8000-000000000001",
-		"name": "test",
-		"config": map[string]any{
-			"torrentBlocker": map[string]any{
-				"enabled":       true,
-				"blockDuration": 300,
-				"ignoreLists":   map[string]any{},
-			},
-		},
+	response := service.Sync(request)
+
+	if !response.Accepted {
+		t.Fatal("unchanged config was not accepted")
 	}
-	_, _ = state.UpdateFromSync(mustSyncPlugin(t, pluginConfig))
-
-	body, _ := json.Marshal(map[string]any{"plugin": pluginConfig})
-	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	write := func(w http.ResponseWriter, status int, value any) {
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(value)
-	}
-
-	service.HandleSync(rec, req, write)
-
 	if xray.stopIfOnline != 0 || xray.removeOutbound != 0 {
 		t.Fatalf("expected no xray side effects, stop=%d remove=%d", xray.stopIfOnline, xray.removeOutbound)
 	}
@@ -247,18 +125,7 @@ func TestResetPluginsClearsActivePlugin(t *testing.T) {
 
 	state := plugin.NewState()
 	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), &mockXray{})
-
-	_, _ = state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
-		"uuid": "00000000-0000-4000-8000-000000000001",
-		"name": "test",
-		"config": map[string]any{
-			"torrentBlocker": map[string]any{
-				"enabled":       true,
-				"blockDuration": 300,
-				"ignoreLists":   map[string]any{},
-			},
-		},
-	}))
+	_, _ = state.UpdateFromSync(torrentPlugin(t, true, nil))
 	if !state.HasActivePlugin() {
 		t.Fatal("expected active plugin before reset")
 	}
@@ -268,4 +135,21 @@ func TestResetPluginsClearsActivePlugin(t *testing.T) {
 	if state.HasActivePlugin() {
 		t.Fatal("expected plugin state cleared after ResetPlugins")
 	}
+}
+
+func torrentPlugin(t *testing.T, enabled bool, includeRuleTags []any) *plugin.SyncPlugin {
+	t.Helper()
+	torrent := map[string]any{
+		"enabled":       enabled,
+		"blockDuration": 300,
+		"ignoreLists":   map[string]any{},
+	}
+	if includeRuleTags != nil {
+		torrent["includeRuleTags"] = includeRuleTags
+	}
+	return mustSyncPlugin(t, map[string]any{
+		"uuid":   "00000000-0000-4000-8000-000000000001",
+		"name":   "test",
+		"config": map[string]any{"torrentBlocker": torrent},
+	})
 }
