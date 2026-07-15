@@ -91,9 +91,9 @@ type ConfigHash struct {
 }
 
 type InboundHash struct {
-	UsersCount int    `json:"usersCount"`
-	Hash       string `json:"hash"`
-	Tag        string `json:"tag"`
+	UsersCount float64 `json:"usersCount"`
+	Hash       string  `json:"hash"`
+	Tag        string  `json:"tag"`
 }
 
 type StartResponse struct {
