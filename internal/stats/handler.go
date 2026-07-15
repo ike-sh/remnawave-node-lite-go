@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"remnawave-node-lite-go/internal/system"
-	"remnawave-node-lite-go/internal/xtls"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/system"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
 type Provider interface {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"remnawave-node-lite-go/internal/config"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/config"
 )
 
 func TestRunMissingEnv(t *testing.T) {

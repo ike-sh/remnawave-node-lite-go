@@ -24,7 +24,7 @@ import (
 
 	"go4.org/netipx"
 
-	"remnawave-node-lite-go/internal/asn"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/asn"
 )
 
 func main() {

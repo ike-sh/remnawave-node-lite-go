@@ -10,11 +10,12 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 | 项目 | 说明 |
 | --- | --- |
-| 当前版本 | [v1.1.0](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.1.0) |
-| Panel 契约 | `@remnawave/node` v2.8.0（上报 `nodeVersion=2.8.0`） |
+| 当前版本 | `0.1.0`（开发中） |
+| 兼容基线 | `@remnawave/node` `2.8.0@596f015`，Panel `2.8.1` |
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
+| 改造路线 | [roadmap.md](docs/development/roadmap.md) |
 
-安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v1.1.0` 指定版本。
+安装脚本默认拉取本仓库最新 Release；可通过环境变量 `RNL_TAG=v0.1.0` 指定版本。
 
 ---
 
@@ -32,7 +33,7 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 ### systemd（Debian / Ubuntu 等）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/scripts/install-node.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/install-node.sh | sudo bash
 ```
 
 交互菜单：**安装 · 升级 · 卸载 · 退出**
@@ -41,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/
 
 ```bash
 apk add --no-cache curl bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/scripts/install-node-alpine.sh -o /tmp/install-alpine.sh
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/install-node-alpine.sh -o /tmp/install-alpine.sh
 bash /tmp/install-alpine.sh
 ```
 
@@ -62,7 +63,7 @@ bash /tmp/install-alpine.sh
 
 ```bash
 SECRET_KEY='eyJ...' NODE_PORT=2222 \
-  curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/scripts/install-node.sh \
+  curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/install-node.sh \
   | sudo bash -s -- --yes
 ```
 
@@ -89,7 +90,7 @@ LOG_DIR=/var/log/remnanode
 ## 升级
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/scripts/upgrade.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/upgrade.sh | sudo bash -s -- --yes
 ```
 
 升级保留现有 `node.env`、数据目录及 rw-core。同步升级 rw-core：
@@ -109,7 +110,7 @@ sudo RNL_UPGRADE_XRAY=1 bash upgrade.sh --yes
 | 命令行 | `bash uninstall.sh --full` | 等同完全卸载 |
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/scripts/uninstall.sh | bash -s -- --full
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/uninstall.sh | bash -s -- --full
 ```
 
 ---
@@ -130,7 +131,9 @@ xerrors  # rw-core 错误输出
 
 ## 功能与兼容性
 
-实现与官方 `@remnawave/node` v2.8.0 对齐的 **26 条 REST API**，涵盖：
+目标是与官方 `@remnawave/node` v2.8.0 的 **26 条 REST API** 达到行为级兼容。当前 `0.1.0` 仍在按[改造路线](docs/development/roadmap.md)补齐契约、失败语义和真实集成测试，尚不作为生产稳定版发布。
+
+功能范围涵盖：
 
 - 节点注册与 mTLS / JWT 认证
 - Xray 生命周期（启动、停止、配置热更新）

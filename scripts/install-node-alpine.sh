@@ -2,7 +2,7 @@
 # remnawave-node-lite-go Alpine Linux 一键安装（OpenRC）
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="0.1.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -12,7 +12,7 @@ RUN_WRAPPER="${PREFIX}/remnawave-node-run"
 BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
 SECRET_FILE="${ETC_DIR}/secret.key"
-REPO="${RNL_REPO:-ike-sh/remnawave-node-lite-go}"
+REPO="${RNL_REPO:-Luxiaba/remnawave-node-lite-go}"
 RESTART_CMD="rc-service remnawave-node restart"
 export RESTART_CMD
 

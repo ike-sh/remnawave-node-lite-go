@@ -1,6 +1,6 @@
 [Unit]
 Description=Remnawave Node Lite (Go)
-Documentation=https://github.com/ike-sh/remnawave-node-lite-go
+Documentation=https://github.com/Luxiaba/remnawave-node-lite-go
 After=network-online.target
 Wants=network-online.target
 

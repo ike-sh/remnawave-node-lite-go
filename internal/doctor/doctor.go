@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"remnawave-node-lite-go/internal/config"
-	"remnawave-node-lite-go/internal/netadmin"
-	"remnawave-node-lite-go/internal/version"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/config"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/version"
 )
 
 const defaultEnvPath = "/etc/remnanode/node.env"
@@ -126,7 +126,7 @@ func checkSystemdCapNetAdmin() result {
 		level:   "WARN",
 		title:   "systemd unit",
 		detail:  "未包含 AmbientCapabilities=CAP_NET_ADMIN",
-		fixHint: "sudo curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v" + version.Version + "/deploy/remnawave-node.service -o " + defaultUnitPath + " && sudo systemctl daemon-reload && sudo systemctl restart remnawave-node",
+		fixHint: "sudo curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v" + version.Version + "/deploy/remnawave-node.service -o " + defaultUnitPath + " && sudo systemctl daemon-reload && sudo systemctl restart remnawave-node",
 	}
 }
 

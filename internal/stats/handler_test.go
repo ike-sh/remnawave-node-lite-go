@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"remnawave-node-lite-go/internal/stats"
-	"remnawave-node-lite-go/internal/xtls"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/stats"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
 type mockProvider struct {

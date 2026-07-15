@@ -1,4 +1,4 @@
-module remnawave-node-lite-go
+module github.com/Luxiaba/remnawave-node-lite-go
 
 go 1.26
 

@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"remnawave-node-lite-go/internal/system"
-	"remnawave-node-lite-go/internal/unixconfig"
-	nodeversion "remnawave-node-lite-go/internal/version"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/system"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/unixconfig"
+	nodeversion "github.com/Luxiaba/remnawave-node-lite-go/internal/version"
 )
 
 type Options struct {

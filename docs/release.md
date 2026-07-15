@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-- GitHub 仓库：`ike-sh/remnawave-node-lite-go`
+- GitHub 仓库：`Luxiaba/remnawave-node-lite-go`
 - 本地已配置 `git remote origin`
 - GitHub Actions `release.yml` 已启用（push tag 自动构建）
 
@@ -33,10 +33,10 @@ go build -o remnanode-lite ./cmd/remnanode-lite
 
 ```bash
 git add -A
-git commit -m "release: v1.0.0"
-git tag v1.0.0
+git commit -m "release: v0.1.0"
+git tag v0.1.0
 git push origin main
-git push origin v1.0.0
+git push origin v0.1.0
 ```
 
 ## 4. 等待 CI Release
@@ -50,7 +50,7 @@ git push origin v1.0.0
 ## 5. 服务器验证
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v1.0.0/scripts/upgrade.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/upgrade.sh | sudo bash -s -- --yes
 sudo remnanode-lite doctor
 journalctl -u remnawave-node -n 50 --no-pager
 ```

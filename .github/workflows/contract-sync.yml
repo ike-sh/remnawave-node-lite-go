@@ -2,14 +2,12 @@ name: contract-sync
 
 on:
   schedule:
-    # 每周一 UTC 02:00 对比官方 remnawave/node contract
     - cron: "0 2 * * 1"
   workflow_dispatch:
-    inputs:
-      upstream_ref:
-        description: "remnawave/node git ref (tag/branch)"
-        required: false
-        default: "main"
+
+env:
+  OFFICIAL_NODE_REF: "2.8.0"
+  OFFICIAL_NODE_COMMIT: "596f015a5c8f876dc9a9d61b6cb78d35bd8e379b"
 
 jobs:
   compare-routes:
@@ -17,63 +15,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone upstream remnawave/node
+      - name: Clone pinned official Remnawave Node
         run: |
-          ref="${{ github.event.inputs.upstream_ref || 'main' }}"
-          git clone --depth 1 --branch "$ref" https://github.com/remnawave/node.git /tmp/remnawave-node || \
-            git clone --depth 1 https://github.com/remnawave/node.git /tmp/remnawave-node
+          git clone --depth 1 --branch "$OFFICIAL_NODE_REF" \
+            https://github.com/remnawave/node.git /tmp/remnawave-node
+          actual_commit="$(git -C /tmp/remnawave-node rev-parse HEAD)"
+          if [ "$actual_commit" != "$OFFICIAL_NODE_COMMIT" ]; then
+            echo "::error::official Node ref resolved to $actual_commit, expected $OFFICIAL_NODE_COMMIT"
+            exit 1
+          fi
 
-      - name: Report upstream version
+      - name: Verify pinned contract version
         id: official
         run: |
-          ver=$(python3 -c "import json; print(json.load(open('/tmp/remnawave-node/package.json'))['version'])")
-          local_ver=$(tr -d ' \n\r' < internal/version/contract.version)
-          echo "Upstream @remnawave/node version: $ver"
-          echo "Lite-go contract.version: $local_ver"
-          echo "upstream_version=$ver" >> "$GITHUB_OUTPUT"
-          if [ "$ver" != "$local_ver" ]; then
-            echo "::error::contract.version ($local_ver) != upstream ($ver) — update internal/version/contract.version and version.go ContractVersion default"
+          official_version="$(jq -r '.version' /tmp/remnawave-node/package.json)"
+          local_version="$(tr -d ' \n\r' < internal/version/contract.version)"
+          if [ "$official_version" != "$local_version" ]; then
+            echo "::error::contract.version ($local_version) != official Node ($official_version)"
             exit 1
           fi
-          if [ "$ver" != "2.8.0" ]; then
-            echo "::notice::Upstream node bumped to $ver — review contract diff manually"
-          fi
-          python3 <<'PY'
-          import re, pathlib
-          text = pathlib.Path("/tmp/remnawave-node/libs/contract/api/routes.ts").read_text()
-          paths = set()
-          for m in re.finditer(r"`(\$\{ROOT\}/[^`]+)`", text):
-              p = m.group(1).replace("${ROOT}", "")
-              paths.add(p)
-          for p in sorted(paths):
-              print(p)
-          PY > /tmp/official-routes.txt
-          echo "count=$(wc -l < /tmp/official-routes.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
-
-      - name: Extract lite-go implemented routes
-        run: |
-          grep -E '^\s*"/node/' internal/contract/routes_test.go \
-            | sed 's/.*"\(\/[^"]*\)".*/\1/' \
-            | sort -u > /tmp/lite-routes.txt
-
-      - name: Diff routes
-        run: |
-          echo "=== Official only (missing in lite-go) ==="
-          comm -23 /tmp/official-routes.txt /tmp/lite-routes.txt || true
-          echo ""
-          echo "=== Lite-go only (not in official contract) ==="
-          comm -13 /tmp/official-routes.txt /tmp/lite-routes.txt || true
-          echo ""
-          missing=$(comm -23 /tmp/official-routes.txt /tmp/lite-routes.txt | wc -l | tr -d ' ')
-          if [ "$missing" != "0" ]; then
-            echo "::error::Found $missing official route(s) not covered in lite-go contract test"
-            exit 1
-          fi
-          echo "All ${{ steps.official.outputs.count }} official routes are covered."
+          echo "version=$official_version" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: go test contract
+      - name: Test contract package
         run: go test ./internal/contract/...

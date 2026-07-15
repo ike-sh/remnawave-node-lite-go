@@ -11,15 +11,15 @@ import (
 	"net/http"
 	"time"
 
-	"remnawave-node-lite-go/internal/auth"
-	"remnawave-node-lite-go/internal/bodylimit"
-	"remnawave-node-lite-go/internal/config"
-	"remnawave-node-lite-go/internal/connections"
-	"remnawave-node-lite-go/internal/nodehandler"
-	"remnawave-node-lite-go/internal/plugin"
-	"remnawave-node-lite-go/internal/secret"
-	"remnawave-node-lite-go/internal/stats"
-	"remnawave-node-lite-go/internal/xray"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/auth"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/bodylimit"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/config"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/nodehandler"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/secret"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/stats"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xray"
 )
 
 type Server struct {

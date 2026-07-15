@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"remnawave-node-lite-go/internal/connections"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
 )
 
 type XrayController interface {

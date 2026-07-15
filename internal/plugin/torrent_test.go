@@ -3,7 +3,7 @@ package plugin_test
 import (
 	"testing"
 
-	"remnawave-node-lite-go/internal/plugin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
 )
 
 func TestExtractWebhookIP(t *testing.T) {

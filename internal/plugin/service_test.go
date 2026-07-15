@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"remnawave-node-lite-go/internal/connections"
-	"remnawave-node-lite-go/internal/plugin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
 )
 
 type mockXray struct {

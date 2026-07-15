@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"remnawave-node-lite-go/internal/netadmin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
 )
 
 type nftManager struct {

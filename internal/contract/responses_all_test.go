@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"remnawave-node-lite-go/internal/connections"
-	"remnawave-node-lite-go/internal/nodehandler"
-	"remnawave-node-lite-go/internal/plugin"
-	"remnawave-node-lite-go/internal/stats"
-	"remnawave-node-lite-go/internal/xray"
-	"remnawave-node-lite-go/internal/xtls"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/nodehandler"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/stats"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xray"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
 var responseShapeTests = map[string]func(t *testing.T){

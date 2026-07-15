@@ -5,7 +5,7 @@ import (
 )
 
 // Official @remnawave/node REST paths (from libs/contract/api/routes.ts).
-// Baseline: upstream v2.8.0 (2026-06-29) — contract-sync CI tracks main weekly.
+// Baseline: official Node 2.8.0 at 596f015; contract-sync CI verifies this pin.
 var officialRoutes = []string{
 	"/node/xray/start",
 	"/node/xray/stop",

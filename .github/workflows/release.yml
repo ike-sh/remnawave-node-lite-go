@@ -31,7 +31,7 @@ jobs:
             out_dir="$(mktemp -d)"
             CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
               go build -trimpath \
-                -ldflags="-s -w -X remnawave-node-lite-go/internal/version.Version=${VERSION} -X remnawave-node-lite-go/internal/version.ContractVersion=${CONTRACT_VERSION}" \
+                -ldflags="-s -w -X github.com/Luxiaba/remnawave-node-lite-go/internal/version.Version=${VERSION} -X github.com/Luxiaba/remnawave-node-lite-go/internal/version.ContractVersion=${CONTRACT_VERSION}" \
                 -o "${out_dir}/remnanode-lite" \
                 ./cmd/remnanode-lite
 

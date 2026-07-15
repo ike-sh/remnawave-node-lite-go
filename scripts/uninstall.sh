@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 卸载脚本（systemd / Alpine OpenRC）
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="0.1.0"
 PREFIX="/usr/local/bin"
 BIN_NAME="remnanode-lite"
 RUN_WRAPPER="${PREFIX}/remnawave-node-run"
@@ -342,9 +342,9 @@ main() {
     echo
     echo "重新安装："
     if is_alpine; then
-      echo "  curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v${VERSION}/scripts/install-node-alpine.sh | bash"
+      echo "  curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v${VERSION}/scripts/install-node-alpine.sh | bash"
     else
-      echo "  curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v${VERSION}/scripts/install-node.sh | sudo bash"
+      echo "  curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v${VERSION}/scripts/install-node.sh | sudo bash"
     fi
   fi
 }

@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"remnawave-node-lite-go/internal/netadmin"
-	"remnawave-node-lite-go/internal/xtls"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
 type IPListProvider interface {

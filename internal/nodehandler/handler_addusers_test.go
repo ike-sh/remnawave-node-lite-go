@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"remnawave-node-lite-go/internal/connections"
-	"remnawave-node-lite-go/internal/nodehandler"
-	"remnawave-node-lite-go/internal/xtls"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/nodehandler"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
 type hashTrackingProvider struct {

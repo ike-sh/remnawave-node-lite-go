@@ -1,7 +1,7 @@
 package xray
 
 import (
-	"remnawave-node-lite-go/internal/netadmin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
 )
 
 const (

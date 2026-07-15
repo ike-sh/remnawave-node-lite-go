@@ -3,6 +3,20 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [0.1.0] - Unreleased
+
+这是 `Luxiaba/remnawave-node-lite-go` 的首个自有版本线，兼容目标固定为官方 Node 2.8.0 与 Panel 2.8.1。
+
+### 维护
+
+- 从参考仓库 `ike-sh/remnawave-node-lite-go@0821988` 建立干净基线。
+- Go module、安装脚本、发布地址和文档归属切换到本仓库。
+- 建立行为兼容、架构修复和 512 MiB 小内存验收路线。
+
+## 参考仓库历史
+
+以下记录继承自参考仓库，仅用于追溯基线，不代表本仓库发布过这些版本。
+
 ## [1.1.0] - 2026-06-30
 
 对齐上游 `@remnawave/node` v2.8.0。

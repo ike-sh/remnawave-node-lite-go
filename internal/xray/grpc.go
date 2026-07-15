@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"remnawave-node-lite-go/internal/xtls"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
 func (m *Manager) statsAPI(ctx context.Context, requireOnline bool) (*xtls.StatsAPI, func(), error) {

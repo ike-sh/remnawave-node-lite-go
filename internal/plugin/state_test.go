@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"remnawave-node-lite-go/internal/plugin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
 )
 
 func mustSyncPlugin(t *testing.T, raw map[string]any) *plugin.SyncPlugin {
