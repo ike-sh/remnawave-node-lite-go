@@ -7,11 +7,21 @@
 
 这是 `Luxiaba/remnawave-node-lite-go` 的首个自有版本线，兼容目标固定为官方 Node 2.8.0 与 Panel 2.8.1。
 
+### 新增
+
+- 固化官方 Node `2.8.0@596f015` 的 26 条路由、Zod 请求/响应、错误格式和副作用为可执行契约。
+- 新增默认只读、需 mTLS/JWT 的 `contract-probe`，用于官方 Node 与 Go Node 的黑盒语义差分。
+
+### 修复
+
+- 路由测试改为校验真实 dispatcher 注册表；`/node/xray/stop` 收敛为官方定义的仅 GET，不再错误接受 POST。
+
 ### 维护
 
 - 从参考仓库 `ike-sh/remnawave-node-lite-go@0821988` 建立干净基线。
 - Go module、安装脚本、发布地址和文档归属切换到本仓库。
 - 建立行为兼容、架构修复和 512 MiB 小内存验收路线。
+- 契约 CI 验证固定官方提交、版本和所有引用的源码证据文件。
 
 ## 参考仓库历史
 

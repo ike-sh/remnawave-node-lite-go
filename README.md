@@ -131,7 +131,7 @@ xerrors  # rw-core 错误输出
 
 ## 功能与兼容性
 
-目标是与官方 `@remnawave/node` v2.8.0 的 **26 条 REST API** 达到行为级兼容。当前 `0.1.0` 仍在按[改造路线](docs/development/roadmap.md)补齐契约、失败语义和真实集成测试，尚不作为生产稳定版发布。
+目标是与官方 `@remnawave/node` v2.8.0 的 **26 条 REST API** 达到行为级兼容，具体方法、schema、错误与已知偏差见[契约基线](docs/development/contract-2.8.0.md)。当前 `0.1.0` 仍在按[改造路线](docs/development/roadmap.md)补齐失败语义和真实集成测试，尚不作为生产稳定版发布。
 
 功能范围涵盖：
 
