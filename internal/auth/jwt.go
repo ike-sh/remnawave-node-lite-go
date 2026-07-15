@@ -10,7 +10,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 )
@@ -50,16 +49,6 @@ func NewJWTValidatorWithClaims(publicKeyPEM string, claims ClaimExpectations) (*
 		claims:    claims,
 		now:       time.Now,
 	}, nil
-}
-
-func (v *JWTValidator) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := v.ValidateBearer(r.Header.Get("Authorization")); err != nil {
-			writeUnauthorized(w)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (v *JWTValidator) ValidateBearer(header string) error {
@@ -214,10 +203,4 @@ func parseRSAPublicKey(publicKeyPEM string) (*rsa.PublicKey, error) {
 	}
 
 	return nil, errors.New("unsupported JWT public key PEM")
-}
-
-func writeUnauthorized(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte(`{"message":"Unauthorized","errorCode":"A003"}`))
 }

@@ -244,11 +244,7 @@ func TestHandleNodeRoutesUnknownPath(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/node/unknown", nil)
 	rec := httptest.NewRecorder()
 
-	server.handleNodeRoutes(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
-	}
+	assertRequestAborted(t, func() { server.handleNodeRoutes(rec, req) })
 }
 
 func TestHandleNodeRoutesRejectsUnregisteredMethod(t *testing.T) {
@@ -263,10 +259,17 @@ func TestHandleNodeRoutesRejectsUnregisteredMethod(t *testing.T) {
 		req := httptest.NewRequest(wrongMethod, route.Path, nil)
 		rec := httptest.NewRecorder()
 
-		server.handleNodeRoutes(rec, req)
-
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("%s %s status = %d, want 404", wrongMethod, route.Path, rec.Code)
-		}
+		assertRequestAborted(t, func() { server.handleNodeRoutes(rec, req) })
 	}
+}
+
+func assertRequestAborted(t *testing.T, call func()) {
+	t.Helper()
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("panic = %v, want http.ErrAbortHandler", recovered)
+		}
+	}()
+	call()
+	t.Fatal("request was not aborted")
 }

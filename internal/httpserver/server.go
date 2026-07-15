@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/auth"
@@ -52,7 +53,6 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 		return nil, err
 	}
 
-	mux := http.NewServeMux()
 	server := &Server{
 		manager:        manager,
 		statsService:   stats.NewService(manager, pluginService),
@@ -60,20 +60,41 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 		pluginService:  pluginService,
 	}
 
-	protected := validator.Middleware(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes))))
-	mux.Handle("/node/", protected)
+	nodeRoutes := bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes)))
+	protected := requireJWT(validator, nodeRoutes)
 
 	server.httpServer = &http.Server{
 		Addr:              cfg.HTTPAddr(),
-		Handler:           mux,
+		Handler:           rejectUnknownPaths(protected),
 		TLSConfig:         tlsConfig,
+		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       5 * time.Minute,
 		WriteTimeout:      5 * time.Minute,
 		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 	}
 
 	return server, nil
+}
+
+func requireJWT(validator *auth.JWTValidator, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := validator.ValidateBearer(r.Header.Get("Authorization")); err != nil {
+			slog.Warn("dropping request with invalid JWT", "path", r.URL.Path, "remote", r.RemoteAddr)
+			panic(http.ErrAbortHandler)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func rejectUnknownPaths(nodeHandler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/node/") {
+			panic(http.ErrAbortHandler)
+		}
+		nodeHandler.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) ListenAndServeTLS() error {
@@ -95,8 +116,7 @@ func (s *Server) Close() error {
 func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	route, ok := lookupNodeRoute(r.Method, r.URL.Path)
 	if !ok {
-		http.NotFound(w, r)
-		return
+		panic(http.ErrAbortHandler)
 	}
 
 	switch route {
@@ -177,7 +197,7 @@ func buildTLSConfig(payload secret.Payload) (*tls.Config, error) {
 	}
 
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{certificate},
 		ClientCAs:    clientCAs,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
