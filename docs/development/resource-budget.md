@@ -1,4 +1,4 @@
-# 512 MiB 资源预算与 M6 基准
+# 512 MiB 资源预算与 M6-M7 基准
 
 ## 验收边界
 
@@ -54,7 +54,14 @@ scripts/test-low-memory.sh \
 | linux/arm64 | 17,563,810 B | 12,320,930 B | 29.9% |
 | linux/amd64 | 18,874,530 B | 13,176,994 B | 30.2% |
 
-arm64 的 Node、rw-core、`geoip.dat` 与 `geosite.dat` 解压后合计约 `75 MiB`。两份 rw-core 日志各保留一个 `10 MiB` 轮转副本，静态应用资产与 Xray 日志预算明显低于 `2 GB`；systemd/OpenRC 服务日志的长期磁盘门禁在 M7-M8 继续验收。
+M7 使用最终安装布局补充了两类真实发行环境快照：
+
+| 环境 | 运行内存 | 项目/整机磁盘 | 说明 |
+| --- | ---: | ---: | --- |
+| Ubuntu 24.04 arm64 / systemd | Node RSS `11.9 MiB` | 项目文件约 `74 MiB` | 全新安装，真实 rw-core/geo/ASN，core 尚未由 Panel 拉起 |
+| Alpine 3.22 arm64 / OpenRC 容器 | 整容器 `44.1 MiB` | 整个 rootfs `150.2 MiB` | 容器限制 `512 MiB / 1 CPU / 256 PIDs`，真实安装依赖与服务 |
+
+项目文件包括约 `12 MiB` Node、`34 MiB` 的 rw-core/support 和 `28 MiB` 的 geo/ASN。`xray.out.log`、`xray.err.log`、`openrc.log`、`openrc.err.log` 均在 `10 MiB` 时 copy-truncate，并各只保留一份 `.1`，最坏应用日志预算为 `80 MiB`。静态资产、事务临时文件和应用日志距离 `2 GB` 仍有充足余量；systemd journal 的长期增长与故障风暴留给 M8 持续运行门禁记录。
 
 ## 保护策略
 

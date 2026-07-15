@@ -15,15 +15,16 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
 | 改造路线 | [roadmap.md](docs/development/roadmap.md) |
 
-安装脚本默认拉取本仓库最新 Release；可通过环境变量 `RNL_TAG=v0.1.0` 指定版本。
+安装与升级脚本默认固定拉取 `v0.1.0`，不会跟随 `latest` 漂移；后续版本可通过环境变量 `RNL_TAG=vX.Y.Z` 显式指定。
 
 ---
 
 ## 系统要求
 
 - Linux（Debian / Ubuntu 等 systemd 发行版，或 Alpine + OpenRC）
+- 生产目标：整机 `512 MiB RAM / 1 vCPU / 2 GB disk`
 - Panel 下发的 `SECRET_KEY`（含 mTLS 证书与 JWT 公钥）
-- [rw-core](https://github.com/XTLS/Xray-core) **≥ v26.6.27**（2.8.0 抽象套接字 API 的硬性要求；安装脚本默认安装该版本）
+- [rw-core](https://github.com/XTLS/Xray-core) **≥ v26.6.27**（2.8.0 抽象套接字 API 的硬性要求；安装脚本固定安装并校验该版本）
 - 可选：`nft`、`ss`（插件 IP 封禁与连接踢除，需 `CAP_NET_ADMIN`）
 
 ---
@@ -33,7 +34,7 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 ### systemd（Debian / Ubuntu 等）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/install-node.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/install-node.sh | sudo bash
 ```
 
 交互菜单：**安装 · 升级 · 卸载 · 退出**
@@ -42,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main
 
 ```bash
 apk add --no-cache curl bash
-curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/install-node-alpine.sh -o /tmp/install-alpine.sh
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/install-node-alpine.sh -o /tmp/install-alpine.sh
 bash /tmp/install-alpine.sh
 ```
 
@@ -62,9 +63,8 @@ bash /tmp/install-alpine.sh
 非交互安装示例：
 
 ```bash
-SECRET_KEY='eyJ...' NODE_PORT=2222 \
-  curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/install-node.sh \
-  | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/install-node.sh \
+  | sudo env SECRET_KEY='eyJ...' NODE_PORT=2222 bash -s -- --install --yes
 ```
 
 配置模板见 [deploy/node.env.example](deploy/node.env.example)。密钥过长时可改用 `SECRET_KEY_FILE`。
@@ -78,8 +78,8 @@ SECRET_KEY='eyJ...' NODE_PORT=2222 \
 ```env
 NODE_PORT=2222
 SECRET_KEY="eyJ..."
-XRAY_BIN=/usr/local/bin/rw-core
-GEO_DIR=/usr/local/share/xray
+XRAY_BIN=/usr/local/lib/remnanode/rw-core
+GEO_DIR=/usr/local/share/remnanode/xray
 LOG_DIR=/var/log/remnanode
 ```
 
@@ -90,10 +90,10 @@ LOG_DIR=/var/log/remnanode
 ## 升级
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/upgrade.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/upgrade.sh | sudo bash -s -- --yes
 ```
 
-升级保留现有 `node.env`、数据目录及 rw-core。同步升级 rw-core：
+升级会校验 Release 摘要和二进制版本，并在替换前备份 binary、service、support 与 `node.env`；启动或监听验证失败时自动恢复。默认保留 rw-core，同步升级 rw-core：
 
 ```bash
 sudo RNL_UPGRADE_XRAY=1 bash upgrade.sh --yes
@@ -110,8 +110,10 @@ sudo RNL_UPGRADE_XRAY=1 bash upgrade.sh --yes
 | 命令行 | `bash uninstall.sh --full` | 等同完全卸载 |
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main/scripts/uninstall.sh | bash -s -- --full
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/uninstall.sh | sudo bash -s -- --full
 ```
+
+完全卸载只清理 `/usr/local/{lib,share}/remnanode` 等项目私有路径，不会终止其它 `rw-core` 进程，也不会删除通用 `/usr/local/bin/xray` 或 `/usr/local/share/xray`。
 
 ---
 
@@ -121,8 +123,8 @@ curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/main
 sudo remnanode-lite doctor
 systemctl status remnawave-node
 journalctl -u remnawave-node -f
-xlogs    # rw-core 标准输出
-xerrors  # rw-core 错误输出
+remnanode-xlogs    # rw-core 标准输出
+remnanode-xerrors  # rw-core 错误输出
 ```
 
 **重启语义**：Node 不在本地持久化 Panel 下发的 Xray 配置。进程重启后先报告 Xray 离线，由 Panel 健康检查重新下发 `/node/xray/start`，与官方 Node 2.8.x 保持一致。

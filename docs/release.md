@@ -4,9 +4,9 @@
 
 ## 前置条件
 
-- GitHub 仓库：`Luxiaba/remnawave-node-lite-go`
-- 本地已配置 `git remote origin`
-- GitHub Actions `release.yml` 已启用（push tag 自动构建）
+- 发布归属：`Luxiaba/remnawave-node-lite-go`
+- 本地交付不依赖 `origin`，默认不 push、不创建 PR
+- 只有未来明确决定公开发布并向自有远端 push tag 时，GitHub Actions `release.yml` 才会创建 Release
 
 ## 1. 版本号对齐
 
@@ -26,24 +26,30 @@
 
 ```bash
 go test ./...
-go build -o remnanode-lite ./cmd/remnanode-lite
+go test -race ./...
+go vet ./...
+shellcheck -x scripts/*.sh deploy/remnawave-node.openrc
+actionlint
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/remnanode-lite-amd64 ./cmd/remnanode-lite
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/remnanode-lite-arm64 ./cmd/remnanode-lite
 ```
 
-## 3. 提交并打 tag
+## 3. 本地提交并打 tag
 
 ```bash
 git add -A
 git commit -m "release: v0.1.0"
-git tag v0.1.0
-git push origin main
-git push origin v0.1.0
+git tag -a v0.1.0 -m "release v0.1.0"
 ```
 
-## 4. 等待 CI Release
+到此即完成本项目当前约定的本地交付；不要自动执行 `git push`。未来若要公开发布，应先显式确认远端属于本项目，再单独推送该 tag。
+
+## 4. GitHub Release 资产（未来公开发布时）
 
 1. GitHub → Actions → `release` workflow
 2. 确认 tag 构建成功
-3. Releases 页应出现 `remnanode-lite_linux_amd64.tar.gz`、`remnanode-lite_linux_arm64.tar.gz`、`SHA256SUMS`
+3. Releases 页应出现 `remnanode-lite_linux_amd64.tar.gz`、`remnanode-lite_linux_arm64.tar.gz`、`asn-prefixes.bin`、`SHA256SUMS`
+4. 两个架构归档内均应包含 binary、systemd/OpenRC service 和已校验的 upgrade/uninstall/install-xray support 脚本
 
 可选：将 `docs/releases/vX.Y.Z.md` 同步为 Release 说明。
 
@@ -57,13 +63,9 @@ journalctl -u remnawave-node -n 50 --no-pager
 
 ## 6. 回滚
 
-```bash
-sudo systemctl stop remnawave-node
-sudo cp /usr/local/bin/remnanode-lite.bak.TIMESTAMP /usr/local/bin/remnanode-lite
-sudo systemctl start remnawave-node
-```
+`upgrade.sh` 在替换前备份 binary、service、support、`node.env` 和可选 rw-core 资产。新服务未启动或未在配置端口监听时会自动恢复旧文件和旧服务；失败日志会保留 `/tmp/remnanode-upgrade.*` 备份目录供人工检查。正常成功后事务备份会删除。
 
-或指定旧 tag：`sudo RNL_TAG=v0.8.30 bash upgrade.sh --yes`
+版本回退使用本项目确实发布过的旧 tag：`sudo RNL_TAG=vX.Y.Z bash upgrade.sh --yes`，同样经过摘要校验和事务门禁；不要使用参考仓库的 `v0.8.x/v1.x` tag。
 
 ## 7. 常见问题
 

@@ -13,6 +13,14 @@
 - 新增默认只读、需 mTLS/JWT 的 `contract-probe`，用于官方 Node 与 Go Node 的黑盒语义差分。
 - 新增统一 Node API 边界，覆盖 Zod 等价的必填字段、联合类型、UUID/IP、枚举、nullable/default 和数组长度校验。
 - 新增 Linux network namespace nftables 与 socket-kill 集成门禁，真实覆盖双栈规则替换、封禁、解封、重建、退出清理和 TCP 连接关闭。
+- 新增固定官方 JSON 摘要的 ASN 构建链，Release 同时发布 compact `asn-prefixes.bin` 与 `SHA256SUMS`。
+- 新增 `448 MiB / 1 CPU / no-swap` 真实 rw-core 资源门禁，50k 用户场景峰值为 `143.9 MiB`。
+
+### 安全
+
+- 外部传输最低版本收敛为 TLS 1.3，并禁用 HTTP/2；无效 JWT、未知路由和错误 method 与官方一致地直接销毁连接。
+- systemd/OpenRC 改用专用 `remnanode` 用户，只保留 `CAP_NET_ADMIN` 与 `CAP_NET_BIND_SERVICE`；systemd 同时启用 capability bounding、sandbox、448 MiB/no-swap/1 CPU/256 tasks 限额。
+- Release archive、rw-core、自定义 core 与 ASN 资产均在写盘前校验 SHA-256、结构和版本；固定 rw-core 摘要不可覆盖，GitHub Actions 固定到完整 commit SHA。
 
 ### 修复
 
@@ -31,6 +39,11 @@
 - 连接踢除会规范化并去重 IP，保护非法、特殊、本机和白名单地址；缺少 capability、IP 查询失败、超时或任一 `ss -K` 失败不再伪报成功。
 - `get-users-ip-list` 优先使用单次批量 RPC；旧 core 只在 `UNIMPLEMENTED` 时降级到最多 8 个固定 worker，并缓存 capability，消除 N+1 无界 goroutine。
 - 所有内部 Handler/Stats unary gRPC 调用增加取消传播和有界 deadline；默认 5 秒，健康探测 3 秒，批量 legacy 查询共享总预算。
+- 重复执行安装脚本会进入同一可回滚升级事务；坏 systemd/OpenRC service、binary/support/node.env/rw-core 写入失败均恢复升级前文件和运行状态。
+- 卸载不再按进程名终止任意 `rw-core`，也不再删除通用 Xray 路径，只清理本项目私有进程、socket、nftables 表与 `/usr/local/{lib,share}/remnanode`。
+- 非交互安装未提供 Secret Key 时会完成落盘但保持服务停止，不再错误等待未启动服务的端口。
+- 所有安装/升级包装入口的 `--dry-run` 保持零写入；路径型 Release tag 在 bootstrap 和事务开始前拒绝，service/core 始终取自目标 Release 的已校验 support。
+- 旧版通用 Xray/geo/ASN 路径仅在对应私有资产安装成功后迁移；默认保留 core 的升级不再把可用配置改向空路径。
 
 ### 维护
 
@@ -40,6 +53,8 @@
 - 契约 CI 验证固定官方提交、版本和所有引用的源码证据文件。
 - HTTP transport 与 stats、用户 handler、plugin 业务服务分离，业务层不再依赖 `net/http` 或自行解码 JSON。
 - 固定并校准外部 `@remnawave/node-plugins@0.4.5` schema 证据，覆盖显式 null、AS number、`ext:` 与数值边界。
+- 用最小 rw-core protobuf wire client 替换完整 Xray Go module，双架构二进制缩小约 30%。
+- Ubuntu 24.04/systemd 与 Alpine 3.22/OpenRC 均完成全新安装、升级回滚、启停、专用用户/capability、日志、磁盘和卸载隔离实测。
 
 ## 参考仓库历史
 

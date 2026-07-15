@@ -42,7 +42,8 @@
 | M4 插件与 nftables | 已完成 | `checkpoint-m04-plugin-nftables` |
 | M5 用户、连接与统计 | 已完成 | `checkpoint-m05-users-connections-stats` |
 | M6 512 MiB 资源优化 | 已完成 | `checkpoint-m06-low-memory` |
-| M7-M8 | 待推进 | - |
+| M7 系统与供应链 | 已完成 | `checkpoint-m07-system-supply-chain` |
+| M8 发布验收 | 推进中 | - |
 
 ## 里程碑
 
@@ -101,6 +102,8 @@
 - 对齐 Debian/systemd 与 Alpine/OpenRC 的目录权限和生命周期。
 - 所有 Release、rw-core、ASN 与辅助脚本都必须固定版本并校验摘要。
 - 安装、升级、失败回滚和卸载不得影响不属于本项目的进程或 nftables 表。
+- Ubuntu 24.04/systemd 与 Alpine 3.22/OpenRC 已真实通过安装、重复安装、成功升级、坏 service 回滚、启停与卸载隔离；两边的非 root 服务进程均只保留 `NET_ADMIN`/`NET_BIND_SERVICE` effective 与 ambient capability。
+- 固定 rw-core、ASN 与 Release 归档均在写盘前校验 SHA-256；rw-core 资产组和 Node 升级事务均通过写入后故障注入与逐文件摘要恢复测试。
 
 ### M8 - 发布验收
 

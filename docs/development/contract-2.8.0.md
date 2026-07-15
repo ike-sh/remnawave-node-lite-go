@@ -76,6 +76,14 @@ M6 在不改变官方 HTTP 契约的前提下收紧资源边界。Xray 配置仅
 
 真实 rw-core `v26.6.27` 的 1 CPU / 448 MiB / no-swap 门禁覆盖 1k 用户启动、无变化同步、50k 用户重启、热增删与统计 RPC，实测 cgroup 峰值为 143.9 MiB。复现条件和阶段数据见 [`resource-budget.md`](resource-budget.md)。
 
+## Go 传输、系统与供应链实现
+
+M7 将外部 TLS 最低版本收敛为 1.3，并禁用 Go HTTP/2 自动协商以保持官方连接处理模型。无效 JWT、未知路由和错误 HTTP method 均直接终止底层连接，不返回可枚举的 401/404/405 body；请求头上限为 64 KiB。真实 TLS 客户端测试固定了正常复用、认证失败和未知请求后的连接销毁语义。
+
+systemd 与 OpenRC 均使用专用 `remnanode:remnanode` 账号，配置为 `root:remnanode 0640`，状态和日志目录为 `remnanode:remnanode 0750`。服务只获得 `CAP_NET_ADMIN` 与 `CAP_NET_BIND_SERVICE`；systemd 同时将 bounding set 收紧到这两项，并启用 `NoNewPrivileges`、只读系统、namespace/syscall/address-family 限制、`448 MiB` 内存、零 swap、1 CPU 和 256 tasks。Alpine 3.22 的 supervise-daemon 实测 `CapInh/Prm/Eff/Amb=0x1400`、`NoNewPrivs=1`，且由服务派生的 `nft` 子进程可创建私有表。
+
+项目资产位于 `/usr/local/lib/remnanode` 和 `/usr/local/share/remnanode`，不再接管通用 Xray 路径。Release 归档、rw-core zip、自定义 core 与 ASN 数据都必须通过 SHA-256 和结构/版本自检后才写盘；固定 rw-core `v26.6.27` 不允许覆盖其已审计摘要。升级会备份 binary、service、support、`node.env` 以及可选 rw-core 资产，刷新后必须重新通过服务与端口门禁，否则自动逐项恢复。Ubuntu/systemd 与 Alpine/OpenRC 的坏 service 注入均验证了摘要和运行状态恢复；完全卸载也验证了不会终止无关同名进程或删除通用 Xray 文件。
+
 ## 路由清单
 
 表中只列核心约束；完整类型、nullable、枚举、UUID、IP、日期和数组长度约束以 `internal/contract/official_schemas.go` 的可执行 schema 为准。
@@ -123,12 +131,7 @@ M6 在不改变官方 HTTP 契约的前提下收紧资源边界。Xray 配置仅
 
 ## 当前已知偏差
 
-本节是改造队列，不是允许永久存在的兼容声明。
-
-| 范围 | 当前偏差 | 收敛里程碑 |
-| --- | --- | --- |
-| 传输 | 当前 TLS 最低版本为 1.2；认证失败和未知路由返回 HTTP，而官方销毁 socket | M7 |
-| 系统 | systemd 权限过宽，安装资产和辅助数据尚未全部固定摘要 | M7 |
+M7 已关闭此前记录的 TLS/socket 与系统供应链偏差。当前没有已知的静态 `/node` 契约偏差；M8 仍需以真实 Panel 2.8.1 完成发行候选的端到端差分和故障恢复验收。裸机 systemd/OpenRC 部署替代官方 Docker 运行模型属于本项目明确的运维边界，不扩展 `/node` API。
 
 ## 本地验证
 
