@@ -88,6 +88,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
+func (s *Server) Close() error {
+	return s.httpServer.Close()
+}
+
 func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	route, ok := lookupNodeRoute(r.Method, r.URL.Path)
 	if !ok {

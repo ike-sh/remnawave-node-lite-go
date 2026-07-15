@@ -32,6 +32,7 @@ type Service struct {
 	xray        XrayController
 	initialized bool
 	closed      bool
+	closeDone   bool
 }
 
 func NewService(state *State, dropper *connections.Dropper, xray XrayController) *Service {
@@ -278,14 +279,19 @@ func (s *Service) ReportsCount() int {
 func (s *Service) Close() error {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
-	if s.closed {
+	if s.closeDone {
 		return nil
 	}
 	s.closed = true
 	if !s.initialized || s.nft == nil {
+		s.closeDone = true
 		return nil
 	}
-	return s.nft.Close()
+	if err := s.nft.Close(); err != nil {
+		return err
+	}
+	s.closeDone = true
+	return nil
 }
 
 func (s *Service) readyLocked() error {

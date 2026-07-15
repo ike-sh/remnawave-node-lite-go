@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"sync"
 	"syscall"
 	"time"
 
@@ -50,9 +52,16 @@ func main() {
 			return
 		}
 	}
+	if err := runNode(); err != nil {
+		log.Printf("remnawave-node-lite-go stopped with error: %v", err)
+		os.Exit(1)
+	}
+}
+
+func runNode() (runErr error) {
 	cfg, err := config.Load(config.ResolveEnvPath())
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 	applyMemoryLimit(cfg.LowMemory)
 	bodylimit.Configure(cfg.LowMemory, cfg.BodyLimitMB)
@@ -62,12 +71,12 @@ func main() {
 
 	payload, err := secret.Parse(cfg.SecretKey)
 	if err != nil {
-		log.Fatalf("parse SECRET_KEY: %v", err)
+		return fmt.Errorf("parse SECRET_KEY: %w", err)
 	}
 
 	validator, err := auth.NewJWTValidator(payload.JWTPublicKey)
 	if err != nil {
-		log.Fatalf("initialize JWT validator: %v", err)
+		return fmt.Errorf("initialize JWT validator: %w", err)
 	}
 
 	manager, err := xray.NewManager(xray.Options{
@@ -80,7 +89,7 @@ func main() {
 		LowMemory:          cfg.LowMemory,
 	})
 	if err != nil {
-		log.Fatalf("initialize Xray manager: %v", err)
+		return fmt.Errorf("initialize Xray manager: %w", err)
 	}
 
 	pluginState := plugin.NewState()
@@ -88,7 +97,11 @@ func main() {
 		log.Printf("ASN database unavailable (%s): %v — asList shared lists resolve empty", cfg.ASNDBPath, err)
 	} else {
 		pluginState.SetASNResolver(asnDB)
-		defer asnDB.Close()
+		defer func() {
+			if err := asnDB.Close(); err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("close ASN database: %w", err))
+			}
+		}()
 		log.Printf("ASN database loaded from %s", cfg.ASNDBPath)
 	}
 	dropper := connections.NewDropper(pluginState.IsWhitelisted)
@@ -96,12 +109,21 @@ func main() {
 	if err := pluginService.Initialize(); err != nil {
 		log.Printf("warning: plugin nftables unavailable; nft-dependent plugins are disabled: %v", err)
 	}
+	defer func() {
+		system.DefaultNetworkMonitor().Stop()
+		if response := manager.Stop(); !response.IsStopped {
+			runErr = errors.Join(runErr, errors.New("stop rw-core: process did not stop"))
+		}
+		if err := pluginService.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("close plugin service: %w", err))
+		}
+	}()
 
 	manager.SetTorrentBlockerProvider(pluginState)
 
 	server, err := httpserver.New(cfg, payload, validator, manager, pluginService, dropper)
 	if err != nil {
-		log.Fatalf("initialize HTTPS server: %v", err)
+		return fmt.Errorf("initialize HTTPS server: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -113,30 +135,64 @@ func main() {
 		Provider: manager,
 		Webhook:  pluginService,
 	}
-	go func() {
-		log.Printf("internal config socket listening on %s", cfg.InternalSocketPath)
-		if err := unixServer.ListenAndServe(ctx); err != nil {
-			log.Fatalf("internal config socket stopped: %v", err)
-		}
-	}()
 
-	go func() {
-		log.Printf("remnawave-node-lite-go listening on %s", cfg.HTTPAddr())
-		if err := server.ListenAndServeTLS(); err != nil {
-			log.Fatalf("HTTPS server stopped: %v", err)
-		}
-	}()
+	serveErrors := make(chan error, 2)
+	var servers sync.WaitGroup
+	startServer := func(name string, serve func() error) {
+		servers.Add(1)
+		go func() {
+			defer servers.Done()
+			if err := serve(); err != nil {
+				serveErrors <- fmt.Errorf("%s stopped: %w", name, err)
+				return
+			}
+			if ctx.Err() == nil {
+				serveErrors <- fmt.Errorf("%s stopped unexpectedly", name)
+			}
+		}()
+	}
+
+	log.Printf("internal config socket listening on %s", cfg.InternalSocketPath)
+	startServer("internal config socket", func() error { return unixServer.ListenAndServe(ctx) })
+	log.Printf("remnawave-node-lite-go listening on %s", cfg.HTTPAddr())
+	startServer("HTTPS server", server.ListenAndServeTLS)
 
 	go manager.StartLogRotation(ctx)
 
-	<-ctx.Done()
-	system.DefaultNetworkMonitor().Stop()
+	select {
+	case <-ctx.Done():
+	case err := <-serveErrors:
+		runErr = errors.Join(runErr, err)
+	}
+	stop()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("shutdown error: %v", err)
+		runErr = errors.Join(runErr, fmt.Errorf("shutdown HTTPS server: %w", err))
+		if closeErr := server.Close(); closeErr != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("force close HTTPS server: %w", closeErr))
+		}
 	}
-	_ = manager.Stop()
+
+	serversDone := make(chan struct{})
+	go func() {
+		servers.Wait()
+		close(serversDone)
+	}()
+	select {
+	case <-serversDone:
+	case <-shutdownCtx.Done():
+		runErr = errors.Join(runErr, fmt.Errorf("wait for servers: %w", shutdownCtx.Err()))
+	}
+	for {
+		select {
+		case err := <-serveErrors:
+			runErr = errors.Join(runErr, err)
+		default:
+			return runErr
+		}
+	}
 }
 
 // applyMemoryLimit caps the Go runtime heap in low-memory mode (128/256MB VPS)

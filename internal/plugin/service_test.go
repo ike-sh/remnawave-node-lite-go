@@ -22,6 +22,7 @@ type fakeFirewall struct {
 	blockEntered chan struct{}
 	blockCalls   [][]BlockIP
 	unblockCalls [][]string
+	closeErrors  map[int]error
 	closeCalls   int
 }
 
@@ -85,6 +86,9 @@ func (f *fakeFirewall) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closeCalls++
+	if err := f.closeErrors[f.closeCalls]; err != nil {
+		return err
+	}
 	f.ready = false
 	return nil
 }
@@ -491,6 +495,30 @@ func TestCloseIsIdempotentAndRejectsLaterMutations(t *testing.T) {
 	}
 	if !errors.Is(service.ResetPlugins(), errPluginServiceClosed) {
 		t.Fatal("reset after Close did not return service-closed error")
+	}
+}
+
+func TestCloseRetriesBackendCleanupAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	backend.closeErrors = map[int]error{1: errors.New("close failed")}
+
+	if err := service.Close(); err == nil {
+		t.Fatal("first Close unexpectedly succeeded")
+	}
+	if service.Sync(filterPlugin(t, "10.0.0.0/8")).Accepted {
+		t.Fatal("mutation was accepted after Close began")
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("retry Close: %v", err)
+	}
+	backend.mu.Lock()
+	closeCalls := backend.closeCalls
+	backend.mu.Unlock()
+	if closeCalls != 2 {
+		t.Fatalf("backend Close calls = %d, want 2", closeCalls)
 	}
 }
 
