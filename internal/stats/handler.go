@@ -2,8 +2,6 @@ package stats
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/system"
@@ -35,11 +33,7 @@ func NewService(provider Provider, reportsCounter ReportsCounter) *Service {
 	return &Service{provider: provider, reportsCounter: reportsCounter}
 }
 
-type envelope[T any] struct {
-	Response T `json:"response"`
-}
-
-type systemStatsResponse struct {
+type SystemStatsResponse struct {
 	// Nullable per upstream contract when rw-core is not running yet.
 	XrayInfo *xtls.SysStats `json:"xrayInfo"`
 	Plugins  struct {
@@ -52,383 +46,241 @@ type systemStatsResponse struct {
 	} `json:"system"`
 }
 
-type writeJSONFn func(w http.ResponseWriter, status int, value any)
-
-func (s *Service) HandleGetSystemStats(w http.ResponseWriter, write writeJSONFn) {
-	if s.provider == nil {
-		writeAPIError(write, w, errFailedSystemStats)
-		return
-	}
-
-	stats, err := s.provider.GetSysStats(context.Background())
-	if err != nil || stats == nil {
-		// Align official @remnawave/node: gRPC unavailable → isOk=false (A010).
-		// Panel NodeHealthCheckQueueProcessor then calls startNode on disconnect.
-		writeAPIError(write, w, errFailedSystemStats)
-		return
-	}
-
-	var resp systemStatsResponse
-	resp.XrayInfo = stats
-	if s.reportsCounter != nil {
-		resp.Plugins.TorrentBlocker.ReportsCount = s.reportsCounter.ReportsCount()
-	}
-	resp.System.Stats = system.GetStats()
-
-	write(w, http.StatusOK, envelope[systemStatsResponse]{Response: resp})
+type UserOnlineStatusResponse struct {
+	IsOnline bool `json:"isOnline"`
 }
 
-func (s *Service) HandleGetUserOnlineStatus(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	body := decodeOnlineRequest(r)
+type UsersStatsResponse struct {
+	Users []UserTrafficResponse `json:"users"`
+}
+
+type UserTrafficResponse struct {
+	Username string `json:"username"`
+	Downlink int64  `json:"downlink"`
+	Uplink   int64  `json:"uplink"`
+}
+
+type InboundStatsResponse struct {
+	Inbound  string `json:"inbound"`
+	Downlink int64  `json:"downlink"`
+	Uplink   int64  `json:"uplink"`
+}
+
+type OutboundStatsResponse struct {
+	Outbound string `json:"outbound"`
+	Downlink int64  `json:"downlink"`
+	Uplink   int64  `json:"uplink"`
+}
+
+type AllInboundsStatsResponse struct {
+	Inbounds []InboundStatsResponse `json:"inbounds"`
+}
+
+type AllOutboundsStatsResponse struct {
+	Outbounds []OutboundStatsResponse `json:"outbounds"`
+}
+
+type CombinedStatsResponse struct {
+	Inbounds  []InboundStatsResponse  `json:"inbounds"`
+	Outbounds []OutboundStatsResponse `json:"outbounds"`
+}
+
+type IPEntryResponse struct {
+	IP       string `json:"ip"`
+	LastSeen string `json:"lastSeen"`
+}
+
+type UserIPListResponse struct {
+	UserID string            `json:"userId"`
+	IPs    []IPEntryResponse `json:"ips"`
+}
+
+type GetUserIPListResponse struct {
+	IPs []IPEntryResponse `json:"ips"`
+}
+
+type GetUsersIPListResponse struct {
+	Users []UserIPListResponse `json:"users"`
+}
+
+func (s *Service) GetSystemStats(ctx context.Context) (SystemStatsResponse, error) {
 	if s.provider == nil {
-		write(w, http.StatusOK, envelope[struct {
-			IsOnline bool `json:"isOnline"`
-		}]{Response: struct {
-			IsOnline bool `json:"isOnline"`
-		}{IsOnline: false}})
-		return
+		return SystemStatsResponse{}, errFailedSystemStats
 	}
-	if body.Username == "" {
-		write(w, http.StatusOK, envelope[struct {
-			IsOnline bool `json:"isOnline"`
-		}]{Response: struct {
-			IsOnline bool `json:"isOnline"`
-		}{IsOnline: false}})
-		return
+
+	stats, err := s.provider.GetSysStats(ctx)
+	if err != nil || stats == nil {
+		return SystemStatsResponse{}, errFailedSystemStats
 	}
-	online, err := s.provider.GetUserOnlineStatus(r.Context(), body.Username)
+
+	var response SystemStatsResponse
+	response.XrayInfo = stats
+	if s.reportsCounter != nil {
+		response.Plugins.TorrentBlocker.ReportsCount = s.reportsCounter.ReportsCount()
+	}
+	response.System.Stats = system.GetStats()
+	return response, nil
+}
+
+func (s *Service) GetUserOnlineStatus(ctx context.Context, username string) UserOnlineStatusResponse {
+	if s.provider == nil {
+		return UserOnlineStatusResponse{IsOnline: false}
+	}
+	online, err := s.provider.GetUserOnlineStatus(ctx, username)
 	if err != nil {
-		// Match upstream: SDK errors return isOnline:false on HTTP 200.
 		online = false
 	}
-	write(w, http.StatusOK, envelope[struct {
-		IsOnline bool `json:"isOnline"`
-	}]{Response: struct {
-		IsOnline bool `json:"isOnline"`
-	}{IsOnline: online}})
+	return UserOnlineStatusResponse{IsOnline: online}
 }
 
-func (s *Service) HandleGetUsersStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	reset := decodeResetRequest(r)
+func (s *Service) GetUsersStats(ctx context.Context, reset bool) (UsersStatsResponse, error) {
 	if s.provider == nil {
-		writeAPIError(write, w, errFailedUsersStats)
-		return
+		return UsersStatsResponse{}, errFailedUsersStats
 	}
-	stats, err := s.provider.GetAllUsersStats(r.Context(), reset)
+	items, err := s.provider.GetAllUsersStats(ctx, reset)
 	if err != nil {
-		writeAPIError(write, w, errFailedUsersStats)
-		return
+		return UsersStatsResponse{}, errFailedUsersStats
 	}
 
-	users := make([]userTrafficResponse, 0, len(stats))
-	for _, item := range stats {
+	users := make([]UserTrafficResponse, 0, len(items))
+	for _, item := range items {
 		if item.Uplink == 0 && item.Downlink == 0 {
 			continue
 		}
-		users = append(users, userTrafficResponse{
+		users = append(users, UserTrafficResponse{
 			Username: item.Username,
 			Downlink: item.Downlink,
 			Uplink:   item.Uplink,
 		})
 	}
-	write(w, http.StatusOK, envelope[struct {
-		Users []userTrafficResponse `json:"users"`
-	}]{Response: struct {
-		Users []userTrafficResponse `json:"users"`
-	}{Users: users}})
+	return UsersStatsResponse{Users: users}, nil
 }
 
-func (s *Service) HandleGetInboundStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	tag, reset := decodeTagResetRequest(r)
-	if s.provider == nil || tag == "" {
-		writeAPIError(write, w, errFailedInboundStats)
-		return
-	}
-	stats, err := s.provider.GetInboundStats(r.Context(), tag, reset)
-	if err != nil || stats.Tag == "" {
-		writeAPIError(write, w, errFailedInboundStats)
-		return
-	}
-	write(w, http.StatusOK, envelope[tagTrafficResponse]{Response: tagTrafficResponse{
-		Inbound:  stats.Tag,
-		Downlink: stats.Downlink,
-		Uplink:   stats.Uplink,
-	}})
-}
-
-func (s *Service) HandleGetOutboundStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	tag, reset := decodeTagResetRequest(r)
-	if s.provider == nil || tag == "" {
-		writeAPIError(write, w, errFailedOutboundStats)
-		return
-	}
-	stats, err := s.provider.GetOutboundStats(r.Context(), tag, reset)
-	if err != nil || stats.Tag == "" {
-		writeAPIError(write, w, errFailedOutboundStats)
-		return
-	}
-	write(w, http.StatusOK, envelope[outboundTrafficResponse]{Response: outboundTrafficResponse{
-		Outbound: stats.Tag,
-		Downlink: stats.Downlink,
-		Uplink:   stats.Uplink,
-	}})
-}
-
-func (s *Service) HandleGetAllInboundsStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	reset := decodeResetRequest(r)
+func (s *Service) GetInboundStats(ctx context.Context, tag string, reset bool) (InboundStatsResponse, error) {
 	if s.provider == nil {
-		writeAPIError(write, w, errFailedInboundsStats)
-		return
+		return InboundStatsResponse{}, errFailedInboundStats
 	}
-	stats, err := s.provider.GetAllInboundsStats(r.Context(), reset)
-	if err != nil {
-		writeAPIError(write, w, errFailedInboundsStats)
-		return
+	item, err := s.provider.GetInboundStats(ctx, tag, reset)
+	if err != nil || item.Tag == "" {
+		return InboundStatsResponse{}, errFailedInboundStats
 	}
-	items := make([]inboundTrafficResponse, 0, len(stats))
-	for _, item := range stats {
-		items = append(items, inboundTrafficResponse{
-			Inbound:  item.Tag,
-			Downlink: item.Downlink,
-			Uplink:   item.Uplink,
-		})
-	}
-	write(w, http.StatusOK, envelope[struct {
-		Inbounds []inboundTrafficResponse `json:"inbounds"`
-	}]{Response: struct {
-		Inbounds []inboundTrafficResponse `json:"inbounds"`
-	}{Inbounds: items}})
+	return InboundStatsResponse{Inbound: item.Tag, Downlink: item.Downlink, Uplink: item.Uplink}, nil
 }
 
-func (s *Service) HandleGetAllOutboundsStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	reset := decodeResetRequest(r)
+func (s *Service) GetOutboundStats(ctx context.Context, tag string, reset bool) (OutboundStatsResponse, error) {
 	if s.provider == nil {
-		writeAPIError(write, w, errFailedOutboundsStats)
-		return
+		return OutboundStatsResponse{}, errFailedOutboundStats
 	}
-	stats, err := s.provider.GetAllOutboundsStats(r.Context(), reset)
-	if err != nil {
-		writeAPIError(write, w, errFailedOutboundsStats)
-		return
+	item, err := s.provider.GetOutboundStats(ctx, tag, reset)
+	if err != nil || item.Tag == "" {
+		return OutboundStatsResponse{}, errFailedOutboundStats
 	}
-	items := make([]outboundListItemResponse, 0, len(stats))
-	for _, item := range stats {
-		items = append(items, outboundListItemResponse{
-			Outbound: item.Tag,
-			Downlink: item.Downlink,
-			Uplink:   item.Uplink,
-		})
-	}
-	write(w, http.StatusOK, envelope[struct {
-		Outbounds []outboundListItemResponse `json:"outbounds"`
-	}]{Response: struct {
-		Outbounds []outboundListItemResponse `json:"outbounds"`
-	}{Outbounds: items}})
+	return OutboundStatsResponse{Outbound: item.Tag, Downlink: item.Downlink, Uplink: item.Uplink}, nil
 }
 
-func (s *Service) HandleGetCombinedStats(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	reset := decodeResetRequest(r)
+func (s *Service) GetAllInboundsStats(ctx context.Context, reset bool) (AllInboundsStatsResponse, error) {
 	if s.provider == nil {
-		writeAPIError(write, w, errFailedCombinedStats)
-		return
+		return AllInboundsStatsResponse{}, errFailedInboundsStats
 	}
-	inboundItems, err := s.provider.GetAllInboundsStats(r.Context(), reset)
+	stats, err := s.provider.GetAllInboundsStats(ctx, reset)
 	if err != nil {
-		writeAPIError(write, w, errFailedCombinedStats)
-		return
+		return AllInboundsStatsResponse{}, errFailedInboundsStats
 	}
-	outboundItems, err := s.provider.GetAllOutboundsStats(r.Context(), reset)
-	if err != nil {
-		writeAPIError(write, w, errFailedCombinedStats)
-		return
-	}
-
-	inbounds := make([]inboundTrafficResponse, 0, len(inboundItems))
-	for _, item := range inboundItems {
-		inbounds = append(inbounds, inboundTrafficResponse{
-			Inbound:  item.Tag,
-			Downlink: item.Downlink,
-			Uplink:   item.Uplink,
-		})
-	}
-	outbounds := make([]outboundListItemResponse, 0, len(outboundItems))
-	for _, item := range outboundItems {
-		outbounds = append(outbounds, outboundListItemResponse{
-			Outbound: item.Tag,
-			Downlink: item.Downlink,
-			Uplink:   item.Uplink,
-		})
-	}
-	write(w, http.StatusOK, envelope[struct {
-		Inbounds  []inboundTrafficResponse   `json:"inbounds"`
-		Outbounds []outboundListItemResponse `json:"outbounds"`
-	}]{Response: struct {
-		Inbounds  []inboundTrafficResponse   `json:"inbounds"`
-		Outbounds []outboundListItemResponse `json:"outbounds"`
-	}{Inbounds: inbounds, Outbounds: outbounds}})
+	return AllInboundsStatsResponse{Inbounds: mapInbounds(stats)}, nil
 }
 
-func (s *Service) HandleGetUserIPList(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	body := decodeUserIDRequest(r)
-	if body.UserID == "" {
-		write(w, http.StatusOK, envelope[struct {
-			IPs []ipEntryResponse `json:"ips"`
-		}]{Response: struct {
-			IPs []ipEntryResponse `json:"ips"`
-		}{IPs: []ipEntryResponse{}}})
-		return
-	}
+func (s *Service) GetAllOutboundsStats(ctx context.Context, reset bool) (AllOutboundsStatsResponse, error) {
 	if s.provider == nil {
-		write(w, http.StatusOK, envelope[struct {
-			IPs []ipEntryResponse `json:"ips"`
-		}]{Response: struct {
-			IPs []ipEntryResponse `json:"ips"`
-		}{IPs: []ipEntryResponse{}}})
-		return
+		return AllOutboundsStatsResponse{}, errFailedOutboundsStats
 	}
-	items, err := s.provider.GetUserIPList(r.Context(), body.UserID, true)
+	stats, err := s.provider.GetAllOutboundsStats(ctx, reset)
 	if err != nil {
-		// Align official: all gRPC errors return HTTP 200 with empty ips.
-		write(w, http.StatusOK, envelope[struct {
-			IPs []ipEntryResponse `json:"ips"`
-		}]{Response: struct {
-			IPs []ipEntryResponse `json:"ips"`
-		}{IPs: []ipEntryResponse{}}})
-		return
+		return AllOutboundsStatsResponse{}, errFailedOutboundsStats
 	}
-	ips := make([]ipEntryResponse, 0, len(items))
+	return AllOutboundsStatsResponse{Outbounds: mapOutbounds(stats)}, nil
+}
+
+func (s *Service) GetCombinedStats(ctx context.Context, reset bool) (CombinedStatsResponse, error) {
+	if s.provider == nil {
+		return CombinedStatsResponse{}, errFailedCombinedStats
+	}
+	inbounds, err := s.provider.GetAllInboundsStats(ctx, reset)
+	if err != nil {
+		return CombinedStatsResponse{}, errFailedCombinedStats
+	}
+	outbounds, err := s.provider.GetAllOutboundsStats(ctx, reset)
+	if err != nil {
+		return CombinedStatsResponse{}, errFailedCombinedStats
+	}
+	return CombinedStatsResponse{
+		Inbounds:  mapInbounds(inbounds),
+		Outbounds: mapOutbounds(outbounds),
+	}, nil
+}
+
+func (s *Service) GetUserIPList(ctx context.Context, userID string) GetUserIPListResponse {
+	empty := GetUserIPListResponse{IPs: []IPEntryResponse{}}
+	if s.provider == nil {
+		return empty
+	}
+	items, err := s.provider.GetUserIPList(ctx, userID, true)
+	if err != nil {
+		return empty
+	}
+
+	ips := make([]IPEntryResponse, 0, len(items))
 	for _, item := range items {
-		ips = append(ips, ipEntryResponse{
+		ips = append(ips, IPEntryResponse{
 			IP:       item.IP,
 			LastSeen: item.LastSeen.Format(time.RFC3339Nano),
 		})
 	}
-	write(w, http.StatusOK, envelope[struct {
-		IPs []ipEntryResponse `json:"ips"`
-	}]{Response: struct {
-		IPs []ipEntryResponse `json:"ips"`
-	}{IPs: ips}})
+	return GetUserIPListResponse{IPs: ips}
 }
 
-func (s *Service) HandleGetUsersIPList(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
+func (s *Service) GetUsersIPList(ctx context.Context) GetUsersIPListResponse {
+	empty := GetUsersIPListResponse{Users: []UserIPListResponse{}}
 	if s.provider == nil {
-		write(w, http.StatusOK, envelope[struct {
-			Users []userIPListResponse `json:"users"`
-		}]{Response: struct {
-			Users []userIPListResponse `json:"users"`
-		}{Users: []userIPListResponse{}}})
-		return
+		return empty
 	}
-	items, err := s.provider.GetUsersIPList(r.Context())
+	items, err := s.provider.GetUsersIPList(ctx)
 	if err != nil {
-		write(w, http.StatusOK, envelope[struct {
-			Users []userIPListResponse `json:"users"`
-		}]{Response: struct {
-			Users []userIPListResponse `json:"users"`
-		}{Users: []userIPListResponse{}}})
-		return
+		return empty
 	}
-	users := make([]userIPListResponse, 0, len(items))
+
+	users := make([]UserIPListResponse, 0, len(items))
 	for _, item := range items {
 		if len(item.IPs) == 0 {
 			continue
 		}
-		ips := make([]ipEntryResponse, 0, len(item.IPs))
+		ips := make([]IPEntryResponse, 0, len(item.IPs))
 		for _, ip := range item.IPs {
-			ips = append(ips, ipEntryResponse{
+			ips = append(ips, IPEntryResponse{
 				IP:       ip.IP,
 				LastSeen: ip.LastSeen.Format(time.RFC3339Nano),
 			})
 		}
-		users = append(users, userIPListResponse{
-			UserID: item.UserID,
-			IPs:    ips,
+		users = append(users, UserIPListResponse{UserID: item.UserID, IPs: ips})
+	}
+	return GetUsersIPListResponse{Users: users}
+}
+
+func mapInbounds(items []xtls.TagTraffic) []InboundStatsResponse {
+	result := make([]InboundStatsResponse, 0, len(items))
+	for _, item := range items {
+		result = append(result, InboundStatsResponse{
+			Inbound: item.Tag, Downlink: item.Downlink, Uplink: item.Uplink,
 		})
 	}
-	write(w, http.StatusOK, envelope[struct {
-		Users []userIPListResponse `json:"users"`
-	}]{Response: struct {
-		Users []userIPListResponse `json:"users"`
-	}{Users: users}})
+	return result
 }
 
-type userTrafficResponse struct {
-	Username string `json:"username"`
-	Downlink int64  `json:"downlink"`
-	Uplink   int64  `json:"uplink"`
-}
-
-type inboundTrafficResponse struct {
-	Inbound  string `json:"inbound"`
-	Downlink int64  `json:"downlink"`
-	Uplink   int64  `json:"uplink"`
-}
-
-type outboundListItemResponse struct {
-	Outbound string `json:"outbound"`
-	Downlink int64  `json:"downlink"`
-	Uplink   int64  `json:"uplink"`
-}
-
-type tagTrafficResponse struct {
-	Inbound  string `json:"inbound"`
-	Downlink int64  `json:"downlink"`
-	Uplink   int64  `json:"uplink"`
-}
-
-type outboundTrafficResponse struct {
-	Outbound string `json:"outbound"`
-	Downlink int64  `json:"downlink"`
-	Uplink   int64  `json:"uplink"`
-}
-
-type ipEntryResponse struct {
-	IP       string `json:"ip"`
-	LastSeen string `json:"lastSeen"`
-}
-
-type userIPListResponse struct {
-	UserID string            `json:"userId"`
-	IPs    []ipEntryResponse `json:"ips"`
-}
-
-func decodeResetRequest(r *http.Request) bool {
-	defer r.Body.Close()
-	var body struct {
-		Reset bool `json:"reset"`
+func mapOutbounds(items []xtls.TagTraffic) []OutboundStatsResponse {
+	result := make([]OutboundStatsResponse, 0, len(items))
+	for _, item := range items {
+		result = append(result, OutboundStatsResponse{
+			Outbound: item.Tag, Downlink: item.Downlink, Uplink: item.Uplink,
+		})
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	return body.Reset
-}
-
-func decodeOnlineRequest(r *http.Request) struct {
-	Username string `json:"username"`
-} {
-	defer r.Body.Close()
-	var body struct {
-		Username string `json:"username"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	return body
-}
-
-func decodeUserIDRequest(r *http.Request) struct {
-	UserID string `json:"userId"`
-} {
-	defer r.Body.Close()
-	var body struct {
-		UserID string `json:"userId"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	return body
-}
-
-func decodeTagResetRequest(r *http.Request) (string, bool) {
-	defer r.Body.Close()
-	var body struct {
-		Tag   string `json:"tag"`
-		Reset bool   `json:"reset"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	return body.Tag, body.Reset
+	return result
 }

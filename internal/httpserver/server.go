@@ -92,25 +92,25 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 
 	// stats
 	case routeStatsGetUserOnlineStatus:
-		s.statsService.HandleGetUserOnlineStatus(w, r, write)
+		s.handleStatsGetUserOnlineStatus(w, r)
 	case routeStatsGetSystemStats:
-		s.statsService.HandleGetSystemStats(w, write)
+		s.handleStatsGetSystemStats(w, r)
 	case routeStatsGetUsersStats:
-		s.statsService.HandleGetUsersStats(w, r, write)
+		s.handleStatsGetUsersStats(w, r)
 	case routeStatsGetInboundStats:
-		s.statsService.HandleGetInboundStats(w, r, write)
+		s.handleStatsGetInboundStats(w, r)
 	case routeStatsGetOutboundStats:
-		s.statsService.HandleGetOutboundStats(w, r, write)
+		s.handleStatsGetOutboundStats(w, r)
 	case routeStatsGetAllInboundsStats:
-		s.statsService.HandleGetAllInboundsStats(w, r, write)
+		s.handleStatsGetAllInboundsStats(w, r)
 	case routeStatsGetAllOutboundsStats:
-		s.statsService.HandleGetAllOutboundsStats(w, r, write)
+		s.handleStatsGetAllOutboundsStats(w, r)
 	case routeStatsGetCombinedStats:
-		s.statsService.HandleGetCombinedStats(w, r, write)
+		s.handleStatsGetCombinedStats(w, r)
 	case routeStatsGetUserIPList:
-		s.statsService.HandleGetUserIPList(w, r, write)
+		s.handleStatsGetUserIPList(w, r)
 	case routeStatsGetUsersIPList:
-		s.statsService.HandleGetUsersIPList(w, r, write)
+		s.handleStatsGetUsersIPList(w, r)
 
 	// handler
 	case routeHandlerAddUser:

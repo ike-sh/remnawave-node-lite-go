@@ -124,85 +124,80 @@ func statsService(t *testing.T) *stats.Service {
 
 func testGetUserOnlineStatusResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := officialRequest(t, "/node/stats/get-user-online-status")
-	rec := httptest.NewRecorder()
-	service.HandleGetUserOnlineStatus(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	return encodeEnvelope(service.GetUserOnlineStatus(context.Background(), "user-1"))
 }
 
 func testGetSystemStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	rec := httptest.NewRecorder()
-	service.HandleGetSystemStats(rec, writeTestJSON)
-	raw := rec.Body.Bytes()
-	return raw
+	response, err := service.GetSystemStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testGetUsersStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := officialRequest(t, "/node/stats/get-users-stats")
-	rec := httptest.NewRecorder()
-	service.HandleGetUsersStats(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	response, err := service.GetUsersStats(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testGetInboundStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := officialRequest(t, "/node/stats/get-inbound-stats")
-	rec := httptest.NewRecorder()
-	service.HandleGetInboundStats(rec, req, writeTestJSON)
-	raw := rec.Body.Bytes()
-	return raw
+	response, err := service.GetInboundStats(context.Background(), "inbound-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testGetOutboundStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := officialRequest(t, "/node/stats/get-outbound-stats")
-	rec := httptest.NewRecorder()
-	service.HandleGetOutboundStats(rec, req, writeTestJSON)
-	raw := rec.Body.Bytes()
-	return raw
+	response, err := service.GetOutboundStats(context.Background(), "outbound-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testGetAllInboundsStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := officialRequest(t, "/node/stats/get-all-inbounds-stats")
-	rec := httptest.NewRecorder()
-	service.HandleGetAllInboundsStats(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	response, err := service.GetAllInboundsStats(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testGetAllOutboundsStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := officialRequest(t, "/node/stats/get-all-outbounds-stats")
-	rec := httptest.NewRecorder()
-	service.HandleGetAllOutboundsStats(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	response, err := service.GetAllOutboundsStats(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testGetCombinedStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := officialRequest(t, "/node/stats/get-combined-stats")
-	rec := httptest.NewRecorder()
-	service.HandleGetCombinedStats(rec, req, writeTestJSON)
-	raw := rec.Body.Bytes()
-	return raw
+	response, err := service.GetCombinedStats(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testGetUserIPListResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := officialRequest(t, "/node/stats/get-user-ip-list")
-	rec := httptest.NewRecorder()
-	service.HandleGetUserIPList(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	return encodeEnvelope(service.GetUserIPList(context.Background(), "user-1"))
 }
 
 func testGetUsersIPListResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := officialRequest(t, "/node/stats/get-users-ip-list")
-	rec := httptest.NewRecorder()
-	service.HandleGetUsersIPList(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	return encodeEnvelope(service.GetUsersIPList(context.Background()))
 }
 
 func handlerService() *nodehandler.Service {
