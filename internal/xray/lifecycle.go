@@ -510,11 +510,11 @@ func (m *Manager) startFailure(action string, err error) StartResponse {
 
 func (m *Manager) startProcess(generation uint64) (*processState, error) {
 	m.rotateLogs()
-	stdout, err := os.OpenFile(filepath.Join(m.logDir, "xray.out.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	stdout, err := os.OpenFile(filepath.Join(m.logDir, "xray.out.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		return nil, fmt.Errorf("open xray stdout log: %w", err)
 	}
-	stderr, err := os.OpenFile(filepath.Join(m.logDir, "xray.err.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	stderr, err := os.OpenFile(filepath.Join(m.logDir, "xray.err.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		_ = stdout.Close()
 		return nil, fmt.Errorf("open xray stderr log: %w", err)

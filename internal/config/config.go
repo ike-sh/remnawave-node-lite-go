@@ -13,11 +13,11 @@ import (
 
 const (
 	DefaultEnvPath            = "/etc/remnanode/node.env"
-	defaultXrayBin            = "/usr/local/bin/rw-core"
-	defaultGeoDir             = "/usr/local/share/xray"
+	defaultXrayBin            = "/usr/local/lib/remnanode/rw-core"
+	defaultGeoDir             = "/usr/local/share/remnanode/xray"
 	defaultLogDir             = "/var/log/remnanode"
 	defaultInternalSocketPath = "/run/remnanode/internal.sock"
-	defaultASNDBPath          = "/usr/local/share/asn/asn-prefixes.bin"
+	defaultASNDBPath          = "/usr/local/share/remnanode/asn/asn-prefixes.bin"
 )
 
 // ResolveEnvPath returns the first existing env file path, preferring production default.

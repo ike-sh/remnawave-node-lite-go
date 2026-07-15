@@ -8,8 +8,8 @@ bin/
 dist/
 build/
 tmp/
-remnanode-lite
-remnanode-lite.exe
+/remnanode-lite
+/remnanode-lite.exe
 
 # Logs
 logs/

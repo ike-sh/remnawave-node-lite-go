@@ -1,15 +1,31 @@
 #!/sbin/openrc-run
+# shellcheck shell=sh disable=SC2034
 
 name="remnawave-node"
 description="Remnawave Node Lite (Go)"
 
-command="/usr/local/bin/remnawave-node-run"
-command_background=true
-command_user="root"
-pidfile="/run/${RC_SVCNAME}.pid"
+required_files="/etc/remnanode/node.env"
+if [ -r /etc/remnanode/node.env ]; then
+	set -a
+	# shellcheck disable=SC1091
+	. /etc/remnanode/node.env
+	set +a
+fi
+
+supervisor=supervise-daemon
+command="/usr/local/bin/remnanode-lite"
+command_user="remnanode:remnanode"
+directory="/var/lib/remnanode"
+pidfile="/run/remnanode/supervise-daemon.pid"
 output_log="/var/log/remnanode/openrc.log"
 error_log="/var/log/remnanode/openrc.err.log"
+capabilities="^cap_net_admin,^cap_net_bind_service"
+no_new_privs=yes
+umask=0077
 rc_ulimit="-n 1048576"
+respawn_delay=5
+respawn_max=5
+respawn_period=60
 
 depend() {
 	need net
@@ -17,5 +33,6 @@ depend() {
 }
 
 start_pre() {
-	checkpath -d -m 0755 /var/log/remnanode /var/lib/remnanode /run/remnanode
+	checkpath -d -o remnanode:remnanode -m 0750 \
+		/var/log/remnanode /var/lib/remnanode /run/remnanode
 }

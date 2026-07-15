@@ -15,7 +15,7 @@ const (
 	logCheckInterval = 10 * time.Minute
 )
 
-var rotatedLogFiles = []string{"xray.out.log", "xray.err.log"}
+var rotatedLogFiles = []string{"xray.out.log", "xray.err.log", "openrc.log", "openrc.err.log"}
 
 // StartLogRotation periodically rotates rw-core log files so long-running
 // nodes never fill small VPS disks. Rotation is copy+truncate: the O_APPEND

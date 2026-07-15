@@ -4,8 +4,17 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
+
+func TestRotatedLogFilesIncludesOpenRCStreams(t *testing.T) {
+	for _, name := range []string{"openrc.log", "openrc.err.log"} {
+		if !slices.Contains(rotatedLogFiles, name) {
+			t.Fatalf("rotatedLogFiles does not contain %q", name)
+		}
+	}
+}
 
 func TestRotateLogIfNeededSkipsSmallFile(t *testing.T) {
 	dir := t.TempDir()

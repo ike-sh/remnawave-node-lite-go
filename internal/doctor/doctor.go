@@ -143,7 +143,7 @@ func checkSecret(cfg config.Config) []result {
 
 func checkXrayBinary(bin string) []result {
 	if bin == "" {
-		bin = "/usr/local/bin/rw-core"
+		bin = "/usr/local/lib/remnanode/rw-core"
 	}
 	info, err := os.Stat(bin)
 	if err != nil {
@@ -176,7 +176,7 @@ func checkXrayBinary(bin string) []result {
 
 func checkGeoFiles(dir string) []result {
 	if dir == "" {
-		dir = "/usr/local/share/xray"
+		dir = "/usr/local/share/remnanode/xray"
 	}
 	var missing []string
 	for _, name := range []string{"geoip.dat", "geosite.dat"} {
@@ -207,7 +207,7 @@ func checkGeoFiles(dir string) []result {
 
 func checkASNDatabase(path string) []result {
 	if path == "" {
-		path = "/usr/local/share/asn/asn-prefixes.bin"
+		path = "/usr/local/share/remnanode/asn/asn-prefixes.bin"
 	}
 	if _, err := os.Stat(path); err != nil {
 		return []result{{

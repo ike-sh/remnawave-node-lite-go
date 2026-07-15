@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # remnawave-node-lite-go Alpine Linux 一键安装（OpenRC）
-set -euo pipefail
+# shellcheck source-path=SCRIPTDIR
+set -Eeuo pipefail
 
 VERSION="0.1.0"
 PREFIX="/usr/local/bin"
@@ -8,11 +9,13 @@ ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
 LOG_DIR="/var/log/remnanode"
 OPENRC_SVC="/etc/init.d/remnawave-node"
-RUN_WRAPPER="${PREFIX}/remnawave-node-run"
 BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
 SECRET_FILE="${ETC_DIR}/secret.key"
+SERVICE_USER="remnanode"
+SERVICE_GROUP="remnanode"
 REPO="${RNL_REPO:-Luxiaba/remnawave-node-lite-go}"
+BOOTSTRAP_TAG="${RNL_TAG:-v${VERSION}}"
 RESTART_CMD="rc-service remnawave-node restart"
 export RESTART_CMD
 
@@ -25,11 +28,18 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" &
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_DIR}/install-env-helpers.sh"
 else
+  if ! [[ "$REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
+    || ! [[ "$BOOTSTRAP_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "非法 RNL_REPO 或 RNL_TAG，拒绝下载 bootstrap helper" >&2
+    exit 2
+  fi
   _HELPERS_TMP="$(mktemp -d)"
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/scripts/install-env-helpers.sh" \
+  curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+    "https://raw.githubusercontent.com/${REPO}/${BOOTSTRAP_TAG}/scripts/install-env-helpers.sh" \
     -o "${_HELPERS_TMP}/install-env-helpers.sh"
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_TMP}/install-env-helpers.sh"
+  rm -rf "${_HELPERS_TMP}"
 fi
 TAG="$(resolve_install_tag "$REPO" "v${VERSION}")"
 INSTALL_XRAY="${RNL_INSTALL_XRAY:-1}"
@@ -43,6 +53,7 @@ PORT_EXPLICIT=0
 ACTION=""
 UNINSTALL_MODE=""
 STAGE="初始化"
+DELEGATE_TO_UPGRADE=0
 
 usage() {
   cat <<EOF
@@ -51,8 +62,8 @@ usage() {
 Remnawave Node Lite (Go) ${VERSION} — Alpine / OpenRC 安装 / 升级 / 卸载
 
 无参数时在终端显示菜单；非交互请指定动作：
-  --install           安装（或覆盖升级二进制，保留 node.env）
-  --upgrade           仅升级二进制
+  --install           全新安装；检测到完整安装时走事务升级
+  --upgrade           事务升级 Node/service/support（默认保留 rw-core）
   --uninstall         卸载
 
 其它选项：
@@ -67,7 +78,7 @@ Remnawave Node Lite (Go) ${VERSION} — Alpine / OpenRC 安装 / 升级 / 卸载
 
 一键入口（Alpine 无 sudo，root 下直接 bash）：
   apk add --no-cache curl bash
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install-node-alpine.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/v${VERSION}/scripts/install-node-alpine.sh | bash
 EOF
 }
 
@@ -116,12 +127,14 @@ while [ $# -gt 0 ]; do
 done
 
 on_error() {
+  local status="${1:-1}"
+  local command="${2:-unknown}"
   echo "安装失败：${STAGE}" >&2
-  echo "失败命令：${BASH_COMMAND}" >&2
-  exit $?
+  echo "失败命令：${command}" >&2
+  exit "$status"
 }
 
-trap on_error ERR
+trap 'on_error $? "$BASH_COMMAND"' ERR
 
 step() {
   STAGE="$1"
@@ -176,8 +189,51 @@ run_sibling_script() {
   if [ -n "$dir" ] && [ -f "${dir}/${name}" ]; then
     bash "${dir}/${name}" "$@"
   else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/scripts/${name}" | bash -s -- "$@"
+    local support
+    support="$(installed_support_file "scripts/${name}")"
+    if [ ! -f "$support" ]; then
+      echo "缺少已校验 support 脚本：${support}" >&2
+      return 1
+    fi
+    bash "$support" "$@"
   fi
+}
+
+run_upgrade_transaction() {
+  local upgrade_xray=1
+  local -a args=(--yes)
+  if [ "$SKIP_XRAY" -eq 1 ] || [ "$INSTALL_XRAY" -eq 0 ]; then
+    upgrade_xray=0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    args+=(--dry-run)
+  fi
+
+  echo "检测到完整安装，交由 upgrade.sh 执行可回滚升级。"
+  RNL_REPO="$REPO" RNL_TAG="$TAG" RNL_UPGRADE_XRAY="$upgrade_xray" \
+    run_sibling_script upgrade.sh "${args[@]}"
+}
+
+run_explicit_upgrade() {
+  local -a args=(--yes)
+  if [ "$DRY_RUN" -eq 1 ]; then
+    args+=(--dry-run)
+  fi
+  RNL_REPO="$REPO" RNL_TAG="$TAG" RNL_UPGRADE_XRAY=0 \
+    run_sibling_script upgrade.sh "${args[@]}"
+}
+
+run_selected_uninstall() {
+  local -a args
+  if [ "${UNINSTALL_MODE:-}" = "full" ]; then
+    args=(--full)
+  else
+    args=(--keep-config --yes)
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    args+=(--dry-run)
+  fi
+  run_sibling_script uninstall.sh "${args[@]}"
 }
 
 show_menu() {
@@ -227,16 +283,10 @@ show_uninstall_menu() {
 dispatch_action() {
   case "$ACTION" in
     install) do_install ;;
-    upgrade)
-      run_sibling_script upgrade.sh --yes
-      ;;
+    upgrade) run_explicit_upgrade ;;
     uninstall)
       show_uninstall_menu
-      if [ "${UNINSTALL_MODE:-}" = "full" ]; then
-        run_sibling_script uninstall.sh --full
-      else
-        run_sibling_script uninstall.sh --keep-config --yes
-      fi
+      run_selected_uninstall
       ;;
     menu) show_menu; dispatch_action ;;
     *)
@@ -302,10 +352,17 @@ prompt_node_port() {
 }
 
 confirm_install() {
-  if [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+  if [ ! -x "${PREFIX}/${BIN_NAME}" ] || [ ! -f "$NODE_ENV" ]; then
     return 0
   fi
-  if [ ! -x "${PREFIX}/${BIN_NAME}" ] && [ ! -f "$NODE_ENV" ]; then
+
+  if [ "$PORT_EXPLICIT" -eq 1 ] || [ -n "$SECRET_FILE_ARG" ] || [ "$LOW_MEMORY" -eq 1 ]; then
+    echo "已有安装的事务升级不接受 --port / --secret-file / --low-memory；请先升级，再单独修改 ${NODE_ENV}。" >&2
+    return 1
+  fi
+
+  if [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+    DELEGATE_TO_UPGRADE=1
     return 0
   fi
   echo
@@ -319,7 +376,7 @@ confirm_install() {
     exit 1
   }
   case "$choice" in
-    1) ;;
+    1) DELEGATE_TO_UPGRADE=1 ;;
     2)
       if [ "$DRY_RUN" -eq 1 ]; then
         echo "[dry-run] 删除 ${ETC_DIR} ${LOG_DIR} ${DATA_DIR}"
@@ -367,45 +424,16 @@ detect_arch() {
 install_packages() {
   step "安装 Alpine 依赖包"
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] apk add --no-cache bash curl tar ca-certificates libcap openrc iproute2"
+    echo "[dry-run] apk add --no-cache bash curl tar unzip ca-certificates libcap openrc iproute2 nftables"
     return 0
   fi
-  apk add --no-cache bash curl tar ca-certificates libcap openrc iproute2
+  apk add --no-cache bash curl tar unzip ca-certificates libcap openrc iproute2 nftables
 }
 
 download_binary() {
   local arch="$1"
-  local url="https://github.com/${REPO}/releases/download/${TAG}/remnanode-lite_linux_${arch}.tar.gz"
-  local tmp
-  tmp="$(mktemp -d)"
-
   step "下载 ${BIN_NAME} ${TAG} (linux/${arch})"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] curl -fsSL ${url}"
-    echo "[dry-run] install ${PREFIX}/${BIN_NAME}"
-    rm -rf "$tmp"
-    return 0
-  fi
-
-  curl -fsSL "${url}" -o "${tmp}/archive.tar.gz"
-  tar -xzf "${tmp}/archive.tar.gz" -C "${tmp}"
-  install -m 0755 "${tmp}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
-  rm -rf "$tmp"
-
-  "${PREFIX}/${BIN_NAME}" version
-}
-
-apply_capabilities() {
-  step "授予 CAP_NET_ADMIN（nftables / ss -K）"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] setcap cap_net_admin+ep ${PREFIX}/${BIN_NAME}"
-    return 0
-  fi
-  if ! command -v setcap >/dev/null 2>&1; then
-    echo "警告：未找到 setcap，nftables 插件可能不可用。" >&2
-    return 0
-  fi
-  setcap cap_net_admin+ep "${PREFIX}/${BIN_NAME}"
+  install_release_binary "$REPO" "$TAG" "$arch" "${PREFIX}/${BIN_NAME}"
 }
 
 install_xray() {
@@ -415,19 +443,19 @@ install_xray() {
   fi
 
   step "安装 rw-core (Xray core)"
-  local dir
-  dir="$(script_dir)"
-  if [ -n "$dir" ] && [ -f "${dir}/install-xray.sh" ]; then
-    bash "${dir}/install-xray.sh"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/install-xray.sh" | bash
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 执行目标 Release 中已校验的 install-xray.sh"
+    return 0
   fi
+  local support
+  support="$(installed_support_file scripts/install-xray.sh)"
+  [ -f "$support" ] || { echo "缺少已校验 install-xray.sh" >&2; return 1; }
+  RNL_REPO="$REPO" RNL_TAG="$TAG" bash "$support"
 }
 
 setup_directories() {
   step "创建目录"
-  run mkdir -p "$ETC_DIR" "$DATA_DIR" "$LOG_DIR" /run/remnanode
-  run chmod 0755 "$ETC_DIR" "$DATA_DIR" "$LOG_DIR" /run/remnanode
+  setup_service_directories
 }
 
 setup_env_file() {
@@ -456,7 +484,7 @@ setup_env_file() {
   fi
 
   render_env_template "$port" "$low_mem" "install-node-alpine.sh" >"$NODE_ENV"
-  chmod 600 "$NODE_ENV"
+  secure_config_file "$NODE_ENV"
   echo "已创建 ${NODE_ENV}"
 }
 
@@ -487,27 +515,16 @@ setup_secret_file() {
 
 install_openrc() {
   step "安装 OpenRC 服务"
-  local dir
-  dir="$(script_dir)"
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] 安装 ${RUN_WRAPPER} 与 ${OPENRC_SVC}"
+    echo "[dry-run] 安装 ${OPENRC_SVC}"
     return 0
   fi
 
-  if [ -n "$dir" ] && [ -f "${dir}/../deploy/remnawave-node-run.sh" ]; then
-    install -m 0755 "${dir}/../deploy/remnawave-node-run.sh" "$RUN_WRAPPER"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node-run.sh" -o "$RUN_WRAPPER"
-    chmod 0755 "$RUN_WRAPPER"
-  fi
-
-  if [ -n "$dir" ] && [ -f "${dir}/../deploy/remnawave-node.openrc" ]; then
-    install -m 0755 "${dir}/../deploy/remnawave-node.openrc" "$OPENRC_SVC"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node.openrc" -o "$OPENRC_SVC"
-    chmod 0755 "$OPENRC_SVC"
-  fi
+  local support
+  support="$(installed_support_file deploy/remnawave-node.openrc)"
+  [ -f "$support" ] || { echo "缺少已校验 OpenRC service" >&2; return 1; }
+  install -m 0755 "$support" "$OPENRC_SVC"
 
   rc-update add remnawave-node default 2>/dev/null || true
 }
@@ -515,19 +532,19 @@ install_openrc() {
 install_helpers() {
   step "安装日志辅助命令"
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] xlogs / xerrors"
+    echo "[dry-run] remnanode-xlogs / remnanode-xerrors"
     return 0
   fi
 
-  cat >"${PREFIX}/xlogs" <<'EOF'
+  cat >"${PREFIX}/remnanode-xlogs" <<'EOF'
 #!/bin/sh
 exec tail -n +1 -f /var/log/remnanode/xray.out.log
 EOF
-  cat >"${PREFIX}/xerrors" <<'EOF'
+  cat >"${PREFIX}/remnanode-xerrors" <<'EOF'
 #!/bin/sh
 exec tail -n +1 -f /var/log/remnanode/xray.err.log
 EOF
-  chmod +x "${PREFIX}/xlogs" "${PREFIX}/xerrors"
+  chmod 0755 "${PREFIX}/remnanode-xlogs" "${PREFIX}/remnanode-xerrors"
 }
 
 start_service() {
@@ -573,28 +590,35 @@ do_install() {
   require_root
   require_alpine
 
-  detect_low_memory_auto
-
-  local arch
-  arch="$(detect_arch)"
-
-	install_packages
 	confirm_install
+	if [ "$DELEGATE_TO_UPGRADE" -eq 1 ]; then
+		run_upgrade_transaction
+		return 0
+	fi
+	detect_low_memory_auto
+
+	local arch
+	arch="$(detect_arch)"
+	install_packages
+	ensure_service_account
 	setup_directories
 	print_pre_install_panel_hint
   download_binary "$arch"
-  apply_capabilities
-  install_xray
-  install_geo_extra_files
   prompt_node_port
   setup_env_file
   ensure_internal_socket_in_env
   setup_secret_file
+  install_xray
+  migrate_owned_asset_paths
+  install_geo_extra_files
+  normalize_service_permissions
   install_openrc
   install_helpers
   start_service
-  verify_service_listening "$(configured_node_port)"
-  print_panel_address_hint "$(configured_node_port)"
+  if secret_configured; then
+    verify_service_listening "$(configured_node_port)"
+    print_panel_address_hint "$(configured_node_port)"
+  fi
 
   echo
   echo "Alpine 安装完成。"
@@ -603,7 +627,7 @@ do_install() {
   echo "  监听端口：  $(configured_node_port)（Panel 须填相同端口）"
   echo "  服务管理：  rc-service remnawave-node {start|stop|restart|status}"
   echo "  日志：      tail -f /var/log/remnanode/openrc.log"
-  echo "  Xray：      xlogs / xerrors"
+  echo "  Xray：      remnanode-xlogs / remnanode-xerrors"
   echo "  管理：      再次运行 install-node-alpine.sh 可升级或卸载"
   if ! secret_configured; then
     print_env_config_hint "$RESTART_CMD"

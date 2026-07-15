@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # remnawave-node-lite-go 一键安装脚本
-set -euo pipefail
+# shellcheck source-path=SCRIPTDIR
+set -Eeuo pipefail
 
 VERSION="0.1.0"
 PREFIX="/usr/local/bin"
@@ -11,7 +12,10 @@ UNIT="/etc/systemd/system/remnawave-node.service"
 BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
 SECRET_FILE="${ETC_DIR}/secret.key"
+SERVICE_USER="remnanode"
+SERVICE_GROUP="remnanode"
 REPO="${RNL_REPO:-Luxiaba/remnawave-node-lite-go}"  # must match internal/version/version.go releaseRepo
+BOOTSTRAP_TAG="${RNL_TAG:-v${VERSION}}"
 if ! command -v curl >/dev/null 2>&1; then
   echo "缺少命令：curl" >&2
   exit 1
@@ -21,11 +25,18 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" &
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_DIR}/install-env-helpers.sh"
 else
+  if ! [[ "$REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
+    || ! [[ "$BOOTSTRAP_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "非法 RNL_REPO 或 RNL_TAG，拒绝下载 bootstrap helper" >&2
+    exit 2
+  fi
   _HELPERS_TMP="$(mktemp -d)"
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/scripts/install-env-helpers.sh" \
+  curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+    "https://raw.githubusercontent.com/${REPO}/${BOOTSTRAP_TAG}/scripts/install-env-helpers.sh" \
     -o "${_HELPERS_TMP}/install-env-helpers.sh"
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_TMP}/install-env-helpers.sh"
+  rm -rf "${_HELPERS_TMP}"
 fi
 TAG="$(resolve_install_tag "$REPO" "v${VERSION}")"
 INSTALL_XRAY="${RNL_INSTALL_XRAY:-1}"
@@ -39,6 +50,7 @@ PORT_EXPLICIT=0
 ACTION=""
 UNINSTALL_MODE=""
 STAGE="初始化"
+DELEGATE_TO_UPGRADE=0
 
 usage() {
   cat <<EOF
@@ -47,8 +59,8 @@ usage() {
 Remnawave Node Lite (Go) ${VERSION} — 安装 / 升级 / 卸载
 
 无参数时在终端显示菜单；非交互请指定动作：
-  --install           安装（或覆盖升级二进制，保留 node.env）
-  --upgrade           仅升级二进制
+  --install           全新安装；检测到完整安装时走事务升级
+  --upgrade           事务升级 Node/service/support（默认保留 rw-core）
   --uninstall         卸载
 
 其它选项：
@@ -62,7 +74,7 @@ Remnawave Node Lite (Go) ${VERSION} — 安装 / 升级 / 卸载
   --version           版本
 
 一键入口（推荐）：
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install-node.sh | sudo bash
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/v${VERSION}/scripts/install-node.sh | sudo bash
 EOF
 }
 
@@ -111,12 +123,14 @@ while [ $# -gt 0 ]; do
 done
 
 on_error() {
+  local status="${1:-1}"
+  local command="${2:-unknown}"
   echo "安装失败：${STAGE}" >&2
-  echo "失败命令：${BASH_COMMAND}" >&2
-  exit $?
+  echo "失败命令：${command}" >&2
+  exit "$status"
 }
 
-trap on_error ERR
+trap 'on_error $? "$BASH_COMMAND"' ERR
 
 step() {
   STAGE="$1"
@@ -171,8 +185,51 @@ run_sibling_script() {
   if [ -n "$dir" ] && [ -f "${dir}/${name}" ]; then
     bash "${dir}/${name}" "$@"
   else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/scripts/${name}" | bash -s -- "$@"
+    local support
+    support="$(installed_support_file "scripts/${name}")"
+    if [ ! -f "$support" ]; then
+      echo "缺少已校验 support 脚本：${support}" >&2
+      return 1
+    fi
+    bash "$support" "$@"
   fi
+}
+
+run_upgrade_transaction() {
+  local upgrade_xray=1
+  local -a args=(--yes)
+  if [ "$SKIP_XRAY" -eq 1 ] || [ "$INSTALL_XRAY" -eq 0 ]; then
+    upgrade_xray=0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    args+=(--dry-run)
+  fi
+
+  echo "检测到完整安装，交由 upgrade.sh 执行可回滚升级。"
+  RNL_REPO="$REPO" RNL_TAG="$TAG" RNL_UPGRADE_XRAY="$upgrade_xray" \
+    run_sibling_script upgrade.sh "${args[@]}"
+}
+
+run_explicit_upgrade() {
+  local -a args=(--yes)
+  if [ "$DRY_RUN" -eq 1 ]; then
+    args+=(--dry-run)
+  fi
+  RNL_REPO="$REPO" RNL_TAG="$TAG" RNL_UPGRADE_XRAY=0 \
+    run_sibling_script upgrade.sh "${args[@]}"
+}
+
+run_selected_uninstall() {
+  local -a args
+  if [ "${UNINSTALL_MODE:-}" = "full" ]; then
+    args=(--full)
+  else
+    args=(--keep-config --yes)
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    args+=(--dry-run)
+  fi
+  run_sibling_script uninstall.sh "${args[@]}"
 }
 
 show_menu() {
@@ -222,16 +279,10 @@ show_uninstall_menu() {
 dispatch_action() {
   case "$ACTION" in
     install) do_install ;;
-    upgrade)
-      run_sibling_script upgrade.sh --yes
-      ;;
+    upgrade) run_explicit_upgrade ;;
     uninstall)
       show_uninstall_menu
-      if [ "${UNINSTALL_MODE:-}" = "full" ]; then
-        run_sibling_script uninstall.sh --full
-      else
-        run_sibling_script uninstall.sh --keep-config --yes
-      fi
+      run_selected_uninstall
       ;;
     menu) show_menu; dispatch_action ;;
     *)
@@ -258,7 +309,7 @@ redirect_alpine() {
   fi
   if [ -f /etc/alpine-release ]; then
     echo "检测到 Alpine Linux，请使用专用安装脚本："
-    echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install-node-alpine.sh | bash"
+    echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/install-node-alpine.sh | bash"
     exit 1
   fi
 }
@@ -306,10 +357,17 @@ prompt_node_port() {
 }
 
 confirm_install() {
-  if [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+  if [ ! -x "${PREFIX}/${BIN_NAME}" ] || [ ! -f "$NODE_ENV" ]; then
     return 0
   fi
-  if [ ! -x "${PREFIX}/${BIN_NAME}" ] && [ ! -f "$NODE_ENV" ]; then
+
+  if [ "$PORT_EXPLICIT" -eq 1 ] || [ -n "$SECRET_FILE_ARG" ] || [ "$LOW_MEMORY" -eq 1 ]; then
+    echo "已有安装的事务升级不接受 --port / --secret-file / --low-memory；请先升级，再单独修改 ${NODE_ENV}。" >&2
+    return 1
+  fi
+
+  if [ "$YES" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+    DELEGATE_TO_UPGRADE=1
     return 0
   fi
   echo
@@ -323,11 +381,12 @@ confirm_install() {
     exit 1
   }
   case "$choice" in
-    1) ;;
+    1) DELEGATE_TO_UPGRADE=1 ;;
     2)
       if [ "$DRY_RUN" -eq 1 ]; then
         echo "[dry-run] 删除 ${ETC_DIR} ${LOG_DIR} ${DATA_DIR}"
       else
+        systemctl stop remnawave-node.service 2>/dev/null || true
         rm -rf "$ETC_DIR" "$LOG_DIR" "$DATA_DIR"
         cleanup_runtime
         rm -f "${ETC_DIR}.bak."* 2>/dev/null || true
@@ -367,26 +426,27 @@ detect_arch() {
   esac
 }
 
-download_binary() {
-  local arch="$1"
-  local url="https://github.com/${REPO}/releases/download/${TAG}/remnanode-lite_linux_${arch}.tar.gz"
-  local tmp
-  tmp="$(mktemp -d)"
-
-  step "下载 ${BIN_NAME} ${TAG} (linux/${arch})"
+install_packages() {
+  step "安装运行依赖"
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] curl -fsSL ${url}"
-    echo "[dry-run] install ${PREFIX}/${BIN_NAME}"
-    rm -rf "$tmp"
+    echo "[dry-run] apt-get install ca-certificates curl tar unzip iproute2 nftables"
     return 0
   fi
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+      ca-certificates curl tar unzip iproute2 nftables
+    return 0
+  fi
+  for command in curl tar unzip ss nft; do
+    require_command "$command"
+  done
+}
 
-  curl -fsSL "${url}" -o "${tmp}/archive.tar.gz"
-  tar -xzf "${tmp}/archive.tar.gz" -C "${tmp}"
-  install -m 0755 "${tmp}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
-  rm -rf "$tmp"
-
-  "${PREFIX}/${BIN_NAME}" version
+download_binary() {
+  local arch="$1"
+  step "下载 ${BIN_NAME} ${TAG} (linux/${arch})"
+  install_release_binary "$REPO" "$TAG" "$arch" "${PREFIX}/${BIN_NAME}"
 }
 
 install_xray() {
@@ -396,19 +456,19 @@ install_xray() {
   fi
 
   step "安装 rw-core (Xray core)"
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [ -f "${script_dir}/install-xray.sh" ]; then
-    bash "${script_dir}/install-xray.sh"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/install-xray.sh" | bash
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 执行目标 Release 中已校验的 install-xray.sh"
+    return 0
   fi
+  local support
+  support="$(installed_support_file scripts/install-xray.sh)"
+  [ -f "$support" ] || { echo "缺少已校验 install-xray.sh" >&2; return 1; }
+  RNL_REPO="$REPO" RNL_TAG="$TAG" bash "$support"
 }
 
 setup_directories() {
   step "创建目录"
-  run mkdir -p "$ETC_DIR" "$DATA_DIR" "$LOG_DIR"
-  run chmod 0755 "$ETC_DIR" "$DATA_DIR" "$LOG_DIR"
+  setup_service_directories
 }
 
 setup_env_file() {
@@ -437,7 +497,7 @@ setup_env_file() {
   fi
 
   render_env_template "$port" "$low_mem" "install-node.sh" >"$NODE_ENV"
-  chmod 600 "$NODE_ENV"
+  secure_config_file "$NODE_ENV"
   echo "已创建 ${NODE_ENV}"
 }
 
@@ -468,19 +528,16 @@ setup_secret_file() {
 
 install_systemd() {
   step "安装 systemd 服务"
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] 安装 ${UNIT}"
     return 0
   fi
 
-  if [ -f "${script_dir}/../deploy/remnawave-node.service" ]; then
-    install -m 0644 "${script_dir}/../deploy/remnawave-node.service" "$UNIT"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node.service" -o "$UNIT"
-  fi
+  local support
+  support="$(installed_support_file deploy/remnawave-node.service)"
+  [ -f "$support" ] || { echo "缺少已校验 systemd unit" >&2; return 1; }
+  install -m 0644 "$support" "$UNIT"
 
   systemctl daemon-reload
   systemctl enable remnawave-node.service
@@ -489,19 +546,19 @@ install_systemd() {
 install_helpers() {
   step "安装日志辅助命令"
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] xlogs / xerrors"
+    echo "[dry-run] remnanode-xlogs / remnanode-xerrors"
     return 0
   fi
 
-  cat >/usr/local/bin/xlogs <<'EOF'
+  cat >/usr/local/bin/remnanode-xlogs <<'EOF'
 #!/bin/sh
 exec tail -n +1 -f /var/log/remnanode/xray.out.log
 EOF
-  cat >/usr/local/bin/xerrors <<'EOF'
+  cat >/usr/local/bin/remnanode-xerrors <<'EOF'
 #!/bin/sh
 exec tail -n +1 -f /var/log/remnanode/xray.err.log
 EOF
-  chmod +x /usr/local/bin/xlogs /usr/local/bin/xerrors
+  chmod 0755 /usr/local/bin/remnanode-xlogs /usr/local/bin/remnanode-xerrors
 }
 
 start_service() {
@@ -547,26 +604,36 @@ do_install() {
   redirect_alpine
   require_command curl
   require_command systemctl
-  detect_low_memory_auto
-
-  local arch
-  arch="$(detect_arch)"
 
 	confirm_install
-	setup_directories
-	print_pre_install_panel_hint
+	if [ "$DELEGATE_TO_UPGRADE" -eq 1 ]; then
+		run_upgrade_transaction
+		return 0
+	fi
+	detect_low_memory_auto
+
+	local arch
+	arch="$(detect_arch)"
+	install_packages
+	ensure_service_account
+  setup_directories
+  print_pre_install_panel_hint
   download_binary "$arch"
-  install_xray
-  install_geo_extra_files
   prompt_node_port
   setup_env_file
   ensure_internal_socket_in_env
   setup_secret_file
+  install_xray
+  migrate_owned_asset_paths
+  install_geo_extra_files
+  normalize_service_permissions
   install_systemd
   install_helpers
   start_service
-  verify_service_listening "$(configured_node_port)"
-  print_panel_address_hint "$(configured_node_port)"
+  if secret_configured; then
+    verify_service_listening "$(configured_node_port)"
+    print_panel_address_hint "$(configured_node_port)"
+  fi
 
   echo
   echo "安装完成。"
@@ -575,7 +642,7 @@ do_install() {
   echo "  监听端口：$(configured_node_port)（Panel 须填相同端口）"
   echo "  配置文件：${NODE_ENV}（NODE_PORT + SECRET_KEY）"
   echo "  日志：    journalctl -u remnawave-node -f"
-  echo "  Xray：    xlogs / xerrors"
+  echo "  Xray：    remnanode-xlogs / remnanode-xerrors"
   echo "  管理：    再次运行 install-node.sh 可升级或卸载"
   if ! secret_configured; then
     print_env_config_hint "sudo systemctl restart remnawave-node"

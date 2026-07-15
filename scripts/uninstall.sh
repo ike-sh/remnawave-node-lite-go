@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # remnawave-node-lite-go 卸载脚本（systemd / Alpine OpenRC）
-set -euo pipefail
+set -Eeuo pipefail
 
 VERSION="0.1.0"
 PREFIX="/usr/local/bin"
 BIN_NAME="remnanode-lite"
 RUN_WRAPPER="${PREFIX}/remnawave-node-run"
+XLOGS="${PREFIX}/remnanode-xlogs"
+XERRORS="${PREFIX}/remnanode-xerrors"
 UNIT="/etc/systemd/system/remnawave-node.service"
 OPENRC_SVC="/etc/init.d/remnawave-node"
 ETC_DIR="/etc/remnanode"
 LOG_DIR="/var/log/remnanode"
 DATA_DIR="/var/lib/remnanode"
-GEO_DIR="/usr/local/share/xray"
-ASN_DIR="/usr/local/share/asn"
-XRAY_BIN="/usr/local/bin/rw-core"
-XRAY_LEGACY="/usr/local/bin/xray"
+OWNED_LIB_DIR="/usr/local/lib/remnanode"
+OWNED_SHARE_DIR="/usr/local/share/remnanode"
+GEO_DIR="${OWNED_SHARE_DIR}/xray"
+ASN_DIR="${OWNED_SHARE_DIR}/asn"
+XRAY_BIN="${OWNED_LIB_DIR}/rw-core"
 
 YES=0
 DRY_RUN=0
@@ -83,12 +86,14 @@ while [ $# -gt 0 ]; do
 done
 
 on_error() {
+  local status="${1:-1}"
+  local command="${2:-unknown}"
   echo "卸载失败：${STAGE}" >&2
-  echo "失败命令：${BASH_COMMAND}" >&2
-  exit $?
+  echo "失败命令：${command}" >&2
+  exit "$status"
 }
 
-trap on_error ERR
+trap 'on_error $? "$BASH_COMMAND"' ERR
 
 step() {
   STAGE="$1"
@@ -128,14 +133,21 @@ read_tty() {
 }
 
 cleanup_runtime() {
-  step "清理运行时（rw-core 进程 / socket）"
-  run pkill -x rw-core 2>/dev/null || true
-  run pkill -f '/usr/local/bin/rw-core' 2>/dev/null || true
+  step "清理本项目运行时"
   run rm -rf /run/remnanode 2>/dev/null || true
   run rm -f /run/remnawave-internal-*.sock 2>/dev/null || true
   if [ "$PURGE_CONFIG" -eq 1 ]; then
     run rm -f "${ETC_DIR}/node.env.bak."* 2>/dev/null || true
   fi
+}
+
+cleanup_firewall() {
+  step "清理本项目 nftables 私有表"
+  if ! command -v nft >/dev/null 2>&1; then
+    return 0
+  fi
+  run nft delete table ip remnanode 2>/dev/null || true
+  run nft delete table ip6 remnanode6 2>/dev/null || true
 }
 
 is_alpine() {
@@ -221,7 +233,7 @@ print_plan() {
   echo "将执行："
   echo "  • 停止并移除服务（$(detect_install_type)）"
   echo "  • 删除二进制：${PREFIX}/${BIN_NAME}"
-  echo "  • 删除辅助命令：xlogs, xerrors, ${RUN_WRAPPER}"
+  echo "  • 删除辅助命令：${XLOGS}, ${XERRORS}"
   [ "$PURGE_CONFIG" -eq 1 ] && echo "  • 删除配置：${ETC_DIR}"
   [ "$PURGE_LOGS" -eq 1 ] && echo "  • 删除日志：${LOG_DIR}"
   [ "$PURGE_DATA" -eq 1 ] && echo "  • 删除数据：${DATA_DIR}"
@@ -229,7 +241,7 @@ print_plan() {
     echo "  • 删除 rw-core：${XRAY_BIN}"
     echo "  • 删除 geo：${GEO_DIR}"
     echo "  • 删除 ASN 数据：${ASN_DIR}"
-    [ -e "$XRAY_LEGACY" ] && echo "  • 删除 xray：${XRAY_LEGACY}"
+    echo "  • 仅删除本项目专属目录，不删除通用 /usr/local/bin/xray 或 /usr/local/share/xray"
   fi
   echo
 }
@@ -272,7 +284,7 @@ remove_binaries() {
   step "删除二进制与辅助命令"
   run rm -f "${PREFIX}/${BIN_NAME}"
   run rm -f "${RUN_WRAPPER}"
-  run rm -f "${PREFIX}/xlogs" "${PREFIX}/xerrors"
+  run rm -f "$XLOGS" "$XERRORS"
 }
 
 remove_optional_dirs() {
@@ -304,12 +316,7 @@ remove_xray() {
     return 0
   fi
   step "删除 rw-core 与 geo 数据"
-  run rm -f "$XRAY_BIN"
-  if [ -L "$XRAY_LEGACY" ] || [ -f "$XRAY_LEGACY" ]; then
-    run rm -f "$XRAY_LEGACY"
-  fi
-  run rm -rf "$GEO_DIR"
-  run rm -rf "$ASN_DIR"
+  run rm -rf "$OWNED_LIB_DIR" "$OWNED_SHARE_DIR"
 }
 
 main() {
@@ -326,6 +333,7 @@ main() {
 
   stop_service
   cleanup_runtime
+  cleanup_firewall
   remove_service_files
   remove_binaries
   remove_optional_dirs
@@ -339,6 +347,7 @@ main() {
     echo "卸载完成。"
     [ "$PURGE_CONFIG" -eq 0 ] && [ -d "$ETC_DIR" ] && echo "  配置保留：${ETC_DIR}（重装可复用）"
     [ "$PURGE_XRAY" -eq 0 ] && [ -x "$XRAY_BIN" ] && echo "  rw-core 保留：${XRAY_BIN}"
+    echo "  系统用户 remnanode 保留，供保留配置或后续重装复用。"
     echo
     echo "重新安装："
     if is_alpine; then

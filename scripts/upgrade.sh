@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 # remnawave-node-lite-go 升级脚本（保留 node.env 与 rw-core）
-set -euo pipefail
+# shellcheck source-path=SCRIPTDIR
+set -Eeuo pipefail
 
 VERSION="0.1.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 UNIT="/etc/systemd/system/remnawave-node.service"
 OPENRC_SVC="/etc/init.d/remnawave-node"
-RUN_WRAPPER="${PREFIX}/remnawave-node-run"
 BIN_NAME="remnanode-lite"
 NODE_ENV="${ETC_DIR}/node.env"
+SECRET_FILE="${ETC_DIR}/secret.key"
+DATA_DIR="/var/lib/remnanode"
+LOG_DIR="/var/log/remnanode"
+SERVICE_USER="remnanode"
+SERVICE_GROUP="remnanode"
+XRAY_BIN="/usr/local/lib/remnanode/rw-core"
+GEO_DIR="/usr/local/share/remnanode/xray"
+ASN_DIR="/usr/local/share/remnanode/asn"
+SUPPORT_LINK="/usr/local/lib/remnanode/support-current"
 REPO="${RNL_REPO:-Luxiaba/remnawave-node-lite-go}"
+BOOTSTRAP_TAG="${RNL_TAG:-v${VERSION}}"
 if ! command -v curl >/dev/null 2>&1; then
   echo "缺少命令：curl" >&2
   exit 1
@@ -20,11 +30,18 @@ if [ -n "${BASH_SOURCE[0]:-}" ]; then
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_DIR}/install-env-helpers.sh"
 else
+  if ! [[ "$REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
+    || ! [[ "$BOOTSTRAP_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "非法 RNL_REPO 或 RNL_TAG，拒绝下载 bootstrap helper" >&2
+    exit 2
+  fi
   _HELPERS_TMP="$(mktemp -d)"
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/scripts/install-env-helpers.sh" \
+  curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+    "https://raw.githubusercontent.com/${REPO}/${BOOTSTRAP_TAG}/scripts/install-env-helpers.sh" \
     -o "${_HELPERS_TMP}/install-env-helpers.sh"
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_TMP}/install-env-helpers.sh"
+  rm -rf "${_HELPERS_TMP}"
 fi
 TAG="$(resolve_install_tag "$REPO" "v${VERSION}")"
 UPGRADE_XRAY="${RNL_UPGRADE_XRAY:-0}"
@@ -32,6 +49,9 @@ UPGRADE_XRAY="${RNL_UPGRADE_XRAY:-0}"
 YES=0
 DRY_RUN=0
 STAGE="初始化"
+BACKUP_DIR=""
+ROLLBACK_ARMED=0
+SERVICE_WAS_ACTIVE=0
 
 usage() {
   cat <<EOF
@@ -41,7 +61,7 @@ Remnawave Node Lite (Go) 升级到 ${TAG}
 
 环境变量：
   RNL_REPO           GitHub 仓库，默认 Luxiaba/remnawave-node-lite-go
-  RNL_TAG            Release 标签；未设置时自动取 GitHub 最新 Release（回退 v${VERSION}）
+  RNL_TAG            Release 标签；未设置时固定为 v${VERSION}
   RNL_UPGRADE_XRAY   设为 1 时同时运行 install-xray.sh
 EOF
 }
@@ -67,12 +87,18 @@ while [ $# -gt 0 ]; do
 done
 
 on_error() {
+  local status="${1:-1}"
+  local command="${2:-unknown}"
+  trap - ERR
   echo "升级失败：${STAGE}" >&2
-  echo "失败命令：${BASH_COMMAND}" >&2
-  exit $?
+  echo "失败命令：${command}" >&2
+  if [ "$ROLLBACK_ARMED" -eq 1 ]; then
+    rollback_upgrade || echo "自动回滚未完整成功，请检查 ${BACKUP_DIR}" >&2
+  fi
+  exit "$status"
 }
 
-trap on_error ERR
+trap 'on_error $? "$BASH_COMMAND"' ERR
 
 step() {
   STAGE="$1"
@@ -132,59 +158,150 @@ confirm_upgrade() {
   esac
 }
 
-backup_binary() {
-  step "备份当前二进制"
+service_is_active() {
+  if is_alpine; then
+    rc-service remnawave-node status >/dev/null 2>&1
+  else
+    systemctl is-active --quiet remnawave-node.service
+  fi
+}
+
+backup_path() {
+  local source="$1" name="$2"
+  if [ -e "$source" ] || [ -L "$source" ]; then
+    cp -a "$source" "$BACKUP_DIR/$name"
+  else
+    : >"$BACKUP_DIR/$name.absent"
+  fi
+}
+
+begin_upgrade_transaction() {
+  step "创建升级事务备份"
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] cp ${PREFIX}/${BIN_NAME} ${PREFIX}/${BIN_NAME}.bak"
+    echo "[dry-run] 备份 binary / service / support / 可选 rw-core 资产"
     return 0
   fi
-  if [ -f "${PREFIX}/${BIN_NAME}" ]; then
-    cp -a "${PREFIX}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}.bak.$(date +%Y%m%d%H%M%S)"
+
+  BACKUP_DIR="$(mktemp -d /tmp/remnanode-upgrade.XXXXXX)"
+  backup_path "${PREFIX}/${BIN_NAME}" binary
+  backup_path "$NODE_ENV" node-env
+  backup_path "$UNIT" systemd-unit
+  backup_path "$OPENRC_SVC" openrc-service
+  if [ -L "$SUPPORT_LINK" ]; then
+    local support_target support_path
+    support_target="$(readlink "$SUPPORT_LINK")"
+    if ! [[ "$support_target" =~ ^support/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      echo "拒绝备份异常 support 链接：${SUPPORT_LINK} -> ${support_target}" >&2
+      return 1
+    fi
+    support_path="/usr/local/lib/remnanode/${support_target}"
+    if [ ! -d "$support_path" ] || find "$support_path" -type l -print -quit | grep -q .; then
+      echo "拒绝备份缺失或含链接的 support 目录：${support_path}" >&2
+      return 1
+    fi
+    printf '%s\n' "$support_target" >"$BACKUP_DIR/support-link"
+    mkdir "$BACKUP_DIR/support-content"
+    cp -a "$support_path/." "$BACKUP_DIR/support-content/"
+  elif [ -e "$SUPPORT_LINK" ]; then
+    echo "拒绝覆盖非符号链接的 ${SUPPORT_LINK}" >&2
+    return 1
+  else
+    : >"$BACKUP_DIR/support-link.absent"
+  fi
+  if [ "$UPGRADE_XRAY" -eq 1 ]; then
+    backup_path "$XRAY_BIN" rw-core
+    backup_path "$GEO_DIR" geo
+    backup_path "$ASN_DIR" asn
+  fi
+  ROLLBACK_ARMED=1
+}
+
+restore_path() {
+  local backup="$1" target="$2"
+  if [ -e "$BACKUP_DIR/$backup" ] || [ -L "$BACKUP_DIR/$backup" ]; then
+    rm -rf "$target"
+    cp -a "$BACKUP_DIR/$backup" "$target"
+  elif [ -f "$BACKUP_DIR/$backup.absent" ]; then
+    rm -rf "$target"
+  fi
+}
+
+rollback_upgrade() {
+  local failed=0
+  echo "==> 自动回滚升级" >&2
+  if is_alpine; then
+    rc-service remnawave-node stop >/dev/null 2>&1 || true
+  else
+    systemctl stop remnawave-node.service >/dev/null 2>&1 || true
+  fi
+
+  restore_path binary "${PREFIX}/${BIN_NAME}" || failed=1
+  restore_path node-env "$NODE_ENV" || failed=1
+  restore_path systemd-unit "$UNIT" || failed=1
+  restore_path openrc-service "$OPENRC_SVC" || failed=1
+  rm -f "$SUPPORT_LINK" || failed=1
+  rm -rf "/usr/local/lib/remnanode/support/$TAG" || failed=1
+  if [ -f "$BACKUP_DIR/support-link" ]; then
+    local support_target
+    support_target="/usr/local/lib/remnanode/$(cat "$BACKUP_DIR/support-link")"
+    rm -rf "$support_target" || failed=1
+    cp -a "$BACKUP_DIR/support-content" "$support_target" || failed=1
+    ln -s "$(cat "$BACKUP_DIR/support-link")" "$SUPPORT_LINK" || failed=1
+  fi
+  if [ "$UPGRADE_XRAY" -eq 1 ]; then
+    restore_path rw-core "$XRAY_BIN" || failed=1
+    restore_path geo "$GEO_DIR" || failed=1
+    restore_path asn "$ASN_DIR" || failed=1
+  fi
+
+  if ! is_alpine; then
+    systemctl daemon-reload >/dev/null 2>&1 || failed=1
+  fi
+  if [ "$SERVICE_WAS_ACTIVE" -eq 1 ]; then
+    if is_alpine; then
+      rc-service remnawave-node start >/dev/null 2>&1 || failed=1
+    else
+      systemctl start remnawave-node.service >/dev/null 2>&1 || failed=1
+    fi
+    local port
+    port="$(read_env_value NODE_PORT "$NODE_ENV")"
+    [ -n "$port" ] || port=2222
+    if ! wait_for_service_stable "$port" 30; then
+      echo "回滚后的服务未在 :${port} 恢复监听" >&2
+      failed=1
+    fi
+  fi
+  ROLLBACK_ARMED=0
+  if [ "$failed" -ne 0 ]; then
+    echo "回滚不完整；备份目录：${BACKUP_DIR}" >&2
+    return 1
+  fi
+  echo "已恢复升级前文件与服务。备份目录：${BACKUP_DIR}" >&2
+}
+
+commit_upgrade_transaction() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+  ROLLBACK_ARMED=0
+  local support_root="/usr/local/lib/remnanode/support"
+  local support_dir
+  for support_dir in "$support_root"/*; do
+    [ -e "$support_dir" ] || continue
+    if [ "$support_dir" != "$support_root/$TAG" ] && ! rm -rf "$support_dir"; then
+      echo "警告：无法清理旧 support 目录 ${support_dir}" >&2
+    fi
+  done
+  if [ -n "$BACKUP_DIR" ]; then
+    rm -rf "$BACKUP_DIR" || echo "警告：无法清理事务备份 ${BACKUP_DIR}" >&2
+    BACKUP_DIR=""
   fi
 }
 
 download_binary() {
   local arch="$1"
-  local url=""
-  if [ -x "${PREFIX}/${BIN_NAME}" ]; then
-    url="$("${PREFIX}/${BIN_NAME}" release-url "${TAG}" "${arch}" 2>/dev/null || true)"
-  fi
-  if [ -z "${url}" ]; then
-    url="https://github.com/${REPO}/releases/download/${TAG}/remnanode-lite_linux_${arch}.tar.gz"
-  fi
-  local tmp
-  tmp="$(mktemp -d)"
-
   step "下载 ${BIN_NAME} ${TAG} (linux/${arch})"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] curl -fsSL ${url}"
-    echo "[dry-run] install ${PREFIX}/${BIN_NAME}"
-    rm -rf "$tmp"
-    return 0
-  fi
-
-  curl -fsSL "${url}" -o "${tmp}/archive.tar.gz"
-  tar -xzf "${tmp}/archive.tar.gz" -C "${tmp}"
-  install -m 0755 "${tmp}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
-  rm -rf "$tmp"
-
-  "${PREFIX}/${BIN_NAME}" version
-}
-
-apply_capabilities() {
-  if ! is_alpine; then
-    return 0
-  fi
-  step "重新授予 CAP_NET_ADMIN（Alpine setcap）"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] setcap cap_net_admin+ep ${PREFIX}/${BIN_NAME}"
-    return 0
-  fi
-  if command -v setcap >/dev/null 2>&1; then
-    setcap cap_net_admin+ep "${PREFIX}/${BIN_NAME}"
-  else
-    echo "警告：未找到 setcap，请安装 libcap 后手动执行。" >&2
-  fi
+  install_release_binary "$REPO" "$TAG" "$arch" "${PREFIX}/${BIN_NAME}"
 }
 
 upgrade_xray() {
@@ -194,13 +311,14 @@ upgrade_xray() {
   fi
 
   step "升级 rw-core"
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [ -f "${script_dir}/install-xray.sh" ]; then
-    bash "${script_dir}/install-xray.sh"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/install-xray.sh" | bash
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 执行目标 Release 中已校验的 install-xray.sh"
+    return 0
   fi
+  local support
+  support="$(installed_support_file scripts/install-xray.sh)"
+  [ -f "$support" ] || { echo "缺少已校验 install-xray.sh" >&2; return 1; }
+  RNL_REPO="$REPO" RNL_TAG="$TAG" bash "$support"
 }
 
 refresh_systemd() {
@@ -209,19 +327,16 @@ refresh_systemd() {
   fi
 
   step "刷新 systemd unit"
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] 更新 ${UNIT}"
     return 0
   fi
 
-  if [ -f "${script_dir}/../deploy/remnawave-node.service" ]; then
-    install -m 0644 "${script_dir}/../deploy/remnawave-node.service" "$UNIT"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node.service" -o "$UNIT"
-  fi
+  local support
+  support="$(installed_support_file deploy/remnawave-node.service)"
+  [ -f "$support" ] || { echo "缺少已校验 systemd unit" >&2; return 1; }
+  install -m 0644 "$support" "$UNIT"
   systemctl daemon-reload
 }
 
@@ -231,27 +346,16 @@ refresh_openrc() {
   fi
 
   step "刷新 OpenRC 服务文件"
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] 更新 ${OPENRC_SVC} 与 ${RUN_WRAPPER}"
+    echo "[dry-run] 更新 ${OPENRC_SVC}"
     return 0
   fi
 
-  if [ -f "${script_dir}/../deploy/remnawave-node-run.sh" ]; then
-    install -m 0755 "${script_dir}/../deploy/remnawave-node-run.sh" "$RUN_WRAPPER"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node-run.sh" -o "$RUN_WRAPPER"
-    chmod 0755 "$RUN_WRAPPER"
-  fi
-
-  if [ -f "${script_dir}/../deploy/remnawave-node.openrc" ]; then
-    install -m 0755 "${script_dir}/../deploy/remnawave-node.openrc" "$OPENRC_SVC"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/deploy/remnawave-node.openrc" -o "$OPENRC_SVC"
-    chmod 0755 "$OPENRC_SVC"
-  fi
+  local support
+  support="$(installed_support_file deploy/remnawave-node.openrc)"
+  [ -f "$support" ] || { echo "缺少已校验 OpenRC service" >&2; return 1; }
+  install -m 0755 "$support" "$OPENRC_SVC"
 }
 
 restart_service() {
@@ -269,6 +373,11 @@ restart_service() {
     exit 1
   fi
 
+  if [ "$SERVICE_WAS_ACTIVE" -eq 0 ]; then
+    echo "服务升级前未运行，保留 stopped 状态。"
+    return 0
+  fi
+
   if is_alpine; then
     rc-service remnawave-node restart
     sleep 1
@@ -278,6 +387,16 @@ restart_service() {
     sleep 1
     systemctl --no-pager status remnawave-node.service || true
   fi
+}
+
+verify_upgrade() {
+  if [ "$DRY_RUN" -eq 1 ] || [ "$SERVICE_WAS_ACTIVE" -eq 0 ]; then
+    return 0
+  fi
+  local port
+  port="$(read_env_value NODE_PORT "$NODE_ENV")"
+  [ -n "$port" ] || port=2222
+  verify_service_listening "$port"
 }
 
 main() {
@@ -301,17 +420,26 @@ main() {
 
   confirm_upgrade
 
+  if [ "$DRY_RUN" -eq 0 ] && service_is_active; then
+    SERVICE_WAS_ACTIVE=1
+  fi
+
   local arch
   arch="$(detect_arch)"
 
   echo "升级前：$(current_version)"
-  backup_binary
+  ensure_service_account
+  setup_service_directories
+  begin_upgrade_transaction
   download_binary "$arch"
-  apply_capabilities
   upgrade_xray
+  migrate_owned_asset_paths
   refresh_systemd
   refresh_openrc
+  normalize_service_permissions
   restart_service
+  verify_upgrade
+  commit_upgrade_transaction
 
   echo
   echo "升级完成。"
@@ -322,9 +450,6 @@ main() {
   else
     echo "  日志：    journalctl -u remnawave-node -f"
   fi
-  echo
-  echo "若升级后异常，可恢复备份："
-  echo "  ls ${PREFIX}/${BIN_NAME}.bak.*"
 }
 
 main "$@"
