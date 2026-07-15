@@ -14,8 +14,9 @@ type hashTrackingProvider struct {
 	hashAdds []string
 }
 
-func (p *hashTrackingProvider) AddUserToInboundHash(tag, uuid string) {
+func (p *hashTrackingProvider) CommitUserAdded(_ xtls.HandlerResult, tag, uuid string) bool {
 	p.hashAdds = append(p.hashAdds, tag+":"+uuid)
+	return true
 }
 
 func TestAddUsersSkipsHashOnHandlerFailure(t *testing.T) {
@@ -41,8 +42,9 @@ func (p *successVlessProvider) HandlerAddVlessUser(context.Context, string, stri
 	return xtls.HandlerResult{OK: true}
 }
 
-func (p *successVlessProvider) AddUserToInboundHash(tag, uuid string) {
+func (p *successVlessProvider) CommitUserAdded(_ xtls.HandlerResult, tag, uuid string) bool {
 	p.hashAdds = append(p.hashAdds, tag+":"+uuid)
+	return true
 }
 
 func TestAddUsersAddsHashOnHandlerSuccess(t *testing.T) {

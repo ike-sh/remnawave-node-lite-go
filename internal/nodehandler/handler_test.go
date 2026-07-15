@@ -17,9 +17,13 @@ type stubProvider struct {
 func (s *stubProvider) AddInboundTag(tag string) {
 	s.inboundTags = append(s.inboundTags, tag)
 }
-func (s *stubProvider) InboundTags() []string                    { return s.inboundTags }
-func (s *stubProvider) AddUserToInboundHash(string, string)      {}
-func (s *stubProvider) RemoveUserFromInboundHash(string, string) {}
+func (s *stubProvider) InboundTags() []string { return s.inboundTags }
+func (s *stubProvider) CommitUserAdded(xtls.HandlerResult, string, string) bool {
+	return true
+}
+func (s *stubProvider) CommitUserRemoved(xtls.HandlerResult, string, string) bool {
+	return true
+}
 func (s *stubProvider) GetUserIPList(context.Context, string, bool) ([]xtls.IPEntry, error) {
 	return nil, nil
 }
@@ -48,7 +52,7 @@ func (s *stubProvider) HandlerGetInboundUsersCount(context.Context, string) (int
 	return 0, xtls.HandlerResult{OK: true}
 }
 
-func TestAddUsersAlwaysSuccess(t *testing.T) {
+func TestAddUsersReportsHandlerFailure(t *testing.T) {
 	t.Parallel()
 
 	service := nodehandler.NewService(&stubProvider{}, connections.NewDropper(nil))
@@ -64,8 +68,8 @@ func TestAddUsersAlwaysSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !response.Success || response.Error != nil {
-		t.Fatalf("response = %+v, want success", response)
+	if response.Success || response.Error == nil || *response.Error != "boom" {
+		t.Fatalf("response = %+v, want handler failure", response)
 	}
 }
 

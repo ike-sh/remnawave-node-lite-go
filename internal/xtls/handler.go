@@ -18,8 +18,9 @@ import (
 )
 
 type HandlerResult struct {
-	OK      bool
-	Message string
+	OK         bool
+	Message    string
+	Generation uint64
 }
 
 type InboundUser struct {

@@ -1,6 +1,10 @@
 package xray
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
+)
 
 func TestHashedSetMatchesReference(t *testing.T) {
 	t.Parallel()
@@ -107,16 +111,33 @@ func TestIsNeedRestartCore(t *testing.T) {
 func TestAddRemoveUserFromInboundHash(t *testing.T) {
 	t.Parallel()
 
-	manager := &Manager{}
-	manager.AddUserToInboundHash("in-1", "uuid-1")
-	manager.AddUserToInboundHash("in-1", "uuid-2")
+	manager := &Manager{state: lifecycleRunning, generation: 7}
+	result := xtls.HandlerResult{OK: true, Generation: 7}
+	if !manager.CommitUserAdded(result, "in-1", "uuid-1") ||
+		!manager.CommitUserAdded(result, "in-1", "uuid-2") {
+		t.Fatal("expected current generation hash commits to succeed")
+	}
 	if len(manager.InboundTags()) != 1 {
 		t.Fatalf("expected one inbound tag, got %v", manager.InboundTags())
 	}
 
-	manager.RemoveUserFromInboundHash("in-1", "uuid-1")
-	manager.RemoveUserFromInboundHash("in-1", "uuid-2")
+	if !manager.CommitUserRemoved(result, "in-1", "uuid-1") ||
+		!manager.CommitUserRemoved(result, "in-1", "uuid-2") {
+		t.Fatal("expected current generation hash commits to succeed")
+	}
 	if len(manager.InboundTags()) != 0 {
 		t.Fatalf("expected inbound cleared, got %v", manager.InboundTags())
+	}
+}
+
+func TestHashCommitRejectsStaleGeneration(t *testing.T) {
+	t.Parallel()
+
+	manager := &Manager{state: lifecycleRunning, generation: 8}
+	if manager.CommitUserAdded(xtls.HandlerResult{OK: true, Generation: 7}, "in-1", "uuid-1") {
+		t.Fatal("stale generation must not update hash state")
+	}
+	if len(manager.InboundTags()) != 0 {
+		t.Fatalf("stale commit published inbound tags: %v", manager.InboundTags())
 	}
 }

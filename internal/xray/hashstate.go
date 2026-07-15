@@ -3,6 +3,8 @@ package xray
 import (
 	"log/slog"
 	"sort"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
 func (m *Manager) extractUsersFromConfigLocked(hashes ConfigHash, config map[string]any) {
@@ -83,38 +85,45 @@ func (m *Manager) isNeedRestartCoreLocked(incoming ConfigHash) bool {
 	return false
 }
 
-func (m *Manager) AddUserToInboundHash(inboundTag, userUUID string) {
-	if inboundTag == "" || userUUID == "" {
-		return
+func (m *Manager) CommitUserAdded(result xtls.HandlerResult, inboundTag, userUUID string) bool {
+	if !result.OK || inboundTag == "" || userUUID == "" {
+		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.state != lifecycleRunning || m.generation != result.Generation {
+		return false
+	}
 
 	set, ok := m.inboundHashes[inboundTag]
 	if !ok {
 		if m.inboundHashes == nil {
 			m.inboundHashes = make(map[string]*HashedSet)
 		}
-		if m.inboundTags == nil {
-			m.inboundTags = make(map[string]struct{})
-		}
 		set = NewHashedSet()
 		m.inboundHashes[inboundTag] = set
 	}
+	if m.inboundTags == nil {
+		m.inboundTags = make(map[string]struct{})
+	}
 	set.Add(userUUID)
 	m.inboundTags[inboundTag] = struct{}{}
+	return true
 }
 
-func (m *Manager) RemoveUserFromInboundHash(inboundTag, userUUID string) {
-	if inboundTag == "" || userUUID == "" {
-		return
+func (m *Manager) CommitUserRemoved(result xtls.HandlerResult, inboundTag, userUUID string) bool {
+	if !result.OK || inboundTag == "" || userUUID == "" {
+		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.state != lifecycleRunning || m.generation != result.Generation {
+		return false
+	}
 
 	set, ok := m.inboundHashes[inboundTag]
 	if !ok {
-		return
+		return true
 	}
 	set.Delete(userUUID)
 	if set.Size() == 0 {
@@ -122,6 +131,7 @@ func (m *Manager) RemoveUserFromInboundHash(inboundTag, userUUID string) {
 		delete(m.inboundTags, inboundTag)
 		slog.Warn("inbound has no users, clearing hash map", "tag", inboundTag)
 	}
+	return true
 }
 
 func (m *Manager) clearHashStateLocked() {

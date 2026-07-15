@@ -10,10 +10,13 @@ import (
 
 type stubHandlerProvider struct{}
 
-func (stubHandlerProvider) AddInboundTag(string)                     {}
-func (stubHandlerProvider) InboundTags() []string                    { return nil }
-func (stubHandlerProvider) AddUserToInboundHash(string, string)      {}
-func (stubHandlerProvider) RemoveUserFromInboundHash(string, string) {}
+func (stubHandlerProvider) InboundTags() []string { return nil }
+func (stubHandlerProvider) CommitUserAdded(xtls.HandlerResult, string, string) bool {
+	return true
+}
+func (stubHandlerProvider) CommitUserRemoved(xtls.HandlerResult, string, string) bool {
+	return true
+}
 func (stubHandlerProvider) GetUserIPList(context.Context, string, bool) ([]xtls.IPEntry, error) {
 	return nil, nil
 }

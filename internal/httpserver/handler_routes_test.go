@@ -21,14 +21,17 @@ type countingHandlerProvider struct {
 
 func (p countingHandlerProvider) hit() { p.calls.Add(1) }
 
-func (p countingHandlerProvider) AddInboundTag(string) { p.hit() }
 func (p countingHandlerProvider) InboundTags() []string {
 	p.hit()
 	return []string{"inbound-1"}
 }
-func (p countingHandlerProvider) AddUserToInboundHash(string, string) { p.hit() }
-func (p countingHandlerProvider) RemoveUserFromInboundHash(string, string) {
+func (p countingHandlerProvider) CommitUserAdded(xtls.HandlerResult, string, string) bool {
 	p.hit()
+	return true
+}
+func (p countingHandlerProvider) CommitUserRemoved(xtls.HandlerResult, string, string) bool {
+	p.hit()
+	return true
 }
 func (p countingHandlerProvider) GetUserIPList(context.Context, string, bool) ([]xtls.IPEntry, error) {
 	p.hit()

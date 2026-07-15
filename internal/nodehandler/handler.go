@@ -9,10 +9,9 @@ import (
 )
 
 type Provider interface {
-	AddInboundTag(tag string)
 	InboundTags() []string
-	AddUserToInboundHash(inboundTag, userUUID string)
-	RemoveUserFromInboundHash(inboundTag, userUUID string)
+	CommitUserAdded(result xtls.HandlerResult, inboundTag, userUUID string) bool
+	CommitUserRemoved(result xtls.HandlerResult, inboundTag, userUUID string) bool
 	GetUserIPList(ctx context.Context, userID string, reset bool) ([]xtls.IPEntry, error)
 	HandlerRemoveUser(ctx context.Context, tag, username string) xtls.HandlerResult
 	HandlerAddVlessUser(ctx context.Context, tag, username, uuid, flow string, level uint32) xtls.HandlerResult
@@ -30,12 +29,17 @@ type ConnectionDropper interface {
 }
 
 type Service struct {
-	provider Provider
-	dropper  ConnectionDropper
+	provider     Provider
+	dropper      ConnectionDropper
+	mutationGate chan struct{}
 }
 
 func NewService(provider Provider, dropper ConnectionDropper) *Service {
-	return &Service{provider: provider, dropper: dropper}
+	return &Service{
+		provider:     provider,
+		dropper:      dropper,
+		mutationGate: make(chan struct{}, 1),
+	}
 }
 
 type GenericResponse struct {
@@ -122,30 +126,32 @@ func (s *Service) AddUser(ctx context.Context, request AddUserRequest) (response
 	if len(request.Data) == 0 {
 		return GenericResponse{Success: false, Error: nil}, nil
 	}
-
-	for _, item := range request.Data {
-		s.provider.AddInboundTag(item.Tag)
+	if !s.acquireMutation(ctx) {
+		return GenericResponse{}, errInternalServer
 	}
+	defer s.releaseMutation()
 
 	hashUUID := request.HashData.VlessUUID
 	if request.HashData.PrevVlessUUID != nil {
 		hashUUID = *request.HashData.PrevVlessUUID
 	}
 	username := request.Data[0].Username
-	for _, tag := range s.provider.InboundTags() {
-		s.provider.HandlerRemoveUser(ctx, tag, username)
-		s.provider.RemoveUserFromInboundHash(tag, hashUUID)
+	tags := userMutationTags(s.provider.InboundTags(), addUserTags(request.Data))
+	cleanup := make([]xtls.HandlerResult, 0, len(tags))
+	for _, tag := range tags {
+		result := s.provider.HandlerRemoveUser(ctx, tag, username)
+		cleanup = append(cleanup, s.commitRemoved(result, tag, hashUUID))
+	}
+	if response := requireAllResults(cleanup); !response.Success {
+		return response, nil
 	}
 
 	results := make([]xtls.HandlerResult, 0, len(request.Data))
 	for _, item := range request.Data {
 		result := s.addSingleUser(ctx, item)
-		if result.OK {
-			s.provider.AddUserToInboundHash(item.Tag, request.HashData.VlessUUID)
-		}
-		results = append(results, result)
+		results = append(results, s.commitAdded(result, item.Tag, request.HashData.VlessUUID))
 	}
-	return aggregateResults(results), nil
+	return requireAllResults(results), nil
 }
 
 func (s *Service) RemoveUser(ctx context.Context, request RemoveUserRequest) (response GenericResponse, err error) {
@@ -153,6 +159,10 @@ func (s *Service) RemoveUser(ctx context.Context, request RemoveUserRequest) (re
 	if s.provider == nil {
 		return GenericResponse{}, errInternalServer
 	}
+	if !s.acquireMutation(ctx) {
+		return GenericResponse{}, errInternalServer
+	}
+	defer s.releaseMutation()
 
 	tags := s.provider.InboundTags()
 	if len(tags) == 0 {
@@ -162,11 +172,11 @@ func (s *Service) RemoveUser(ctx context.Context, request RemoveUserRequest) (re
 	userIPs := collectUserIPs(ctx, s.provider, request.Username)
 	results := make([]xtls.HandlerResult, 0, len(tags))
 	for _, tag := range tags {
-		results = append(results, s.provider.HandlerRemoveUser(ctx, tag, request.Username))
-		s.provider.RemoveUserFromInboundHash(tag, request.VlessUUID)
+		result := s.provider.HandlerRemoveUser(ctx, tag, request.Username)
+		results = append(results, s.commitRemoved(result, tag, request.VlessUUID))
 	}
 	s.dropIPs(userIPs)
-	return aggregateResults(results), nil
+	return requireAllResults(results), nil
 }
 
 func (s *Service) AddUsers(ctx context.Context, request AddUsersRequest) (response GenericResponse, err error) {
@@ -174,25 +184,30 @@ func (s *Service) AddUsers(ctx context.Context, request AddUsersRequest) (respon
 	if s.provider == nil {
 		return GenericResponse{}, errInternalServer
 	}
-
-	for _, tag := range request.AffectedInboundTags {
-		s.provider.AddInboundTag(tag)
+	if !s.acquireMutation(ctx) {
+		return GenericResponse{}, errInternalServer
 	}
+	defer s.releaseMutation()
+
+	tags := userMutationTags(s.provider.InboundTags(), request.AffectedInboundTags, batchInboundTags(request.Users))
+	results := make([]xtls.HandlerResult, 0)
 	for _, user := range request.Users {
-		for _, tag := range s.provider.InboundTags() {
-			s.provider.HandlerRemoveUser(ctx, tag, user.UserData.UserID)
-			s.provider.RemoveUserFromInboundHash(tag, user.UserData.HashUUID)
+		cleanupOK := true
+		for _, tag := range tags {
+			result := s.provider.HandlerRemoveUser(ctx, tag, user.UserData.UserID)
+			result = s.commitRemoved(result, tag, user.UserData.HashUUID)
+			results = append(results, result)
+			cleanupOK = cleanupOK && result.OK
+		}
+		if !cleanupOK {
+			continue
 		}
 		for _, inbound := range user.InboundData {
 			result := s.addBatchUser(ctx, inbound, user.UserData)
-			if result.OK {
-				s.provider.AddUserToInboundHash(inbound.Tag, user.UserData.VlessUUID)
-			}
+			results = append(results, s.commitAdded(result, inbound.Tag, user.UserData.VlessUUID))
 		}
 	}
-
-	// Official addUsers intentionally does not expose individual SDK failures.
-	return GenericResponse{Success: true, Error: nil}, nil
+	return requireAllResults(results), nil
 }
 
 func (s *Service) RemoveUsers(ctx context.Context, request RemoveUsersRequest) (response GenericResponse, err error) {
@@ -200,6 +215,10 @@ func (s *Service) RemoveUsers(ctx context.Context, request RemoveUsersRequest) (
 	if s.provider == nil {
 		return GenericResponse{}, errInternalServer
 	}
+	if !s.acquireMutation(ctx) {
+		return GenericResponse{}, errInternalServer
+	}
+	defer s.releaseMutation()
 
 	tags := s.provider.InboundTags()
 	if len(tags) == 0 {
@@ -210,12 +229,12 @@ func (s *Service) RemoveUsers(ctx context.Context, request RemoveUsersRequest) (
 	for _, user := range request.Users {
 		userIPs := collectUserIPs(ctx, s.provider, user.UserID)
 		for _, tag := range tags {
-			results = append(results, s.provider.HandlerRemoveUser(ctx, tag, user.UserID))
-			s.provider.RemoveUserFromInboundHash(tag, user.HashUUID)
+			result := s.provider.HandlerRemoveUser(ctx, tag, user.UserID)
+			results = append(results, s.commitRemoved(result, tag, user.HashUUID))
 		}
 		s.dropIPs(userIPs)
 	}
-	return aggregateResults(results), nil
+	return requireAllResults(results), nil
 }
 
 func (s *Service) GetInboundUsersCount(ctx context.Context, tag string) (InboundUsersCountResponse, error) {
@@ -317,22 +336,79 @@ func (s *Service) dropIPs(ips []string) {
 	}
 }
 
-func aggregateResults(results []xtls.HandlerResult) GenericResponse {
-	allFailed := true
-	var firstError string
+func requireAllResults(results []xtls.HandlerResult) GenericResponse {
 	for _, result := range results {
-		if result.OK {
-			allFailed = false
-			continue
+		if !result.OK {
+			return GenericResponse{Success: false, Error: stringPtr(result.Message)}
 		}
-		if firstError == "" && result.Message != "" {
-			firstError = result.Message
-		}
-	}
-	if allFailed {
-		return GenericResponse{Success: false, Error: stringPtr(firstError)}
 	}
 	return GenericResponse{Success: true, Error: nil}
+}
+
+func (s *Service) commitAdded(result xtls.HandlerResult, tag, hashUUID string) xtls.HandlerResult {
+	if result.OK && !s.provider.CommitUserAdded(result, tag, hashUUID) {
+		return xtls.HandlerResult{OK: false, Message: "Xray lifecycle changed before user state commit"}
+	}
+	return result
+}
+
+func (s *Service) commitRemoved(result xtls.HandlerResult, tag, hashUUID string) xtls.HandlerResult {
+	if result.OK && !s.provider.CommitUserRemoved(result, tag, hashUUID) {
+		return xtls.HandlerResult{OK: false, Message: "Xray lifecycle changed before user state commit"}
+	}
+	return result
+}
+
+func (s *Service) acquireMutation(ctx context.Context) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case s.mutationGate <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *Service) releaseMutation() {
+	<-s.mutationGate
+}
+
+func userMutationTags(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0)
+	for _, group := range groups {
+		for _, tag := range group {
+			if tag == "" {
+				continue
+			}
+			if _, ok := seen[tag]; ok {
+				continue
+			}
+			seen[tag] = struct{}{}
+			result = append(result, tag)
+		}
+	}
+	return result
+}
+
+func addUserTags(items []AddUserItem) []string {
+	tags := make([]string, 0, len(items))
+	for _, item := range items {
+		tags = append(tags, item.Tag)
+	}
+	return tags
+}
+
+func batchInboundTags(users []BatchUser) []string {
+	var tags []string
+	for _, user := range users {
+		for _, inbound := range user.InboundData {
+			tags = append(tags, inbound.Tag)
+		}
+	}
+	return tags
 }
 
 func recoverServiceError(err *error) {
