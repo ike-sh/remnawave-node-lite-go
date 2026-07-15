@@ -2,7 +2,6 @@ package unixconfig
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -11,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
 )
 
 // InternalTokenHeader is the preferred auth channel (not visible in process argv).
@@ -19,6 +20,8 @@ const InternalTokenHeader = "X-Internal-Token"
 // InternalTokenEnvVar is passed to rw-core for future header-based auth.
 const InternalTokenEnvVar = "RNL_INTERNAL_REST_TOKEN"
 
+const maxWebhookBodyBytes = 8 << 10
+
 type Provider interface {
 	// CurrentConfigJSON returns the pre-serialized config; the server writes
 	// it verbatim so large configs are not re-marshaled on every core poll.
@@ -26,7 +29,7 @@ type Provider interface {
 }
 
 type WebhookProcessor interface {
-	HandleXrayWebhook(payload map[string]any)
+	HandleXrayWebhook(payload xraywebhook.Payload)
 }
 
 type Server struct {
@@ -96,16 +99,18 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
+	limitedBody := http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)
+	defer limitedBody.Close()
 
 	if s.Webhook != nil {
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		payload, err := xraywebhook.Decode(limitedBody)
+		if err != nil {
 			slog.Warn("invalid xray webhook JSON", "error", err)
 		} else {
 			s.Webhook.HandleXrayWebhook(payload)
 		}
 	} else {
-		_, _ = io.Copy(io.Discard, r.Body)
+		_, _ = io.Copy(io.Discard, limitedBody)
 	}
 	w.WriteHeader(http.StatusOK)
 }

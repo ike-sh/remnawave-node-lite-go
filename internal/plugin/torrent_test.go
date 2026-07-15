@@ -1,6 +1,10 @@
 package plugin
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
+)
 
 func TestExtractWebhookIP(t *testing.T) {
 	t.Parallel()
@@ -34,9 +38,12 @@ func TestHandleXrayWebhookBlocksAndAddsReport(t *testing.T) {
 	if response := service.Sync(torrentPlugin(t, true, nil)); !response.Accepted {
 		t.Fatal("torrent sync failed")
 	}
-	service.HandleXrayWebhook(map[string]any{
-		"email":  "user-1",
-		"source": "tcp:203.0.113.10:443",
+	service.HandleXrayWebhook(xraywebhook.Payload{
+		Email:       xraywebhook.String("user-1"),
+		Source:      xraywebhook.String("tcp:203.0.113.10:443"),
+		Network:     xraywebhook.String("tcp"),
+		Destination: xraywebhook.String("198.51.100.1:443"),
+		Timestamp:   xraywebhook.Number(123),
 	})
 
 	if state.ReportsCount() != 1 {

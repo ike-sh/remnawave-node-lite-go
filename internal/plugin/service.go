@@ -219,7 +219,10 @@ func (s *Service) stopXrayLocked(_, _ *pluginSnapshot) error {
 }
 
 func (s *Service) CollectReports() CollectReportsResponse {
-	reports := s.state.FlushReports()
+	reports, dropped := s.state.FlushReports()
+	if dropped != 0 {
+		slog.Warn("torrent report queue overflowed before collection", "dropped", dropped, "retained", len(reports))
+	}
 	if reports == nil {
 		reports = []TorrentReport{}
 	}

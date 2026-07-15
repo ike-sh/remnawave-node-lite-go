@@ -7,6 +7,8 @@ import (
 	"net"
 	"regexp"
 	"time"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
 )
 
 var sourceIPPattern = regexp.MustCompile(`^(?:(?:tcp|udp):)?(?:\[(.+?)\]|(.+?))(?::(\d+))?$`)
@@ -44,7 +46,7 @@ func (s *State) TorrentBlockerIncludeRuleTags() []string {
 	return append([]string(nil), s.active.torrent.includeRuleTags...)
 }
 
-func (s *Service) HandleXrayWebhook(payload map[string]any) {
+func (s *Service) HandleXrayWebhook(payload xraywebhook.Payload) {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	if s.readyLocked() != nil {
@@ -56,9 +58,11 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 		return
 	}
 
-	email, _ := payload["email"].(string)
-	source, _ := payload["source"].(string)
-	ip := extractWebhookIP(source)
+	if payload.Email == nil || payload.Source == nil {
+		return
+	}
+	email := *payload.Email
+	ip := extractWebhookIP(*payload.Source)
 	if ip == "" || email == "" {
 		return
 	}

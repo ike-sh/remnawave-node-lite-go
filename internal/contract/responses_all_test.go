@@ -15,6 +15,7 @@ import (
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/stats"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xray"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
@@ -316,20 +317,16 @@ func testPluginCollectReportsResponseShape(t *testing.T) []byte {
 	report.ActionReport.WillUnblockAt = time.Now().Add(time.Minute)
 	report.ActionReport.UserID = "user-1"
 	report.ActionReport.ProcessedAt = time.Now()
-	report.XrayReport = map[string]any{
-		"email":          "user-1",
-		"level":          1,
-		"protocol":       "vless",
-		"network":        "tcp",
-		"source":         "203.0.113.10:12345",
-		"destination":    "198.51.100.20:443",
-		"routeTarget":    nil,
-		"originalTarget": nil,
-		"inboundTag":     "inbound-1",
-		"inboundName":    nil,
-		"inboundLocal":   nil,
-		"outboundTag":    "direct",
-		"ts":             time.Now().UnixMilli(),
+	report.XrayReport = xraywebhook.Payload{
+		Email:       xraywebhook.String("user-1"),
+		Level:       xraywebhook.Number(1),
+		Protocol:    xraywebhook.String("vless"),
+		Network:     xraywebhook.String("tcp"),
+		Source:      xraywebhook.String("203.0.113.10:12345"),
+		Destination: xraywebhook.String("198.51.100.20:443"),
+		InboundTag:  xraywebhook.String("inbound-1"),
+		OutboundTag: xraywebhook.String("direct"),
+		Timestamp:   xraywebhook.Number(float64(time.Now().UnixMilli())),
 	}
 	state.AddReport(report)
 	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), nil)

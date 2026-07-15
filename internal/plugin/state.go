@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
 )
 
 const (
@@ -12,6 +14,7 @@ const (
 	ingressFilterIPSet  = "ingress-filter-ip"
 	egressFilterIPSet   = "egress-filter-ip"
 	egressFilterPortSet = "egress-filter-port"
+	maxTorrentReports   = 1024
 )
 
 type TorrentReport struct {
@@ -23,7 +26,7 @@ type TorrentReport struct {
 		UserID        string    `json:"userId"`
 		ProcessedAt   time.Time `json:"processedAt"`
 	} `json:"actionReport"`
-	XrayReport map[string]any `json:"xrayReport"`
+	XrayReport xraywebhook.Payload `json:"xrayReport"`
 }
 
 // pluginSnapshot is immutable after publication. Readers may retain its
@@ -40,9 +43,11 @@ type pluginSnapshot struct {
 type State struct {
 	mu sync.RWMutex
 
-	active  *pluginSnapshot
-	reports []TorrentReport
-	asn     ASNResolver
+	active         *pluginSnapshot
+	reports        []TorrentReport
+	reportHead     int
+	droppedReports uint64
+	asn            ASNResolver
 }
 
 func NewState() *State {
@@ -106,18 +111,33 @@ func (s *State) ReportsCount() int {
 	return len(s.reports)
 }
 
-func (s *State) FlushReports() []TorrentReport {
+func (s *State) FlushReports() ([]TorrentReport, uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := s.reports
+	if s.reportHead != 0 {
+		out = make([]TorrentReport, 0, len(s.reports))
+		out = append(out, s.reports[s.reportHead:]...)
+		out = append(out, s.reports[:s.reportHead]...)
+	}
+	dropped := s.droppedReports
 	s.reports = nil
-	return out
+	s.reportHead = 0
+	s.droppedReports = 0
+	return out, dropped
 }
 
-func (s *State) AddReport(report TorrentReport) {
+func (s *State) AddReport(report TorrentReport) (dropped bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.reports) == maxTorrentReports {
+		s.reports[s.reportHead] = report
+		s.reportHead = (s.reportHead + 1) % maxTorrentReports
+		s.droppedReports++
+		return true
+	}
 	s.reports = append(s.reports, report)
+	return false
 }
 
 type SyncPlugin struct {

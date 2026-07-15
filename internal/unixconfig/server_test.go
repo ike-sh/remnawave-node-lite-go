@@ -4,11 +4,24 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
 )
 
 type staticProvider struct {
 	config map[string]any
+}
+
+type recordingWebhook struct {
+	calls   int
+	payload xraywebhook.Payload
+}
+
+func (w *recordingWebhook) HandleXrayWebhook(payload xraywebhook.Payload) {
+	w.calls++
+	w.payload = payload
 }
 
 func (p staticProvider) CurrentConfigJSON() []byte {
@@ -111,5 +124,50 @@ func TestGetConfigReturnsCurrentConfig(t *testing.T) {
 	}
 	if _, ok := body["inbounds"]; !ok {
 		t.Fatalf("expected current config, got %#v", body)
+	}
+}
+
+func TestWebhookAcceptsOneBoundedOfficialPayload(t *testing.T) {
+	processor := &recordingWebhook{}
+	server := &Server{Token: "good", Provider: staticProvider{}, Webhook: processor}
+	request := httptest.NewRequest(http.MethodPost, "/internal/webhook", strings.NewReader(`{
+		"email":"user-1","level":0,"protocol":"vless","network":"tcp",
+		"source":"tcp:203.0.113.10:443","destination":"198.51.100.1:443",
+		"routeTarget":null,"originalTarget":null,"inboundTag":"in-1",
+		"inboundName":null,"inboundLocal":null,"outboundTag":"direct","ts":123
+	}`))
+	request.Header.Set(InternalTokenHeader, "good")
+	response := httptest.NewRecorder()
+
+	server.handleWebhook(response, request)
+
+	if response.Code != http.StatusOK || processor.calls != 1 {
+		t.Fatalf("status = %d, webhook calls = %d", response.Code, processor.calls)
+	}
+	if processor.payload.Email == nil || *processor.payload.Email != "user-1" {
+		t.Fatalf("payload = %#v", processor.payload)
+	}
+}
+
+func TestWebhookRejectsInvalidOrOversizedPayloadBeforeProcessor(t *testing.T) {
+	for _, body := range []string{
+		`{"email":"missing-fields"}`,
+		`{} {}`,
+		strings.Repeat(" ", maxWebhookBodyBytes) + `{}`,
+	} {
+		processor := &recordingWebhook{}
+		server := &Server{Token: "good", Provider: staticProvider{}, Webhook: processor}
+		request := httptest.NewRequest(http.MethodPost, "/internal/webhook", strings.NewReader(body))
+		request.Header.Set(InternalTokenHeader, "good")
+		response := httptest.NewRecorder()
+
+		server.handleWebhook(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", response.Code)
+		}
+		if processor.calls != 0 {
+			t.Fatalf("invalid webhook reached processor: %q", body[:min(len(body), 64)])
+		}
 	}
 }
