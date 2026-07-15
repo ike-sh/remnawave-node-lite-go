@@ -19,6 +19,9 @@
 - stats、handler、plugin 与 Xray start 不再吞掉 JSON 解码和类型错误；畸形、尾随或不完整请求会在任何 provider、进程、nftables、连接和状态副作用前返回 400。
 - 已知应用错误补齐官方要求的 `timestamp`、`path`、`message` 与 `errorCode`，底层 SDK 错误不再替换官方 A001/A010-A017 文案。
 - 对齐官方边界细节：未知对象字段剥离、`forceRestart` 默认 false、空字符串与无最小长度数组、五种用户联合类型、数值型 nftables timeout。
+- Xray 启动、停止、健康检查和自然退出改为显式四态生命周期；stop 可取消正在启动的 core，失败/超时不再提交配置或 hash，所有子进程均被回收。
+- 移除非官方的 `last-start.json` 持久化与开机旧配置恢复；Node 重启后由 Panel 健康检查重新下发 start，`healthcheck` 只读缓存状态。
+- Panel stop 固定先清理插件再停止 core；正常停止先发 SIGINT、超时升级 SIGKILL，Linux 上 Node 异常退出也不会遗留孤儿 rw-core。
 
 ### 维护
 

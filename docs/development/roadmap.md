@@ -38,7 +38,8 @@
 | M0 自有项目基线 | 已完成 | `checkpoint-m00-project-baseline` |
 | M1 契约证据 | 已完成 | `checkpoint-m01-contract-evidence` |
 | M2 API 边界 | 已完成 | `checkpoint-m02-api-boundary` |
-| M3-M8 | 待推进 | - |
+| M3 Xray 生命周期 | 已完成 | `checkpoint-m03-xray-lifecycle` |
+| M4-M8 | 待推进 | - |
 
 ## 里程碑
 

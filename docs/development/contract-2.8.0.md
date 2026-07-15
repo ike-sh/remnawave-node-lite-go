@@ -31,6 +31,25 @@ M2 已将 20 个带请求 DTO 的路由统一接入 `internal/nodeapi`。解码�
 
 transport 测试为 provider、连接 dropper、plugin service 和 Xray manager 注入计数 spy，验证每类非法请求的调用数为 0；合法请求则经过真实 dispatcher 后由独立官方响应 schema 再次校验。
 
+## Go Xray 生命周期实现
+
+M3 以官方 `src/modules/xray-core/xray.service.ts`、`xray-process.service.ts`、`xray.module.ts` 和应用关闭钩子为行为依据：Node 启动时 Xray 缓存状态为离线，不从磁盘恢复旧 Panel 配置；`healthcheck` 只读取缓存状态；Panel stop 先重置插件再停止 core；应用退出也停止 core。
+
+Go manager 使用单一显式状态，而不是多个可形成非法组合的布尔量：
+
+| 当前状态 | 事件 | 后续状态 | 提交语义 |
+| --- | --- | --- | --- |
+| `stopped` | 接受 start | `starting` | 只暂存供新进程拉取的 pending config |
+| `running` | 接受需重启的 start | `starting` | 先回收旧进程，再暂存新配置 |
+| `starting` | gRPC 就绪且进程仍存活 | `running` | 原子提交 active config、hash 和 inbound tag |
+| `starting` | 取消、超时、spawn/进程失败 | `stopped` | 回收进程并清空 pending/active 状态 |
+| `starting` | stop | `stopping` | generation 失效并取消 start，由 stop 接管进程 |
+| `running` | stop 或自然退出 | `stopping` / `stopped` | 回收进程并清理配置与 hash 状态 |
+
+生命周期修改由独占 operation mutex 串行化，状态发布与所有权交接在 manager mutex 下完成。每个 start 使用单调 generation，旧操作不能覆盖新 stop；并发 start 返回官方兼容的 `Request already in progress`。所有成功 spawn 的子进程都由唯一 `Wait` goroutine 回收，正常 stop 先发送 SIGINT，超时后 SIGKILL；Linux 额外设置 parent-death signal，防止 Node 异常退出后遗留孤儿 core。
+
+进程级测试覆盖 pending 到 active 的提交边界、并发 start、start 与 stop 交错、context cancel、启动超时、就绪前后退出、自然退出、并发/重复 stop、SIGINT 与 SIGKILL 升级。路由测试同时固定 Panel stop 的 `ResetPlugins -> Stop` 顺序。
+
 ## 路由清单
 
 表中只列核心约束；完整类型、nullable、枚举、UUID、IP、日期和数组长度约束以 `internal/contract/official_schemas.go` 的可执行 schema 为准。
@@ -83,7 +102,6 @@ transport 测试为 provider、连接 dropper、plugin service 和 Xray manager 
 | 范围 | 当前偏差 | 收敛里程碑 |
 | --- | --- | --- |
 | 用户操作 | 请求校验已先于副作用，但合法批量操作仍可能部分成功，失败聚合与状态提交语义尚未事务化 | M5 |
-| Xray | 仍存在 `last-start.json` 离线恢复和不清晰的并发生命周期 | M3 |
 | 插件 | 状态可能先于 nftables 成功提交，部分 nft 错误被吞，清理不完整 | M4 |
 | 并发 | 用户 IP 查询存在 N+1 RPC 和无界 goroutine；连接踢除结果不够真实 | M5 |
 | 资源 | 配置及解码过程存在多份大对象，未完成 512 MiB 峰值验收 | M6 |
