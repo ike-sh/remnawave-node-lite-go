@@ -96,3 +96,20 @@ func TestNFTCommandErrorIncludesCommandOutput(t *testing.T) {
 		t.Fatalf("error = %q", got)
 	}
 }
+
+func TestMissingNFTElementErrorsAreIdempotent(t *testing.T) {
+	t.Parallel()
+
+	for _, message := range []string{
+		"Error: No such file or directory",
+		"Error: No such element",
+		"Error: element does not exist",
+	} {
+		if !isMissingNFTElement(errors.New(message)) {
+			t.Errorf("missing element error was not recognized: %q", message)
+		}
+	}
+	if isMissingNFTElement(errors.New("Error: Operation not permitted")) {
+		t.Fatal("unrelated nft error was treated as a missing element")
+	}
+}

@@ -138,9 +138,3 @@ func runNFTScript(script string) error {
 	}
 	return &nftCommandError{err: err, output: strings.TrimSpace(string(output))}
 }
-
-func isMissingNFTElement(err error) bool {
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "no such file or directory") ||
-		strings.Contains(message, "no such element")
-}

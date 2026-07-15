@@ -3,6 +3,7 @@ package plugin
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 var errNFTablesUnavailable = errors.New("nftables unavailable")
@@ -44,4 +45,11 @@ func (e *nftCommandError) Error() string {
 
 func (e *nftCommandError) Unwrap() error {
 	return e.err
+}
+
+func isMissingNFTElement(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such file or directory") ||
+		strings.Contains(message, "no such element") ||
+		strings.Contains(message, "element does not exist")
 }
