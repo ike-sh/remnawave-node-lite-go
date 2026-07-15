@@ -125,7 +125,7 @@ xlogs    # rw-core 标准输出
 xerrors  # rw-core 错误输出
 ```
 
-**重启后自动恢复**：Panel 成功启用节点后会在 `/var/lib/remnanode/last-start.json` 写入配置；服务器重启后 Node 将自动拉起 rw-core。
+**重启语义**：Node 不在本地持久化 Panel 下发的 Xray 配置。进程重启后先报告 Xray 离线，由 Panel 健康检查重新下发 `/node/xray/start`，与官方 Node 2.8.x 保持一致。
 
 ---
 

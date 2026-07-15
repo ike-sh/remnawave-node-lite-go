@@ -32,7 +32,7 @@ type Server struct {
 
 type xrayController interface {
 	Start(ctx context.Context, request xray.StartRequest) xray.StartResponse
-	Stop(withFlush bool) xray.StopResponse
+	Stop() xray.StopResponse
 	Health() xray.HealthResponse
 }
 
@@ -101,7 +101,7 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, envelope[xray.HealthResponse]{Response: s.manager.Health()})
 	case routeXrayStop:
 		s.pluginService.ResetPlugins()
-		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: s.manager.Stop(true)})
+		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: s.manager.Stop()})
 	case routeXrayStart:
 		s.handleStart(w, r)
 

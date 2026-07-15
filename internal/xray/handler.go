@@ -118,5 +118,5 @@ func (m *Manager) StopIfOnline() bool {
 	if !online {
 		return false
 	}
-	return m.Stop(false).IsStopped
+	return m.Stop().IsStopped
 }

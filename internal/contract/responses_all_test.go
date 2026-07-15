@@ -107,7 +107,7 @@ func testXrayStartResponseShape(t *testing.T) []byte {
 
 func testXrayStopResponseShape(t *testing.T) []byte {
 	manager := testManager(t)
-	raw := encodeEnvelope(manager.Stop(true))
+	raw := encodeEnvelope(manager.Stop())
 	return raw
 }
 

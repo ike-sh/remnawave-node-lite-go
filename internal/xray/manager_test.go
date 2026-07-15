@@ -3,8 +3,6 @@ package xray
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -103,7 +101,7 @@ func TestStopClearsConfig(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	manager.Start(context.Background(), StartRequest{XrayConfig: map[string]any{"a": "b"}})
-	manager.Stop(true)
+	manager.Stop()
 
 	if len(manager.CurrentConfig()) != 0 {
 		t.Fatalf("expected config to be cleared")
@@ -138,65 +136,9 @@ func TestCurrentConfigJSONCachedAndCleared(t *testing.T) {
 		t.Fatalf("expected inbounds in cached JSON, got %s", raw)
 	}
 
-	manager.Stop(true)
+	manager.Stop()
 	if got := string(manager.CurrentConfigJSON()); got != "{}" {
 		t.Fatalf("expected cache cleared after stop, got %s", got)
-	}
-}
-
-func TestStopWithoutClearPersistKeepsLastStart(t *testing.T) {
-	dir := t.TempDir()
-	manager, err := NewManager(Options{
-		XrayBin:            "definitely-missing-rw-core",
-		GeoDir:             "/tmp",
-		LogDir:             t.TempDir(),
-		DataDir:            dir,
-		InternalSocketPath: "/run/remnawave.sock",
-		InternalRESTToken:  "token"})
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-
-	req := StartRequest{XrayConfig: map[string]any{"a": "b"}}
-	if err := savePersistedStart(dir, req); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	manager.Stop(false)
-
-	if _, err := os.Stat(filepath.Join(dir, persistedStartFile)); err != nil {
-		t.Fatalf("expected persisted file to remain after shutdown stop: %v", err)
-	}
-}
-
-func TestStopFalseFlushesLastStartRequest(t *testing.T) {
-	dir := t.TempDir()
-	manager, err := NewManager(Options{
-		XrayBin:            "definitely-missing-rw-core",
-		GeoDir:             "/tmp",
-		LogDir:             t.TempDir(),
-		DataDir:            dir,
-		InternalSocketPath: "/run/remnawave.sock",
-		InternalRESTToken:  "token"})
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-
-	req := StartRequest{
-		XrayConfig: map[string]any{"inbounds": []any{"one"}},
-		Internals: StartInternals{
-			Hashes: ConfigHash{EmptyConfig: "abc"},
-		},
-	}
-	manager.persistStartRequest(req)
-	if err := os.Remove(filepath.Join(dir, persistedStartFile)); err != nil && !os.IsNotExist(err) {
-		t.Fatalf("remove persisted file: %v", err)
-	}
-
-	manager.Stop(false)
-
-	if _, err := os.Stat(filepath.Join(dir, persistedStartFile)); err != nil {
-		t.Fatalf("expected shutdown flush to recreate persisted file: %v", err)
 	}
 }
 

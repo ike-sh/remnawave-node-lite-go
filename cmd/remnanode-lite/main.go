@@ -74,7 +74,6 @@ func main() {
 		XrayBin:            cfg.XrayBin,
 		GeoDir:             cfg.GeoDir,
 		LogDir:             cfg.LogDir,
-		DataDir:            cfg.DataDir,
 		InternalSocketPath: cfg.InternalSocketPath,
 		InternalRESTToken:  cfg.InternalRESTToken,
 		DisableHashCheck:   cfg.DisableHashedSetCheck,
@@ -125,7 +124,6 @@ func main() {
 		}
 	}()
 
-	go manager.RestoreOnBoot(ctx)
 	go manager.StartLogRotation(ctx)
 
 	<-ctx.Done()
@@ -135,7 +133,7 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown error: %v", err)
 	}
-	_ = manager.Stop(false)
+	_ = manager.Stop()
 }
 
 // applyMemoryLimit caps the Go runtime heap in low-memory mode (128/256MB VPS)

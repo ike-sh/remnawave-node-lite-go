@@ -31,7 +31,7 @@ func (x *recordingXrayController) Start(_ context.Context, request xray.StartReq
 	}
 }
 
-func (x *recordingXrayController) Stop(bool) xray.StopResponse {
+func (x *recordingXrayController) Stop() xray.StopResponse {
 	return xray.StopResponse{IsStopped: true}
 }
 

@@ -25,7 +25,6 @@ type Options struct {
 	XrayBin            string
 	GeoDir             string
 	LogDir             string
-	DataDir            string
 	InternalSocketPath string
 	InternalRESTToken  string
 	DisableHashCheck   bool
@@ -42,7 +41,6 @@ type Manager struct {
 	xrayBin          string
 	geoDir           string
 	logDir           string
-	dataDir          string
 	socketPath       string
 	token            string
 	xtlsSocket       string
@@ -50,11 +48,10 @@ type Manager struct {
 	lowMemory        bool
 	torrentBlocker   TorrentBlockerConfigProvider
 
-	xrayVersion      *string
-	xrayOnline       bool
-	startProcessing  bool
-	lastStartRequest *StartRequest
-	currentConfig    map[string]any
+	xrayVersion     *string
+	xrayOnline      bool
+	startProcessing bool
+	currentConfig   map[string]any
 	// currentConfigJSON caches the serialized form served via the internal
 	// get-config socket, so each rw-core poll avoids a full re-marshal.
 	currentConfigJSON []byte
@@ -128,7 +125,6 @@ func NewManager(opts Options) (*Manager, error) {
 		xrayBin:          opts.XrayBin,
 		geoDir:           opts.GeoDir,
 		logDir:           opts.LogDir,
-		dataDir:          opts.DataDir,
 		socketPath:       opts.InternalSocketPath,
 		token:            opts.InternalRESTToken,
 		xtlsSocket:       socket,
@@ -218,7 +214,6 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 				m.currentConfigJSON = fullConfigJSON
 				m.extractUsersFromConfigLocked(req.Internals.Hashes, fullConfig)
 				m.mu.Unlock()
-				m.persistStartRequest(req)
 				log.Printf("xray/start skipped: core already online and config unchanged")
 				return m.startResponse(true, nil)
 			}
@@ -260,7 +255,6 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 		m.mu.Unlock()
 		// Refresh once per successful core (re)start; rw-core may have been upgraded.
 		m.refreshVersion()
-		m.persistStartRequest(req)
 		log.Printf("xray/start succeeded: rw-core online on gRPC @%s", m.xtlsSocket)
 		return m.startResponse(true, nil)
 	}
@@ -286,100 +280,11 @@ func (m *Manager) grpcStartupTimeout() time.Duration {
 	return 20 * time.Second
 }
 
-func (m *Manager) persistStartRequest(req StartRequest) {
-	reqCopy := req
-	m.mu.Lock()
-	m.lastStartRequest = &reqCopy
-	m.mu.Unlock()
-
-	if err := savePersistedStart(m.dataDir, req); err != nil {
-		log.Printf("warning: save persisted xray config: %v", err)
-		return
-	}
-	log.Printf("persisted xray config to %s", filepath.Join(m.dataDir, persistedStartFile))
-}
-
-func (m *Manager) flushPersistedStart() {
-	m.mu.RLock()
-	req := m.lastStartRequest
-	m.mu.RUnlock()
-	if req == nil {
-		return
-	}
-	if err := savePersistedStart(m.dataDir, *req); err != nil {
-		log.Printf("warning: flush persisted xray config on shutdown: %v", err)
-	}
-}
-
-// Stop stops rw-core. When clearPersist is true (Panel /node/xray/stop), persisted
-// boot config is removed so the node stays disabled after reboot. Process shutdown
-// must pass clearPersist=false so RestoreOnBoot can recover rw-core on next start.
-func (m *Manager) Stop(clearPersist bool) StopResponse {
-	if !clearPersist {
-		m.flushPersistedStart()
-	}
+func (m *Manager) Stop() StopResponse {
 	m.mu.Lock()
 	err := m.stopProcessLocked(true)
-	if clearPersist {
-		m.lastStartRequest = nil
-	}
 	m.mu.Unlock()
-	if clearPersist {
-		if clearErr := clearPersistedStart(m.dataDir); clearErr != nil {
-			log.Printf("warning: clear persisted xray config: %v", clearErr)
-		}
-	}
 	return StopResponse{IsStopped: err == nil}
-}
-
-func (m *Manager) RestoreOnBoot(ctx context.Context) {
-	delay := 2 * time.Second
-	if m.lowMemory {
-		delay = 5 * time.Second
-	}
-	timer := time.NewTimer(delay)
-	select {
-	case <-ctx.Done():
-		timer.Stop()
-		return
-	case <-timer.C:
-	}
-
-	req, err := loadPersistedStart(m.dataDir)
-	if err != nil {
-		log.Printf("warning: load persisted xray config: %v", err)
-		return
-	}
-	if req == nil {
-		log.Printf("no persisted xray config at %s (Panel must xray/start once before reboot auto-restore)", filepath.Join(m.dataDir, persistedStartFile))
-		return
-	}
-
-	const maxAttempts = 10
-	retryInterval := 2 * time.Second
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		log.Printf("restoring rw-core from persisted config (attempt %d/%d)", attempt, maxAttempts)
-		resp := m.Start(ctx, *req)
-		if resp.IsStarted {
-			log.Printf("restore rw-core succeeded on attempt %d", attempt)
-			return
-		}
-		msg := "unknown error"
-		if resp.Error != nil {
-			msg = *resp.Error
-		}
-		log.Printf("restore rw-core failed (attempt %d/%d): %s", attempt, maxAttempts, msg)
-		if attempt == maxAttempts {
-			return
-		}
-		timer := time.NewTimer(retryInterval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-	}
 }
 
 func (m *Manager) Health() HealthResponse {
