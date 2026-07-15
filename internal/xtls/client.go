@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const maxGRPCMessageBytes = 16 << 20
+
 // Client wraps a gRPC connection to the local Xray API.
 type Client struct {
 	mu   sync.Mutex
@@ -31,7 +33,7 @@ func NewClient(socketName string) (*Client, error) {
 		"passthrough:///"+socketName,
 		grpc.WithContextDialer(dialer),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(100*1024*1024)),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxGRPCMessageBytes)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dial xray grpc: %w", err)

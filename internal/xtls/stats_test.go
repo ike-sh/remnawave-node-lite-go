@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls/rwstats"
-	statscommand "github.com/xtls/xray-core/app/stats/command"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls/xrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -36,19 +35,19 @@ func TestGetUsersIPListUsesNativeBatchRPC(t *testing.T) {
 		if method != getUsersStatsMethod {
 			return fmt.Errorf("method = %q", method)
 		}
-		request, ok := args.(*rwstats.GetUsersStatsRequest)
+		request, ok := args.(*xrpc.GetUsersStatsRequest)
 		if !ok || request.GetIncludeTraffic() || !request.GetReset_() {
 			return fmt.Errorf("unexpected request: %#v", args)
 		}
-		response := reply.(*rwstats.GetUsersStatsResponse)
-		response.Users = []*rwstats.UserStat{
+		response := reply.(*xrpc.GetUsersStatsResponse)
+		response.Users = []*xrpc.UserStat{
 			{
 				Email: "u1",
-				Ips: []*rwstats.OnlineIPEntry{{
+				Ips: []*xrpc.OnlineIPEntry{{
 					Ip: "203.0.113.10", LastSeen: 1_700_000_000,
 				}},
 			},
-			{Email: "u2", Ips: []*rwstats.OnlineIPEntry{}},
+			{Email: "u2", Ips: []*xrpc.OnlineIPEntry{}},
 		}
 		return nil
 	}}
@@ -74,43 +73,56 @@ func TestGetUsersIPListUsesNativeBatchRPC(t *testing.T) {
 	}
 }
 
-type fakeLegacyStatsClient struct {
-	statscommand.StatsServiceClient
+type fakeLegacyStatsConn struct {
 	onlineUsers []string
+	nativeErr   error
 	lookupErr   error
+	nativeCalls atomic.Int64
 	allCalls    atomic.Int64
 	lookupCalls atomic.Int64
 	active      atomic.Int64
 	maxActive   atomic.Int64
 }
 
-func (c *fakeLegacyStatsClient) GetAllOnlineUsers(context.Context, *statscommand.GetAllOnlineUsersRequest, ...grpc.CallOption) (*statscommand.GetAllOnlineUsersResponse, error) {
-	c.allCalls.Add(1)
-	return &statscommand.GetAllOnlineUsersResponse{Users: c.onlineUsers}, nil
+func (c *fakeLegacyStatsConn) Invoke(ctx context.Context, method string, args, reply any, _ ...grpc.CallOption) error {
+	switch method {
+	case getUsersStatsMethod:
+		c.nativeCalls.Add(1)
+		return c.nativeErr
+	case statsGetAllOnlineUsersMethod:
+		c.allCalls.Add(1)
+		reply.(*xrpc.GetAllOnlineUsersResponse).Users = append([]string(nil), c.onlineUsers...)
+		return nil
+	case statsGetStatsOnlineIPListMethod:
+		request := args.(*xrpc.GetStatsRequest)
+		c.lookupCalls.Add(1)
+		active := c.active.Add(1)
+		defer c.active.Add(-1)
+		for {
+			maximum := c.maxActive.Load()
+			if active <= maximum || c.maxActive.CompareAndSwap(maximum, active) {
+				break
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Millisecond):
+		}
+		if c.lookupErr != nil {
+			return c.lookupErr
+		}
+		response := reply.(*xrpc.GetStatsOnlineIpListResponse)
+		response.Name = request.GetName()
+		response.Ips = map[string]int64{"203.0.113.10": 1_700_000_000}
+		return nil
+	default:
+		return fmt.Errorf("unexpected method %q", method)
+	}
 }
 
-func (c *fakeLegacyStatsClient) GetStatsOnlineIpList(ctx context.Context, request *statscommand.GetStatsRequest, _ ...grpc.CallOption) (*statscommand.GetStatsOnlineIpListResponse, error) {
-	c.lookupCalls.Add(1)
-	active := c.active.Add(1)
-	defer c.active.Add(-1)
-	for {
-		maximum := c.maxActive.Load()
-		if active <= maximum || c.maxActive.CompareAndSwap(maximum, active) {
-			break
-		}
-	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-time.After(2 * time.Millisecond):
-	}
-	if c.lookupErr != nil {
-		return nil, c.lookupErr
-	}
-	return &statscommand.GetStatsOnlineIpListResponse{
-		Name: request.GetName(),
-		Ips:  map[string]int64{"203.0.113.10": 1_700_000_000},
-	}, nil
+func (*fakeLegacyStatsConn) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
+	return nil, errors.New("streams are not used")
 }
 
 func TestGetUsersIPListLegacyUsesFixedWorkerCount(t *testing.T) {
@@ -120,10 +132,10 @@ func TestGetUsersIPListLegacyUsesFixedWorkerCount(t *testing.T) {
 	for index := range metrics {
 		metrics[index] = fmt.Sprintf("user>>>u-%03d>>>online", index)
 	}
-	client := &fakeLegacyStatsClient{onlineUsers: metrics}
+	client := &fakeLegacyStatsConn{onlineUsers: metrics}
 	capabilities := &StatsCapabilities{}
 	capabilities.usersStats.Store(usersStatsLegacy)
-	api := &StatsAPI{client: client, capabilities: capabilities}
+	api := NewStatsAPI(client, capabilities)
 
 	users, err := api.GetUsersIPList(context.Background())
 	if err != nil {
@@ -140,20 +152,16 @@ func TestGetUsersIPListLegacyUsesFixedWorkerCount(t *testing.T) {
 func TestGetUsersIPListCachesLegacyCapabilityAcrossAPIs(t *testing.T) {
 	t.Parallel()
 
-	conn := &fakeInvokeConn{invoke: func(context.Context, string, any, any, ...grpc.CallOption) error {
-		return status.Error(codes.Unimplemented, "unknown method GetUsersStats")
-	}}
+	conn := &fakeLegacyStatsConn{nativeErr: status.Error(codes.Unimplemented, "unknown method GetUsersStats")}
 	capabilities := &StatsCapabilities{}
 	for range 2 {
 		api := NewStatsAPI(conn, capabilities)
-		client := &fakeLegacyStatsClient{}
-		api.client = client
 		if _, err := api.GetUsersIPList(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if conn.calls.Load() != 1 {
-		t.Fatalf("native capability probes = %d, want one", conn.calls.Load())
+	if conn.nativeCalls.Load() != 1 {
+		t.Fatalf("native capability probes = %d, want one", conn.nativeCalls.Load())
 	}
 	if capabilities.usersStats.Load() != usersStatsLegacy {
 		t.Fatal("legacy capability was not cached")
@@ -163,27 +171,23 @@ func TestGetUsersIPListCachesLegacyCapabilityAcrossAPIs(t *testing.T) {
 func TestGetUsersIPListDoesNotFallbackOnNativeFailure(t *testing.T) {
 	t.Parallel()
 
-	conn := &fakeInvokeConn{invoke: func(context.Context, string, any, any, ...grpc.CallOption) error {
-		return status.Error(codes.Unavailable, "core unavailable")
-	}}
-	client := &fakeLegacyStatsClient{}
+	conn := &fakeLegacyStatsConn{nativeErr: status.Error(codes.Unavailable, "core unavailable")}
 	api := NewStatsAPI(conn, nil)
-	api.client = client
 	if _, err := api.GetUsersIPList(context.Background()); status.Code(err) != codes.Unavailable {
 		t.Fatalf("error = %v, want unavailable", err)
 	}
-	if client.allCalls.Load() != 0 {
-		t.Fatalf("legacy calls = %d, want zero for non-UNIMPLEMENTED failure", client.allCalls.Load())
+	if conn.allCalls.Load() != 0 {
+		t.Fatalf("legacy calls = %d, want zero for non-UNIMPLEMENTED failure", conn.allCalls.Load())
 	}
 }
 
 func TestGetUsersIPListLegacyPropagatesCancellation(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeLegacyStatsClient{onlineUsers: []string{"user>>>u1>>>online"}}
+	client := &fakeLegacyStatsConn{onlineUsers: []string{"user>>>u1>>>online"}}
 	capabilities := &StatsCapabilities{}
 	capabilities.usersStats.Store(usersStatsLegacy)
-	api := &StatsAPI{client: client, capabilities: capabilities}
+	api := NewStatsAPI(client, capabilities)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := api.GetUsersIPList(ctx); !errors.Is(err, context.Canceled) {
@@ -212,7 +216,7 @@ func TestUniqueOnlineUserIDs(t *testing.T) {
 }
 
 func TestParseUserTrafficStats(t *testing.T) {
-	stats := []*statscommand.Stat{
+	stats := []*xrpc.Stat{
 		{Name: "user>>>alice@example.com>>>traffic>>>uplink", Value: 100},
 		{Name: "user>>>alice@example.com>>>traffic>>>downlink", Value: 200},
 	}
@@ -226,7 +230,7 @@ func TestParseUserTrafficStats(t *testing.T) {
 }
 
 func TestParseAllTagTraffic(t *testing.T) {
-	stats := []*statscommand.Stat{
+	stats := []*xrpc.Stat{
 		{Name: "inbound>>>vless-in>>>traffic>>>uplink", Value: 10},
 		{Name: "inbound>>>vless-in>>>traffic>>>downlink", Value: 20},
 	}

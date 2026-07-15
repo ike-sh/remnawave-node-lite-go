@@ -8,8 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls/rwstats"
-	statscommand "github.com/xtls/xray-core/app/stats/command"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls/xrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -51,7 +50,6 @@ type UserIPEntry struct {
 }
 
 type StatsAPI struct {
-	client       statscommand.StatsServiceClient
 	conn         grpc.ClientConnInterface
 	capabilities *StatsCapabilities
 }
@@ -68,8 +66,13 @@ const (
 )
 
 const (
-	getUsersStatsMethod   = "/xray.app.stats.command.StatsService/GetUsersStats"
-	legacyIPLookupWorkers = 8
+	statsGetSysStatsMethod          = "/xray.app.stats.command.StatsService/GetSysStats"
+	statsGetStatsOnlineMethod       = "/xray.app.stats.command.StatsService/GetStatsOnline"
+	statsQueryStatsMethod           = "/xray.app.stats.command.StatsService/QueryStats"
+	statsGetStatsOnlineIPListMethod = "/xray.app.stats.command.StatsService/GetStatsOnlineIpList"
+	statsGetAllOnlineUsersMethod    = "/xray.app.stats.command.StatsService/GetAllOnlineUsers"
+	getUsersStatsMethod             = "/xray.app.stats.command.StatsService/GetUsersStats"
+	legacyIPLookupWorkers           = 8
 )
 
 func NewStatsAPI(conn grpc.ClientConnInterface, capabilities *StatsCapabilities) *StatsAPI {
@@ -77,7 +80,6 @@ func NewStatsAPI(conn grpc.ClientConnInterface, capabilities *StatsCapabilities)
 		capabilities = &StatsCapabilities{}
 	}
 	return &StatsAPI{
-		client:       statscommand.NewStatsServiceClient(conn),
 		conn:         conn,
 		capabilities: capabilities,
 	}
@@ -86,13 +88,14 @@ func NewStatsAPI(conn grpc.ClientConnInterface, capabilities *StatsCapabilities)
 func (s *StatsAPI) GetSysStats(ctx context.Context) (*SysStats, error) {
 	ctx, cancel := withRPCTimeout(ctx)
 	defer cancel()
-	resp, err := s.client.GetSysStats(ctx, &statscommand.SysStatsRequest{})
+	resp := &xrpc.SysStatsResponse{}
+	err := s.invoke(ctx, statsGetSysStatsMethod, &xrpc.Empty{}, resp)
 	if err != nil {
 		return nil, err
 	}
 	return &SysStats{
 		NumGoroutine: int(resp.NumGoroutine),
-		NumGC:        int(resp.NumGC),
+		NumGC:        int(resp.NumGc),
 		Alloc:        int64(resp.Alloc),
 		TotalAlloc:   int64(resp.TotalAlloc),
 		Sys:          int64(resp.Sys),
@@ -107,10 +110,10 @@ func (s *StatsAPI) GetSysStats(ctx context.Context) (*SysStats, error) {
 func (s *StatsAPI) GetUserOnlineStatus(ctx context.Context, username string) (bool, error) {
 	ctx, cancel := withRPCTimeout(ctx)
 	defer cancel()
-	_, err := s.client.GetStatsOnline(ctx, &statscommand.GetStatsRequest{
+	err := s.invoke(ctx, statsGetStatsOnlineMethod, &xrpc.GetStatsRequest{
 		Name:   fmt.Sprintf("user>>>%s>>>online", username),
 		Reset_: false,
-	})
+	}, &xrpc.GetStatsResponse{})
 	if err == nil {
 		return true, nil
 	}
@@ -128,10 +131,11 @@ func (s *StatsAPI) GetAllUsersStats(ctx context.Context, reset bool) ([]UserTraf
 	defer cancel()
 	// Align with official @remnawave/xtls-sdk getAllUsersStats(): QueryStats only.
 	// Preferring GetUsersStats here returns empty traffic on rw-core even when counters exist.
-	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
+	resp := &xrpc.QueryStatsResponse{}
+	err := s.invoke(ctx, statsQueryStatsMethod, &xrpc.QueryStatsRequest{
 		Pattern: "user>>>",
 		Reset_:  reset,
-	})
+	}, resp)
 	if err != nil {
 		return nil, err
 	}
@@ -141,10 +145,11 @@ func (s *StatsAPI) GetAllUsersStats(ctx context.Context, reset bool) ([]UserTraf
 func (s *StatsAPI) GetInboundStats(ctx context.Context, tag string, reset bool) (TagTraffic, error) {
 	ctx, cancel := withRPCTimeout(ctx)
 	defer cancel()
-	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
+	resp := &xrpc.QueryStatsResponse{}
+	err := s.invoke(ctx, statsQueryStatsMethod, &xrpc.QueryStatsRequest{
 		Pattern: fmt.Sprintf("inbound>>>%s>>>", tag),
 		Reset_:  reset,
-	})
+	}, resp)
 	if err != nil {
 		return TagTraffic{}, err
 	}
@@ -156,10 +161,11 @@ func (s *StatsAPI) GetInboundStats(ctx context.Context, tag string, reset bool) 
 func (s *StatsAPI) GetOutboundStats(ctx context.Context, tag string, reset bool) (TagTraffic, error) {
 	ctx, cancel := withRPCTimeout(ctx)
 	defer cancel()
-	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
+	resp := &xrpc.QueryStatsResponse{}
+	err := s.invoke(ctx, statsQueryStatsMethod, &xrpc.QueryStatsRequest{
 		Pattern: fmt.Sprintf("outbound>>>%s>>>", tag),
 		Reset_:  reset,
-	})
+	}, resp)
 	if err != nil {
 		return TagTraffic{}, err
 	}
@@ -171,10 +177,11 @@ func (s *StatsAPI) GetOutboundStats(ctx context.Context, tag string, reset bool)
 func (s *StatsAPI) GetAllInboundsStats(ctx context.Context, reset bool) ([]TagTraffic, error) {
 	ctx, cancel := withRPCTimeout(ctx)
 	defer cancel()
-	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
+	resp := &xrpc.QueryStatsResponse{}
+	err := s.invoke(ctx, statsQueryStatsMethod, &xrpc.QueryStatsRequest{
 		Pattern: "inbound>>>",
 		Reset_:  reset,
-	})
+	}, resp)
 	if err != nil {
 		return nil, err
 	}
@@ -184,10 +191,11 @@ func (s *StatsAPI) GetAllInboundsStats(ctx context.Context, reset bool) ([]TagTr
 func (s *StatsAPI) GetAllOutboundsStats(ctx context.Context, reset bool) ([]TagTraffic, error) {
 	ctx, cancel := withRPCTimeout(ctx)
 	defer cancel()
-	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
+	resp := &xrpc.QueryStatsResponse{}
+	err := s.invoke(ctx, statsQueryStatsMethod, &xrpc.QueryStatsRequest{
 		Pattern: "outbound>>>",
 		Reset_:  reset,
-	})
+	}, resp)
 	if err != nil {
 		return nil, err
 	}
@@ -197,17 +205,17 @@ func (s *StatsAPI) GetAllOutboundsStats(ctx context.Context, reset bool) ([]TagT
 func (s *StatsAPI) Ping(ctx context.Context) error {
 	ctx, cancel := withRPCDeadline(ctx, 3*time.Second)
 	defer cancel()
-	_, err := s.client.GetSysStats(ctx, &statscommand.SysStatsRequest{})
-	return err
+	return s.invoke(ctx, statsGetSysStatsMethod, &xrpc.Empty{}, &xrpc.SysStatsResponse{})
 }
 
 func (s *StatsAPI) GetUserIPList(ctx context.Context, userID string, reset bool) ([]IPEntry, error) {
 	ctx, cancel := withRPCTimeout(ctx)
 	defer cancel()
-	resp, err := s.client.GetStatsOnlineIpList(ctx, &statscommand.GetStatsRequest{
+	resp := &xrpc.GetStatsOnlineIpListResponse{}
+	err := s.invoke(ctx, statsGetStatsOnlineIPListMethod, &xrpc.GetStatsRequest{
 		Name:   fmt.Sprintf("user>>>%s>>>online", userID),
 		Reset_: reset,
-	})
+	}, resp)
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
 			return []IPEntry{}, nil
@@ -235,14 +243,8 @@ func (s *StatsAPI) GetUsersIPList(ctx context.Context) ([]UserIPEntry, error) {
 }
 
 func (s *StatsAPI) getUsersIPListNative(ctx context.Context) ([]UserIPEntry, error) {
-	response := &rwstats.GetUsersStatsResponse{}
-	err := s.conn.Invoke(
-		ctx,
-		getUsersStatsMethod,
-		&rwstats.GetUsersStatsRequest{IncludeTraffic: false, Reset_: true},
-		response,
-		grpc.StaticMethod(),
-	)
+	response := &xrpc.GetUsersStatsResponse{}
+	err := s.invoke(ctx, getUsersStatsMethod, &xrpc.GetUsersStatsRequest{IncludeTraffic: false, Reset_: true}, response)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +270,8 @@ func (s *StatsAPI) getUsersIPListNative(ctx context.Context) ([]UserIPEntry, err
 }
 
 func (s *StatsAPI) getUsersIPListLegacy(ctx context.Context) ([]UserIPEntry, error) {
-	resp, err := s.client.GetAllOnlineUsers(ctx, &statscommand.GetAllOnlineUsersRequest{})
+	resp := &xrpc.GetAllOnlineUsersResponse{}
+	err := s.invoke(ctx, statsGetAllOnlineUsersMethod, &xrpc.Empty{}, resp)
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
 			return []UserIPEntry{}, nil
@@ -355,7 +358,11 @@ func extractOnlineUserID(raw string) string {
 	return parts[1]
 }
 
-func parseUserTrafficStats(stats []*statscommand.Stat) []UserTraffic {
+func (s *StatsAPI) invoke(ctx context.Context, method string, request, response any) error {
+	return s.conn.Invoke(ctx, method, request, response, grpc.StaticMethod())
+}
+
+func parseUserTrafficStats(stats []*xrpc.Stat) []UserTraffic {
 	users := map[string]*UserTraffic{}
 	for _, stat := range stats {
 		parts := strings.Split(stat.Name, ">>>")
@@ -383,7 +390,7 @@ func parseUserTrafficStats(stats []*statscommand.Stat) []UserTraffic {
 	return result
 }
 
-func parseTagTraffic(stats []*statscommand.Stat, prefix string) TagTraffic {
+func parseTagTraffic(stats []*xrpc.Stat, prefix string) TagTraffic {
 	traffic := TagTraffic{}
 	for _, stat := range stats {
 		parts := strings.Split(stat.Name, ">>>")
@@ -403,7 +410,7 @@ func parseTagTraffic(stats []*statscommand.Stat, prefix string) TagTraffic {
 	return traffic
 }
 
-func parseAllTagTraffic(stats []*statscommand.Stat, prefix string) []TagTraffic {
+func parseAllTagTraffic(stats []*xrpc.Stat, prefix string) []TagTraffic {
 	tags := map[string]*TagTraffic{}
 	for _, stat := range stats {
 		parts := strings.Split(stat.Name, ">>>")
