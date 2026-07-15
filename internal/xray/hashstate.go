@@ -7,10 +7,18 @@ import (
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
-func (m *Manager) extractUsersFromConfigLocked(hashes ConfigHash, config map[string]any) {
-	m.inboundHashes = make(map[string]*HashedSet)
-	m.inboundTags = make(map[string]struct{})
-	m.emptyConfigHash = hashes.EmptyConfig
+type runtimeHashState struct {
+	emptyConfigHash string
+	inboundHashes   map[string]*HashedSet
+	inboundTags     map[string]struct{}
+}
+
+func buildRuntimeHashState(hashes ConfigHash, config map[string]any) runtimeHashState {
+	state := runtimeHashState{
+		emptyConfigHash: hashes.EmptyConfig,
+		inboundHashes:   make(map[string]*HashedSet),
+		inboundTags:     make(map[string]struct{}),
+	}
 
 	validTags := make(map[string]struct{}, len(hashes.Inbounds))
 	for _, inbound := range hashes.Inbounds {
@@ -21,7 +29,7 @@ func (m *Manager) extractUsersFromConfigLocked(hashes ConfigHash, config map[str
 
 	rawInbounds, ok := config["inbounds"].([]any)
 	if !ok {
-		return
+		return state
 	}
 
 	for _, item := range rawInbounds {
@@ -39,10 +47,21 @@ func (m *Manager) extractUsersFromConfigLocked(hashes ConfigHash, config map[str
 
 		ids := extractClientIDs(inbound)
 		set := NewHashedSet(ids...)
-		m.inboundHashes[tag] = set
-		m.inboundTags[tag] = struct{}{}
+		state.inboundHashes[tag] = set
+		state.inboundTags[tag] = struct{}{}
 		slog.Debug("extracted inbound users", "tag", tag, "count", set.Size(), "hash", set.Hash64String())
 	}
+	return state
+}
+
+func (m *Manager) applyRuntimeHashStateLocked(state runtimeHashState) {
+	m.emptyConfigHash = state.emptyConfigHash
+	m.inboundHashes = state.inboundHashes
+	m.inboundTags = state.inboundTags
+}
+
+func (m *Manager) extractUsersFromConfigLocked(hashes ConfigHash, config map[string]any) {
+	m.applyRuntimeHashStateLocked(buildRuntimeHashState(hashes, config))
 }
 
 func (m *Manager) isNeedRestartCoreLocked(incoming ConfigHash) bool {

@@ -82,8 +82,8 @@ func TestStartDoesNotCommitConfigWhenCommandFails(t *testing.T) {
 		t.Fatalf("expected start error, got %#v", response.Error)
 	}
 
-	if config := manager.CurrentConfig(); len(config) != 0 {
-		t.Fatalf("failed start committed config: %#v", config)
+	if config := string(manager.CurrentConfigJSON()); config != "{}" {
+		t.Fatalf("failed start retained config: %s", config)
 	}
 }
 
@@ -100,7 +100,7 @@ func TestStopClearsConfig(t *testing.T) {
 	manager.Start(context.Background(), StartRequest{XrayConfig: map[string]any{"a": "b"}})
 	manager.Stop()
 
-	if len(manager.CurrentConfig()) != 0 {
+	if string(manager.CurrentConfigJSON()) != "{}" {
 		t.Fatalf("expected config to be cleared")
 	}
 }

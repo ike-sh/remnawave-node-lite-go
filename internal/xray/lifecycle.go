@@ -117,8 +117,15 @@ func (m *Manager) Start(parent context.Context, req StartRequest) StartResponse 
 		}
 	}
 
-	fullConfig := generateAPIConfig(req.XrayConfig, m.xtlsSocket, m.torrentBlockerOptions())
-	fullConfigJSON := marshalConfigJSON(fullConfig)
+	prepared, err := prepareRuntimeConfig(req.XrayConfig, req.Internals.Hashes, m.xtlsSocket, m.torrentBlockerOptions())
+	// The prepared value contains only canonical JSON plus compact hash state;
+	// release the decoded request tree before waiting for low-memory rw-core.
+	req.XrayConfig = nil
+	if err != nil {
+		cancel()
+		m.completeStart(generation, previous, nil)
+		return m.startFailure("prepare Xray config", err)
+	}
 	if err := ctx.Err(); err != nil {
 		cancel()
 		m.completeStart(generation, previous, nil)
@@ -143,7 +150,7 @@ func (m *Manager) Start(parent context.Context, req StartRequest) StartResponse 
 		return m.startFailure("xray start canceled", err)
 	}
 
-	if !m.stagePendingConfig(generation, previousProcess, fullConfig, fullConfigJSON) {
+	if !m.stagePendingConfig(generation, previousProcess, prepared.json) {
 		cancel()
 		m.completeStart(generation, lifecycleStopped, nil)
 		return m.startFailure("xray start canceled", context.Canceled)
@@ -167,7 +174,7 @@ func (m *Manager) Start(parent context.Context, req StartRequest) StartResponse 
 	readyErr := m.waitForGRPC(ctx, process, startupTimeout)
 
 	if readyErr == nil {
-		committed, owned, exitErr := m.commitRunningStart(generation, process, req.Internals.Hashes)
+		committed, owned, exitErr := m.commitRunningStart(generation, process, prepared.hashState)
 		if committed {
 			cancel()
 			log.Printf("xray/start succeeded: rw-core online on gRPC @%s", m.xtlsSocket)
@@ -266,7 +273,7 @@ func (m *Manager) completeUnchangedStart(generation uint64) (completed, owned bo
 	return true, true
 }
 
-func (m *Manager) stagePendingConfig(generation uint64, previous *processState, config map[string]any, raw []byte) bool {
+func (m *Manager) stagePendingConfig(generation uint64, previous *processState, raw []byte) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.generation != generation || m.state != lifecycleStarting {
@@ -276,7 +283,6 @@ func (m *Manager) stagePendingConfig(generation uint64, previous *processState, 
 		m.process = nil
 	}
 	m.clearRuntimeLocked()
-	m.pendingConfig = config
 	m.pendingConfigJSON = raw
 	return true
 }
@@ -291,7 +297,7 @@ func (m *Manager) assignProcess(generation uint64, process *processState) bool {
 	return true
 }
 
-func (m *Manager) commitRunningStart(generation uint64, process *processState, hashes ConfigHash) (committed, owned bool, exitErr error) {
+func (m *Manager) commitRunningStart(generation uint64, process *processState, hashState runtimeHashState) (committed, owned bool, exitErr error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.generation != generation || m.state != lifecycleStarting {
@@ -305,11 +311,8 @@ func (m *Manager) commitRunningStart(generation uint64, process *processState, h
 		return false, true, err
 	}
 
-	m.activeConfig = m.pendingConfig
-	m.activeConfigJSON = m.pendingConfigJSON
-	m.pendingConfig = nil
 	m.pendingConfigJSON = nil
-	m.extractUsersFromConfigLocked(hashes, m.activeConfig)
+	m.applyRuntimeHashStateLocked(hashState)
 	m.state = lifecycleRunning
 	m.startCancel = nil
 	m.lifecycleMu.Unlock()

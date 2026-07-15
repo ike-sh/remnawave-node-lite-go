@@ -1,6 +1,9 @@
 package xray
 
 import (
+	"encoding/json"
+	"fmt"
+
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
 )
 
@@ -17,8 +20,31 @@ type TorrentBlockerOptions struct {
 	RESTToken       string
 }
 
+var emptyConfigJSON = []byte("{}")
+
+type preparedRuntimeConfig struct {
+	json      []byte
+	hashState runtimeHashState
+}
+
+func prepareRuntimeConfig(input map[string]any, hashes ConfigHash, xtlsSocket string, torrent TorrentBlockerOptions) (preparedRuntimeConfig, error) {
+	fullConfig := generateAPIConfig(input, xtlsSocket, torrent)
+	state := buildRuntimeHashState(hashes, fullConfig)
+	raw, err := json.Marshal(fullConfig)
+	if err != nil {
+		return preparedRuntimeConfig{}, fmt.Errorf("marshal Xray config: %w", err)
+	}
+	return preparedRuntimeConfig{json: raw, hashState: state}, nil
+}
+
+// generateAPIConfig takes ownership of input. The HTTP request does not reuse
+// xrayConfig after this call, so modifying it avoids a full JSON clone before
+// the canonical runtime JSON is produced.
 func generateAPIConfig(input map[string]any, xtlsSocket string, torrent TorrentBlockerOptions) map[string]any {
-	result := cloneMap(input)
+	result := input
+	if result == nil {
+		result = map[string]any{}
+	}
 
 	result["stats"] = map[string]any{}
 	result["api"] = map[string]any{

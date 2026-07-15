@@ -143,8 +143,8 @@ func TestStartCommitsConfigOnlyAfterReadiness(t *testing.T) {
 	awaitSignal(t, probeEntered, "readiness probe")
 
 	manager.mu.RLock()
-	if manager.state != lifecycleStarting || manager.pendingConfig == nil || manager.activeConfig != nil {
-		t.Fatalf("unexpected starting snapshot: state=%s pending=%v active=%v", manager.state, manager.pendingConfig != nil, manager.activeConfig != nil)
+	if manager.state != lifecycleStarting || len(manager.pendingConfigJSON) == 0 {
+		t.Fatalf("unexpected starting snapshot: state=%s pending=%v", manager.state, len(manager.pendingConfigJSON) != 0)
 	}
 	if manager.emptyConfigHash != "" || len(manager.inboundHashes) != 0 {
 		t.Fatalf("hash state committed before readiness: empty=%q inbounds=%d", manager.emptyConfigHash, len(manager.inboundHashes))
@@ -164,12 +164,19 @@ func TestStartCommitsConfigOnlyAfterReadiness(t *testing.T) {
 	}
 
 	manager.mu.RLock()
-	defer manager.mu.RUnlock()
-	if manager.state != lifecycleRunning || manager.pendingConfig != nil || manager.activeConfig == nil {
-		t.Fatalf("unexpected committed snapshot: state=%s pending=%v active=%v", manager.state, manager.pendingConfig != nil, manager.activeConfig != nil)
+	state := manager.state
+	pending := len(manager.pendingConfigJSON) != 0
+	emptyHash := manager.emptyConfigHash
+	inboundCount := len(manager.inboundHashes)
+	manager.mu.RUnlock()
+	if state != lifecycleRunning || pending {
+		t.Fatalf("unexpected committed snapshot: state=%s pending=%v", state, pending)
 	}
-	if manager.emptyConfigHash != "base-hash" || len(manager.inboundHashes) != 1 {
-		t.Fatalf("hash state not committed: empty=%q inbounds=%d", manager.emptyConfigHash, len(manager.inboundHashes))
+	if emptyHash != "base-hash" || inboundCount != 1 {
+		t.Fatalf("hash state not committed: empty=%q inbounds=%d", emptyHash, inboundCount)
+	}
+	if got := string(manager.CurrentConfigJSON()); got != "{}" {
+		t.Fatalf("config cache retained after readiness: %s", got)
 	}
 }
 
@@ -493,7 +500,7 @@ func assertStoppedAndCleared(t *testing.T, manager *Manager) {
 	if manager.state != lifecycleStopped || manager.process != nil {
 		t.Fatalf("manager not stopped: state=%s process=%v", manager.state, manager.process != nil)
 	}
-	if manager.pendingConfig != nil || manager.activeConfig != nil || manager.emptyConfigHash != "" || len(manager.inboundHashes) != 0 {
-		t.Fatalf("runtime state not cleared: pending=%v active=%v empty=%q hashes=%d", manager.pendingConfig != nil, manager.activeConfig != nil, manager.emptyConfigHash, len(manager.inboundHashes))
+	if len(manager.pendingConfigJSON) != 0 || manager.emptyConfigHash != "" || len(manager.inboundHashes) != 0 {
+		t.Fatalf("runtime state not cleared: pending=%v empty=%q hashes=%d", len(manager.pendingConfigJSON) != 0, manager.emptyConfigHash, len(manager.inboundHashes))
 	}
 }

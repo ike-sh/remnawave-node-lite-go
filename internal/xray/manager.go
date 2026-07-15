@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"regexp"
@@ -57,12 +55,9 @@ type Manager struct {
 	stopOp      *stopOperation
 	process     *processState
 
-	// pendingConfig is visible to a starting rw-core through the internal
-	// socket. It is promoted to activeConfig only after the gRPC API is ready.
-	pendingConfig     map[string]any
+	// pendingConfigJSON is the only full config retained by the manager. It is
+	// served while rw-core starts and released as soon as the gRPC API is ready.
 	pendingConfigJSON []byte
-	activeConfig      map[string]any
-	activeConfigJSON  []byte
 	emptyConfigHash   string
 	inboundHashes     map[string]*HashedSet
 	inboundTags       map[string]struct{}
@@ -190,61 +185,24 @@ func (m *Manager) Health() HealthResponse {
 	}
 }
 
-func (m *Manager) CurrentConfig() map[string]any {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	config := m.servedConfigLocked()
-	if config == nil {
-		return map[string]any{}
-	}
-	return cloneMap(config)
-}
-
-// CurrentConfigJSON returns the config exactly as served to rw-core,
-// serialized once per xray/start instead of on every get-config poll.
+// CurrentConfigJSON returns the config exactly as served to a starting
+// rw-core. Once readiness is confirmed the process has consumed the config,
+// so the cache is released and this method returns an empty object.
 // Callers must treat the returned slice as read-only.
 func (m *Manager) CurrentConfigJSON() []byte {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	config := m.servedConfigJSONLocked()
-	if len(config) == 0 {
-		return []byte("{}")
+	if len(m.pendingConfigJSON) == 0 {
+		return emptyConfigJSON
 	}
-	return config
-}
-
-func (m *Manager) servedConfigLocked() map[string]any {
-	if m.pendingConfig != nil {
-		return m.pendingConfig
-	}
-	return m.activeConfig
-}
-
-func (m *Manager) servedConfigJSONLocked() []byte {
-	if len(m.pendingConfigJSON) != 0 {
-		return m.pendingConfigJSON
-	}
-	return m.activeConfigJSON
+	return m.pendingConfigJSON
 }
 
 func (m *Manager) clearRuntimeLocked() {
-	m.pendingConfig = nil
 	m.pendingConfigJSON = nil
-	m.activeConfig = nil
-	m.activeConfigJSON = nil
 	m.clearHashStateLocked()
 	m.clearInboundTagsLocked()
-}
-
-func marshalConfigJSON(config map[string]any) []byte {
-	raw, err := json.Marshal(config)
-	if err != nil {
-		log.Printf("warning: marshal xray config: %v", err)
-		return nil
-	}
-	return raw
 }
 
 func (m *Manager) XrayBin() string {
@@ -338,21 +296,6 @@ func (m *Manager) startResponse(isStarted bool, message *string) StartResponse {
 		},
 		System: system.GetSnapshot(),
 	}
-}
-
-func cloneMap(input map[string]any) map[string]any {
-	if input == nil {
-		return map[string]any{}
-	}
-	raw, err := json.Marshal(input)
-	if err != nil {
-		return map[string]any{}
-	}
-	var output map[string]any
-	if err := json.Unmarshal(raw, &output); err != nil {
-		return map[string]any{}
-	}
-	return output
 }
 
 func stringPtr(value string) *string {
