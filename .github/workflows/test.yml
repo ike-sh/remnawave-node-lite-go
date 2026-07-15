@@ -19,5 +19,12 @@ jobs:
       - name: go test
         run: go test ./...
 
+      - name: nftables integration in isolated network namespace
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes nftables
+          sudo env "PATH=$PATH" REMNANODE_NFT_INTEGRATION=1 \
+            go test ./internal/plugin -run '^TestNFTManagerInNetworkNamespace$' -count=1 -v
+
       - name: go build
         run: go build -o /dev/null ./cmd/remnanode-lite
