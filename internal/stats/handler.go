@@ -250,9 +250,6 @@ func (s *Service) GetUsersIPList(ctx context.Context) GetUsersIPListResponse {
 
 	users := make([]UserIPListResponse, 0, len(items))
 	for _, item := range items {
-		if len(item.IPs) == 0 {
-			continue
-		}
 		ips := make([]IPEntryResponse, 0, len(item.IPs))
 		for _, ip := range item.IPs {
 			ips = append(ips, IPEntryResponse{

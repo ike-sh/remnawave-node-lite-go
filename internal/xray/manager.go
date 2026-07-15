@@ -16,6 +16,7 @@ import (
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/system"
 	nodeversion "github.com/Luxiaba/remnawave-node-lite-go/internal/version"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
 type Options struct {
@@ -36,17 +37,18 @@ type TorrentBlockerConfigProvider interface {
 type Manager struct {
 	// lifecycleMu serializes process ownership. State publication and
 	// lifecycleMu acquisition/release are performed while mu is held.
-	lifecycleMu      sync.Mutex
-	mu               sync.RWMutex
-	xrayBin          string
-	geoDir           string
-	logDir           string
-	socketPath       string
-	token            string
-	xtlsSocket       string
-	disableHashCheck bool
-	lowMemory        bool
-	torrentBlocker   TorrentBlockerConfigProvider
+	lifecycleMu       sync.Mutex
+	mu                sync.RWMutex
+	xrayBin           string
+	geoDir            string
+	logDir            string
+	socketPath        string
+	token             string
+	xtlsSocket        string
+	disableHashCheck  bool
+	lowMemory         bool
+	torrentBlocker    TorrentBlockerConfigProvider
+	statsCapabilities xtls.StatsCapabilities
 
 	xrayVersion *string
 	state       lifecycleState

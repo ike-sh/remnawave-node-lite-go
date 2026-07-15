@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls/rwstats"
 	statscommand "github.com/xtls/xray-core/app/stats/command"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -49,14 +51,35 @@ type UserIPEntry struct {
 }
 
 type StatsAPI struct {
-	client statscommand.StatsServiceClient
-	conn   *grpc.ClientConn
+	client       statscommand.StatsServiceClient
+	conn         grpc.ClientConnInterface
+	capabilities *StatsCapabilities
 }
 
-func NewStatsAPI(conn *grpc.ClientConn) *StatsAPI {
+// StatsCapabilities caches optional rw-core RPC support across short-lived API clients.
+type StatsCapabilities struct {
+	usersStats atomic.Int32
+}
+
+const (
+	usersStatsUnknown int32 = iota
+	usersStatsSupported
+	usersStatsLegacy
+)
+
+const (
+	getUsersStatsMethod   = "/xray.app.stats.command.StatsService/GetUsersStats"
+	legacyIPLookupWorkers = 8
+)
+
+func NewStatsAPI(conn grpc.ClientConnInterface, capabilities *StatsCapabilities) *StatsAPI {
+	if capabilities == nil {
+		capabilities = &StatsCapabilities{}
+	}
 	return &StatsAPI{
-		client: statscommand.NewStatsServiceClient(conn),
-		conn:   conn,
+		client:       statscommand.NewStatsServiceClient(conn),
+		conn:         conn,
+		capabilities: capabilities,
 	}
 }
 
@@ -179,6 +202,54 @@ func (s *StatsAPI) GetUserIPList(ctx context.Context, userID string, reset bool)
 }
 
 func (s *StatsAPI) GetUsersIPList(ctx context.Context) ([]UserIPEntry, error) {
+	if s.capabilities.usersStats.Load() != usersStatsLegacy {
+		items, err := s.getUsersIPListNative(ctx)
+		if err == nil {
+			s.capabilities.usersStats.Store(usersStatsSupported)
+			return items, nil
+		}
+		if status.Code(err) != codes.Unimplemented {
+			return nil, err
+		}
+		s.capabilities.usersStats.Store(usersStatsLegacy)
+	}
+	return s.getUsersIPListLegacy(ctx)
+}
+
+func (s *StatsAPI) getUsersIPListNative(ctx context.Context) ([]UserIPEntry, error) {
+	response := &rwstats.GetUsersStatsResponse{}
+	err := s.conn.Invoke(
+		ctx,
+		getUsersStatsMethod,
+		&rwstats.GetUsersStatsRequest{IncludeTraffic: false, Reset_: true},
+		response,
+		grpc.StaticMethod(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	users := make([]UserIPEntry, 0, len(response.GetUsers()))
+	for _, user := range response.GetUsers() {
+		if user == nil {
+			continue
+		}
+		ips := make([]IPEntry, 0, len(user.GetIps()))
+		for _, item := range user.GetIps() {
+			if item == nil {
+				continue
+			}
+			ips = append(ips, IPEntry{
+				IP:       item.GetIp(),
+				LastSeen: time.Unix(item.GetLastSeen(), 0).UTC(),
+			})
+		}
+		users = append(users, UserIPEntry{UserID: user.GetEmail(), IPs: ips})
+	}
+	return users, nil
+}
+
+func (s *StatsAPI) getUsersIPListLegacy(ctx context.Context) ([]UserIPEntry, error) {
 	resp, err := s.client.GetAllOnlineUsers(ctx, &statscommand.GetAllOnlineUsersRequest{})
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
@@ -193,24 +264,30 @@ func (s *StatsAPI) GetUsersIPList(ctx context.Context) ([]UserIPEntry, error) {
 	}
 
 	results := make([]UserIPEntry, len(userIDs))
-	sem := make(chan struct{}, 50)
 	var wg sync.WaitGroup
-
-	for index, userID := range userIDs {
+	var cursor atomic.Uint64
+	workerCount := min(legacyIPLookupWorkers, len(userIDs))
+	for range workerCount {
 		wg.Add(1)
-		go func(i int, id string) {
+		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			ips, err := s.GetUserIPList(ctx, id, true)
-			if err != nil || len(ips) == 0 {
-				return
+			for {
+				index := int(cursor.Add(1) - 1)
+				if index >= len(userIDs) || ctx.Err() != nil {
+					return
+				}
+				userID := userIDs[index]
+				ips, err := s.GetUserIPList(ctx, userID, true)
+				if err == nil && len(ips) != 0 {
+					results[index] = UserIPEntry{UserID: userID, IPs: ips}
+				}
 			}
-			results[i] = UserIPEntry{UserID: id, IPs: ips}
-		}(index, userID)
+		}()
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	filtered := make([]UserIPEntry, 0, len(userIDs))
 	for _, item := range results {

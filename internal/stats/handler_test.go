@@ -12,6 +12,7 @@ import (
 
 type mockProvider struct {
 	usersStats       []xtls.UserTraffic
+	usersIPList      []xtls.UserIPEntry
 	usersErr         error
 	onlineCalls      int
 	userIPListCalls  int
@@ -48,7 +49,7 @@ func (m *mockProvider) GetUserIPList(_ context.Context, userID string, _ bool) (
 	return nil, m.usersErr
 }
 func (m *mockProvider) GetUsersIPList(context.Context) ([]xtls.UserIPEntry, error) {
-	return nil, m.usersErr
+	return m.usersIPList, m.usersErr
 }
 
 func TestGetSystemStatsReturnsErrorWhenOffline(t *testing.T) {
@@ -127,6 +128,18 @@ func TestGetUsersIPListGRPCError(t *testing.T) {
 	response := service.GetUsersIPList(context.Background())
 	if len(response.Users) != 0 {
 		t.Fatalf("users = %+v, want empty", response.Users)
+	}
+}
+
+func TestGetUsersIPListPreservesNativeUsersWithEmptyIPs(t *testing.T) {
+	t.Parallel()
+
+	service := stats.NewService(&mockProvider{usersIPList: []xtls.UserIPEntry{
+		{UserID: "u1", IPs: []xtls.IPEntry{}},
+	}}, nil)
+	response := service.GetUsersIPList(context.Background())
+	if len(response.Users) != 1 || response.Users[0].UserID != "u1" || len(response.Users[0].IPs) != 0 {
+		t.Fatalf("users = %+v, want native empty-IP entry preserved", response.Users)
 	}
 }
 

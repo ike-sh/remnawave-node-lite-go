@@ -22,7 +22,7 @@ func (m *Manager) statsAPI(ctx context.Context, requireOnline bool) (*xtls.Stats
 		return nil, nil, err
 	}
 
-	api := xtls.NewStatsAPI(client.Conn())
+	api := xtls.NewStatsAPI(client.Conn(), &m.statsCapabilities)
 	return api, func() { _ = client.Close() }, nil
 }
 
