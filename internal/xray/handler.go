@@ -108,15 +108,24 @@ func (m *Manager) HandlerGetInboundUsersCount(ctx context.Context, tag string) (
 }
 
 func (m *Manager) RemoveTorrentBlockerOutbound() error {
-	return m.HandlerRemoveOutbound(context.Background(), torrentBlockerOutboundTag)
-}
-
-func (m *Manager) StopIfOnline() bool {
 	m.mu.RLock()
 	online := m.state == lifecycleRunning
 	m.mu.RUnlock()
 	if !online {
-		return false
+		return nil
 	}
-	return m.Stop().IsStopped
+	return m.HandlerRemoveOutbound(context.Background(), torrentBlockerOutboundTag)
+}
+
+func (m *Manager) StopIfOnline() error {
+	m.mu.RLock()
+	stopped := m.state == lifecycleStopped
+	m.mu.RUnlock()
+	if stopped {
+		return nil
+	}
+	if !m.Stop().IsStopped {
+		return fmt.Errorf("stop rw-core: process did not stop")
+	}
+	return nil
 }

@@ -59,6 +59,18 @@ func TestRenderNFTBlockRejectsInvalidIP(t *testing.T) {
 	}
 }
 
+func TestRenderNFTBlockPreservesOfficialNegativeTimeout(t *testing.T) {
+	t.Parallel()
+
+	script, err := renderNFTBlock([]BlockIP{{IP: "203.0.113.1", Timeout: -1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(script, "203.0.113.1 timeout -1s") {
+		t.Fatalf("negative timeout was silently converted to permanent block:\n%s", script)
+	}
+}
+
 func TestRenderNFTUnblockRemovesTorrentAndIngressElements(t *testing.T) {
 	t.Parallel()
 

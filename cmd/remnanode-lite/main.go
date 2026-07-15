@@ -93,6 +93,9 @@ func main() {
 	}
 	dropper := connections.NewDropper(pluginState.IsWhitelisted)
 	pluginService := plugin.NewService(pluginState, dropper, manager)
+	if err := pluginService.Initialize(); err != nil {
+		log.Printf("warning: plugin nftables unavailable; nft-dependent plugins are disabled: %v", err)
+	}
 
 	manager.SetTorrentBlockerProvider(pluginState)
 

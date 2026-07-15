@@ -20,11 +20,12 @@ type recordingPluginController struct {
 }
 
 func (p *recordingPluginController) hit() { p.calls.Add(1) }
-func (p *recordingPluginController) ResetPlugins() {
+func (p *recordingPluginController) ResetPlugins() error {
 	p.hit()
 	if p.events != nil {
 		*p.events = append(*p.events, "reset-plugins")
 	}
+	return nil
 }
 func (p *recordingPluginController) Sync(request *plugin.SyncPlugin) plugin.AcceptedResponse {
 	p.hit()

@@ -1,7 +1,6 @@
 package plugin
 
 import (
-	"encoding/json"
 	"fmt"
 )
 
@@ -32,27 +31,4 @@ func ValidatePluginConfig(config map[string]any) error {
 	}
 
 	return nil
-}
-
-func pluginConfigHash(config json.RawMessage) string {
-	return hashPluginConfig(config)
-}
-
-func isUnchangedPluginConfig(plugin *SyncPlugin, state *State) bool {
-	if plugin == nil || state == nil {
-		return false
-	}
-	hash := pluginConfigHash(plugin.Config)
-	return hash != "" && hash == state.ConfigHash() && state.HasActivePlugin()
-}
-
-func extractPluginConfig(plugin *SyncPlugin) map[string]any {
-	if plugin == nil || len(plugin.Config) == 0 {
-		return nil
-	}
-	var config map[string]any
-	if err := json.Unmarshal(plugin.Config, &config); err != nil {
-		return nil
-	}
-	return config
 }

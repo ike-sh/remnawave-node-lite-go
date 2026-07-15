@@ -343,7 +343,9 @@ func testPluginBlockIPsResponseShape(t *testing.T) []byte {
 
 func pluginService() *plugin.Service {
 	state := plugin.NewState()
-	return plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), nil)
+	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), nil)
+	_ = service.Initialize()
+	return service
 }
 
 func testPluginUnblockIPsResponseShape(t *testing.T) []byte {

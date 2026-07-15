@@ -13,20 +13,6 @@ type ASNResolver interface {
 	PrefixesByASN(asn uint32) (ipv4, ipv6 []string)
 }
 
-func resolveASList(rawItems any, resolver ASNResolver) []string {
-	if resolver == nil {
-		return nil
-	}
-	asns := toASNSlice(rawItems)
-	out := make([]string, 0, len(asns))
-	for _, asn := range asns {
-		v4, v6 := resolver.PrefixesByASN(asn)
-		out = append(out, v4...)
-		out = append(out, v6...)
-	}
-	return out
-}
-
 func toASNSlice(value any) []uint32 {
 	items, ok := value.([]any)
 	if !ok {

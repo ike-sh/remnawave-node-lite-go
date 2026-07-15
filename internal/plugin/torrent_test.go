@@ -1,10 +1,6 @@
-package plugin_test
+package plugin
 
-import (
-	"testing"
-
-	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
-)
+import "testing"
 
 func TestExtractWebhookIP(t *testing.T) {
 	t.Parallel()
@@ -23,38 +19,32 @@ func TestExtractWebhookIP(t *testing.T) {
 		tc := tc
 		t.Run(tc.source, func(t *testing.T) {
 			t.Parallel()
-			if got := plugin.ExtractWebhookIPForTest(tc.source); got != tc.want {
+			if got := extractWebhookIP(tc.source); got != tc.want {
 				t.Fatalf("extractWebhookIP(%q) = %q, want %q", tc.source, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestHandleXrayWebhookAddsReport(t *testing.T) {
+func TestHandleXrayWebhookBlocksAndAddsReport(t *testing.T) {
 	t.Parallel()
 
-	state := plugin.NewState()
-	payload, err := plugin.NewSyncPluginFromEnvelope(map[string]any{
-		"uuid": "00000000-0000-4000-8000-000000000001",
-		"name": "test",
-		"config": map[string]any{
-			"torrentBlocker": map[string]any{
-				"enabled":       true,
-				"blockDuration": float64(60),
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	if response := service.Sync(torrentPlugin(t, true, nil)); !response.Accepted {
+		t.Fatal("torrent sync failed")
 	}
-	_, _ = state.UpdateFromSync(payload)
-	service := plugin.NewService(state, nil, nil)
 	service.HandleXrayWebhook(map[string]any{
 		"email":  "user-1",
 		"source": "tcp:203.0.113.10:443",
 	})
 
 	if state.ReportsCount() != 1 {
-		t.Fatalf("expected one report, got %d", state.ReportsCount())
+		t.Fatalf("reports count = %d, want 1", state.ReportsCount())
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if len(backend.blockCalls) != 1 || len(backend.blockCalls[0]) != 1 {
+		t.Fatalf("block calls = %#v", backend.blockCalls)
 	}
 }

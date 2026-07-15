@@ -139,7 +139,7 @@ func renderNFTBlock(items []BlockIP) (string, error) {
 		for _, key := range keys {
 			entry := entries[key]
 			element := entry.address
-			if entry.timeout > 0 {
+			if entry.timeout != 0 {
 				element += " timeout " + strconv.FormatFloat(entry.timeout, 'f', -1, 64) + "s"
 			}
 			elements = append(elements, element)

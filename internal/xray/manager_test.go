@@ -105,6 +105,18 @@ func TestStopClearsConfig(t *testing.T) {
 	}
 }
 
+func TestPluginXrayCleanupIsIdempotentWhileOffline(t *testing.T) {
+	t.Parallel()
+
+	manager := &Manager{state: lifecycleStopped}
+	if err := manager.StopIfOnline(); err != nil {
+		t.Fatalf("StopIfOnline: %v", err)
+	}
+	if err := manager.RemoveTorrentBlockerOutbound(); err != nil {
+		t.Fatalf("RemoveTorrentBlockerOutbound: %v", err)
+	}
+}
+
 func TestCurrentConfigJSONRemainsEmptyAfterFailedStart(t *testing.T) {
 	manager, err := NewManager(Options{
 		XrayBin:            "definitely-missing-rw-core",

@@ -1,36 +1,35 @@
-package plugin_test
+package plugin
 
 import (
 	"encoding/json"
 	"testing"
-
-	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
 )
 
-func mustSyncPlugin(t *testing.T, raw map[string]any) *plugin.SyncPlugin {
+func mustSyncPlugin(t *testing.T, raw map[string]any) *SyncPlugin {
 	t.Helper()
-	payload, err := plugin.NewSyncPluginFromEnvelope(raw)
+	payload, err := NewSyncPluginFromEnvelope(raw)
 	if err != nil {
 		t.Fatalf("sync plugin: %v", err)
 	}
 	return payload
 }
 
-func TestUpdateFromSyncNullWithoutActive(t *testing.T) {
+func TestSyncNullWithoutActiveIsRejected(t *testing.T) {
 	t.Parallel()
 
-	state := plugin.NewState()
-	changed, accepted := state.UpdateFromSync(nil)
-	if changed || accepted {
-		t.Fatalf("expected no-op, got changed=%v accepted=%v", changed, accepted)
+	state := NewState()
+	service, _ := newReadyService(t, state, nil)
+	if response := service.Sync(nil); response.Accepted {
+		t.Fatal("empty sync without active plugin was accepted")
 	}
 }
 
-func TestUpdateFromSyncStoresWhitelist(t *testing.T) {
+func TestSyncCommitsWhitelist(t *testing.T) {
 	t.Parallel()
 
-	state := plugin.NewState()
-	_, accepted := state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
+	state := NewState()
+	service, _ := newReadyService(t, state, nil)
+	response := service.Sync(mustSyncPlugin(t, map[string]any{
 		"uuid": "00000000-0000-4000-8000-000000000001",
 		"name": "test",
 		"config": map[string]any{
@@ -40,29 +39,27 @@ func TestUpdateFromSyncStoresWhitelist(t *testing.T) {
 			},
 		},
 	}))
-	if !accepted {
-		t.Fatal("expected accepted sync")
+	if !response.Accepted {
+		t.Fatal("sync was not accepted")
 	}
-	if state.IsWhitelisted("10.0.0.1") != true {
-		t.Fatal("expected whitelisted ip")
-	}
-	if state.IsWhitelisted("10.0.0.2") {
-		t.Fatal("unexpected whitelist match")
+	if !state.IsWhitelisted("10.0.0.1") || state.IsWhitelisted("10.0.0.2") {
+		t.Fatal("committed whitelist does not match the plan")
 	}
 }
 
-func TestUpdateFromSyncResolvesSharedWhitelist(t *testing.T) {
+func TestSyncResolvesSharedWhitelist(t *testing.T) {
 	t.Parallel()
 
-	state := plugin.NewState()
-	_, accepted := state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
+	state := NewState()
+	service, _ := newReadyService(t, state, nil)
+	response := service.Sync(mustSyncPlugin(t, map[string]any{
 		"uuid": "00000000-0000-4000-8000-000000000001",
 		"name": "test",
 		"config": map[string]any{
 			"sharedLists": []any{
 				map[string]any{
 					"type":  "ipList",
-					"name":  "trusted",
+					"name":  "ext:trusted",
 					"items": []any{"10.0.0.5"},
 				},
 			},
@@ -72,33 +69,8 @@ func TestUpdateFromSyncResolvesSharedWhitelist(t *testing.T) {
 			},
 		},
 	}))
-	if !accepted {
-		t.Fatal("expected accepted sync")
-	}
-	if !state.IsWhitelisted("10.0.0.5") {
-		t.Fatal("expected shared list ip to be whitelisted")
-	}
-}
-
-func TestUpdateFromSyncSkipsUnchangedHash(t *testing.T) {
-	t.Parallel()
-
-	state := plugin.NewState()
-	pluginConfig := map[string]any{
-		"uuid": "00000000-0000-4000-8000-000000000001",
-		"name": "test",
-		"config": map[string]any{
-			"torrentBlocker": map[string]any{"enabled": true},
-		},
-	}
-	payload := mustSyncPlugin(t, pluginConfig)
-	changed1, _ := state.UpdateFromSync(payload)
-	changed2, accepted2 := state.UpdateFromSync(payload)
-	if !changed1 {
-		t.Fatal("first sync should mark changed")
-	}
-	if changed2 || !accepted2 {
-		t.Fatalf("second sync should be unchanged accepted, got changed=%v accepted=%v", changed2, accepted2)
+	if !response.Accepted || !state.IsWhitelisted("10.0.0.5") {
+		t.Fatalf("shared whitelist was not committed: response=%+v", response)
 	}
 }
 
@@ -109,7 +81,7 @@ func TestNewSyncPluginFromEnvelopeRoundTrip(t *testing.T) {
 		"name":   "n",
 		"config": map[string]any{"a": float64(1)},
 	}
-	payload, err := plugin.NewSyncPluginFromEnvelope(raw)
+	payload, err := NewSyncPluginFromEnvelope(raw)
 	if err != nil {
 		t.Fatal(err)
 	}

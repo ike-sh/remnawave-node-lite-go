@@ -2,9 +2,9 @@ package plugin
 
 import (
 	"log/slog"
+	"math"
 	"net"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -22,93 +22,36 @@ var defaultIgnoredIPs = map[string]struct{}{
 
 type torrentSettings struct {
 	enabled         bool
-	blockDuration   int
+	blockDuration   float64
 	includeRuleTags []string
 	ignoredIPs      map[string]struct{}
 	ignoredUsers    map[string]struct{}
 }
 
-func (s *State) configureTorrentBlocker(rawConfig map[string]any, shared map[string][]string) {
-	s.torrent = torrentSettings{
-		ignoredIPs:   make(map[string]struct{}),
-		ignoredUsers: make(map[string]struct{}),
-	}
-	blocker, ok := rawConfig["torrentBlocker"].(map[string]any)
-	if !ok {
-		return
-	}
-	enabled, _ := blocker["enabled"].(bool)
-	if !enabled {
-		return
-	}
-	duration := 300
-	if value, ok := blocker["blockDuration"].(float64); ok && value > 0 {
-		duration = int(value)
-	}
-	s.torrent.enabled = true
-	s.torrent.blockDuration = duration
-	s.torrent.includeRuleTags = toStringSlice(blocker["includeRuleTags"])
-
-	if ignoreLists, ok := blocker["ignoreLists"].(map[string]any); ok {
-		for _, ip := range resolveIPList(toStringSlice(ignoreLists["ip"]), shared) {
-			s.torrent.ignoredIPs[ip] = struct{}{}
-		}
-		for _, user := range toIntStringSlice(ignoreLists["userId"]) {
-			s.torrent.ignoredUsers[user] = struct{}{}
-		}
-	}
-}
-
 func (s *State) TorrentBlockerEnabled() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.torrent.enabled
+	return s.active != nil && s.active.torrent.enabled
 }
 
 func (s *State) TorrentBlockerIncludeRuleTags() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if len(s.torrent.includeRuleTags) == 0 {
+	if s.active == nil || len(s.active.torrent.includeRuleTags) == 0 {
 		return nil
 	}
-	out := append([]string(nil), s.torrent.includeRuleTags...)
-	return out
-}
-
-func (s *State) isTorrentIPIgnored(ip string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if _, ok := defaultIgnoredIPs[ip]; ok {
-		return true
-	}
-	_, ok := s.torrent.ignoredIPs[ip]
-	return ok
-}
-
-func (s *State) isTorrentUserIgnored(userID string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	_, ok := s.torrent.ignoredUsers[userID]
-	return ok
-}
-
-func (s *State) torrentEnabled() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.torrent.enabled
-}
-
-func (s *State) torrentBlockDuration() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.torrent.blockDuration <= 0 {
-		return 300
-	}
-	return s.torrent.blockDuration
+	return append([]string(nil), s.active.torrent.includeRuleTags...)
 }
 
 func (s *Service) HandleXrayWebhook(payload map[string]any) {
-	if !s.state.torrentEnabled() {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	if s.readyLocked() != nil {
+		return
+	}
+
+	snapshot := s.state.currentSnapshot()
+	if snapshot == nil || !snapshot.torrent.enabled {
 		return
 	}
 
@@ -118,14 +61,14 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 	if ip == "" || email == "" {
 		return
 	}
-	if s.state.isTorrentIPIgnored(ip) || s.state.isTorrentUserIgnored(email) {
+	if torrentIPIgnored(snapshot.torrent, ip) || torrentUserIgnored(snapshot.torrent, email) {
 		return
 	}
 
-	duration := s.state.torrentBlockDuration()
+	duration := snapshot.torrent.blockDuration
 	blocked := false
-	if s.nft.Available() {
-		if err := s.nft.BlockIPs([]BlockIP{{IP: ip, Timeout: float64(duration)}}); err != nil {
+	if s.firewallAvailableLocked() {
+		if err := s.nft.BlockIPs([]BlockIP{{IP: ip, Timeout: duration}}); err != nil {
 			slog.Warn("torrent blocker failed to block ip", "ip", ip, "error", err)
 		} else {
 			blocked = true
@@ -140,7 +83,7 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 		ActionReport: struct {
 			Blocked       bool      `json:"blocked"`
 			IP            string    `json:"ip"`
-			BlockDuration int       `json:"blockDuration"`
+			BlockDuration float64   `json:"blockDuration"`
 			WillUnblockAt time.Time `json:"willUnblockAt"`
 			UserID        string    `json:"userId"`
 			ProcessedAt   time.Time `json:"processedAt"`
@@ -148,7 +91,7 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 			Blocked:       blocked,
 			IP:            ip,
 			BlockDuration: duration,
-			WillUnblockAt: now.Add(time.Duration(duration) * time.Second),
+			WillUnblockAt: addSeconds(now, duration),
 			UserID:        email,
 			ProcessedAt:   now,
 		},
@@ -156,8 +99,30 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 	})
 }
 
-func ExtractWebhookIPForTest(source string) string {
-	return extractWebhookIP(source)
+func torrentIPIgnored(settings torrentSettings, ip string) bool {
+	if _, ok := defaultIgnoredIPs[ip]; ok {
+		return true
+	}
+	_, ok := settings.ignoredIPs[ip]
+	return ok
+}
+
+func torrentUserIgnored(settings torrentSettings, userID string) bool {
+	_, ok := settings.ignoredUsers[userID]
+	return ok
+}
+
+func addSeconds(at time.Time, seconds float64) time.Time {
+	maxSeconds := float64(math.MaxInt64) / float64(time.Second)
+	minSeconds := float64(math.MinInt64) / float64(time.Second)
+	switch {
+	case seconds >= maxSeconds:
+		return at.Add(time.Duration(math.MaxInt64))
+	case seconds <= minSeconds:
+		return at.Add(time.Duration(math.MinInt64))
+	default:
+		return at.Add(time.Duration(seconds * float64(time.Second)))
+	}
 }
 
 func extractWebhookIP(source string) string {
@@ -177,81 +142,4 @@ func extractWebhookIP(source string) string {
 		return ""
 	}
 	return candidate
-}
-
-func resolveIPList(items []string, shared map[string][]string) []string {
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		if strings.HasPrefix(item, "ext:") {
-			if resolved, ok := shared[item]; ok {
-				out = append(out, resolved...)
-			}
-			continue
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
-func buildSharedIPMap(rawConfig map[string]any, resolver ASNResolver) map[string][]string {
-	shared := make(map[string][]string)
-	lists, ok := rawConfig["sharedLists"].([]any)
-	if !ok {
-		return shared
-	}
-	for _, item := range lists {
-		entry, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _ := entry["name"].(string)
-		if name == "" {
-			continue
-		}
-		key := name
-		if !strings.HasPrefix(name, "ext:") {
-			key = "ext:" + name
-		}
-		switch entryType, _ := entry["type"].(string); entryType {
-		case "ipList":
-			shared[key] = toStringSlice(entry["items"])
-		case "asList":
-			shared[key] = resolveASList(entry["items"], resolver)
-		}
-	}
-	return shared
-}
-
-func buildFirewallConfig(cfg map[string]any, resolver ASNResolver) firewallConfig {
-	shared := buildSharedIPMap(cfg, resolver)
-	var config firewallConfig
-	if ingress, ok := cfg["ingressFilter"].(map[string]any); ok {
-		if enabled, _ := ingress["enabled"].(bool); enabled {
-			config.ingressIPs = resolveIPList(toStringSlice(ingress["blockedIps"]), shared)
-		}
-	}
-	if egress, ok := cfg["egressFilter"].(map[string]any); ok {
-		if enabled, _ := egress["enabled"].(bool); enabled {
-			config.egressIPs = resolveIPList(toStringSlice(egress["blockedIps"]), shared)
-			config.egressPorts = toIntSlice(egress["blockedPorts"])
-		}
-	}
-	return config
-}
-
-func toIntSlice(value any) []int {
-	items, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]int, 0, len(items))
-	for _, item := range items {
-		switch v := item.(type) {
-		case float64:
-			out = append(out, int(v))
-		case int:
-			out = append(out, v)
-		}
-	}
-	return out
 }

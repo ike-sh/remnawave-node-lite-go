@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"encoding/json"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -19,7 +18,7 @@ type TorrentReport struct {
 	ActionReport struct {
 		Blocked       bool      `json:"blocked"`
 		IP            string    `json:"ip"`
-		BlockDuration int       `json:"blockDuration"`
+		BlockDuration float64   `json:"blockDuration"`
 		WillUnblockAt time.Time `json:"willUnblockAt"`
 		UserID        string    `json:"userId"`
 		ProcessedAt   time.Time `json:"processedAt"`
@@ -27,23 +26,27 @@ type TorrentReport struct {
 	XrayReport map[string]any `json:"xrayReport"`
 }
 
-type State struct {
-	mu sync.RWMutex
-
+// pluginSnapshot is immutable after publication. Readers may retain its
+// pointer after releasing State.mu because every update publishes a new value.
+type pluginSnapshot struct {
 	configHash   string
 	pluginUUID   string
 	pluginName   string
-	hasActive    bool
 	whitelistIPs map[string]struct{}
-	reports      []TorrentReport
 	torrent      torrentSettings
-	asn          ASNResolver
+	firewall     firewallConfig
+}
+
+type State struct {
+	mu sync.RWMutex
+
+	active  *pluginSnapshot
+	reports []TorrentReport
+	asn     ASNResolver
 }
 
 func NewState() *State {
-	return &State{
-		whitelistIPs: make(map[string]struct{}),
-	}
+	return &State{}
 }
 
 // SetASNResolver installs the resolver used to expand asList shared lists into
@@ -60,23 +63,41 @@ func (s *State) asnResolver() ASNResolver {
 	return s.asn
 }
 
+func (s *State) currentSnapshot() *pluginSnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.active
+}
+
+func (s *State) commitSnapshot(snapshot *pluginSnapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active = snapshot
+}
+
 func (s *State) IsWhitelisted(ip string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.whitelistIPs[ip]
+	if s.active == nil {
+		return false
+	}
+	_, ok := s.active.whitelistIPs[ip]
 	return ok
 }
 
 func (s *State) HasActivePlugin() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.hasActive
+	return s.active != nil
 }
 
 func (s *State) ConfigHash() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.configHash
+	if s.active == nil {
+		return ""
+	}
+	return s.active.configHash
 }
 
 func (s *State) ReportsCount() int {
@@ -97,18 +118,6 @@ func (s *State) AddReport(report TorrentReport) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reports = append(s.reports, report)
-}
-
-func (s *State) Reset() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.configHash = ""
-	s.pluginUUID = ""
-	s.pluginName = ""
-	s.hasActive = false
-	s.whitelistIPs = make(map[string]struct{})
-	s.reports = nil
-	s.torrent = torrentSettings{}
 }
 
 type SyncPlugin struct {
@@ -132,82 +141,4 @@ func NewSyncPluginFromEnvelope(raw map[string]any) (*SyncPlugin, error) {
 	name, _ := raw["name"].(string)
 	config, _ := raw["config"].(map[string]any)
 	return NewSyncPlugin(uuid, name, config)
-}
-
-func (s *State) UpdateFromSync(plugin *SyncPlugin) (changed bool, accepted bool) {
-	if plugin == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if !s.hasActive {
-			return false, false
-		}
-		s.configHash = ""
-		s.pluginUUID = ""
-		s.pluginName = ""
-		s.hasActive = false
-		s.whitelistIPs = make(map[string]struct{})
-		s.reports = nil
-		s.torrent = torrentSettings{}
-		return true, true
-	}
-
-	hash := hashPluginConfig(plugin.Config)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if hash == s.configHash && s.hasActive {
-		return false, true
-	}
-
-	s.configHash = hash
-	s.hasActive = true
-	s.pluginUUID = plugin.UUID
-	s.pluginName = plugin.Name
-
-	var rawConfig map[string]any
-	if err := json.Unmarshal(plugin.Config, &rawConfig); err != nil {
-		rawConfig = nil
-	}
-
-	shared := buildSharedIPMap(rawConfig, s.asn)
-
-	s.whitelistIPs = make(map[string]struct{})
-	if connectionDrop, ok := rawConfig["connectionDrop"].(map[string]any); ok {
-		if enabled, _ := connectionDrop["enabled"].(bool); enabled {
-			for _, ip := range resolveIPList(toStringSlice(connectionDrop["whitelistIps"]), shared) {
-				s.whitelistIPs[ip] = struct{}{}
-			}
-		}
-	}
-	s.configureTorrentBlocker(rawConfig, shared)
-
-	return true, true
-}
-
-func toStringSlice(value any) []string {
-	items, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		if str, ok := item.(string); ok && str != "" {
-			out = append(out, str)
-		}
-	}
-	return out
-}
-
-func toIntStringSlice(value any) []string {
-	items, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		if n, ok := asInt(item); ok {
-			out = append(out, fmt.Sprintf("%d", n))
-		}
-	}
-	return out
 }

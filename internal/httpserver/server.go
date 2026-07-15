@@ -37,7 +37,7 @@ type xrayController interface {
 }
 
 type pluginController interface {
-	ResetPlugins()
+	ResetPlugins() error
 	Sync(request *plugin.SyncPlugin) plugin.AcceptedResponse
 	CollectReports() plugin.CollectReportsResponse
 	BlockIPs(items []plugin.BlockIP) plugin.AcceptedResponse
@@ -100,7 +100,9 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	case routeXrayHealthcheck:
 		writeJSON(w, http.StatusOK, envelope[xray.HealthResponse]{Response: s.manager.Health()})
 	case routeXrayStop:
-		s.pluginService.ResetPlugins()
+		if err := s.pluginService.ResetPlugins(); err != nil {
+			slog.Warn("failed to reset plugins before stopping Xray", "error", err)
+		}
 		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: s.manager.Stop()})
 	case routeXrayStart:
 		s.handleStart(w, r)
