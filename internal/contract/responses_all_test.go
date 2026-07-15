@@ -1,15 +1,16 @@
 package contract_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
+	contractspec "github.com/Luxiaba/remnawave-node-lite-go/internal/contract"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/nodehandler"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/stats"
@@ -17,7 +18,7 @@ import (
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
-var responseShapeTests = map[string]func(t *testing.T){
+var responseShapeTests = map[string]func(t *testing.T) []byte{
 	"/node/xray/start":                      testXrayStartResponseShape,
 	"/node/xray/stop":                       testXrayStopResponseShape,
 	"/node/xray/healthcheck":                testXrayHealthcheckResponseShape,
@@ -55,9 +56,24 @@ func TestOfficialResponseShapes(t *testing.T) {
 			if !ok {
 				t.Fatalf("missing response shape test for %s", route.Path)
 			}
-			fn(t)
+			raw := fn(t)
+			if err := contractspec.ValidateResponse(route.Path, raw); err != nil {
+				t.Fatalf("response violates official schema: %v\n%s", err, raw)
+			}
 		})
 	}
+}
+
+func officialRequest(t *testing.T, path string) *http.Request {
+	t.Helper()
+	route, ok := contractspec.FindRouteByPath(path)
+	if !ok {
+		t.Fatalf("route %s is missing from contract evidence", path)
+	}
+	if len(route.ValidRequest) == 0 {
+		return httptest.NewRequest(route.Method, route.Path, nil)
+	}
+	return httptest.NewRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest))
 }
 
 func testManager(t *testing.T) *xray.Manager {
@@ -80,32 +96,25 @@ func encodeEnvelope(response any) []byte {
 	return body
 }
 
-func testXrayStartResponseShape(t *testing.T) {
+func testXrayStartResponseShape(t *testing.T) []byte {
 	manager := testManager(t)
 	resp := manager.Start(context.Background(), xray.StartRequest{
 		XrayConfig: map[string]any{"inbounds": []any{}},
 	})
 	raw := encodeEnvelope(resp)
-	assertTopLevelResponse(t, raw)
-	assertJSONPath(t, raw, "response.isStarted")
-	assertJSONPath(t, raw, "response.nodeInformation.version")
-	assertJSONPath(t, raw, "response.system.info.arch")
-	assertJSONPath(t, raw, "response.system.stats.memoryFree")
+	return raw
 }
 
-func testXrayStopResponseShape(t *testing.T) {
+func testXrayStopResponseShape(t *testing.T) []byte {
 	manager := testManager(t)
 	raw := encodeEnvelope(manager.Stop(true))
-	assertJSONPath(t, raw, "response.isStopped")
+	return raw
 }
 
-func testXrayHealthcheckResponseShape(t *testing.T) {
+func testXrayHealthcheckResponseShape(t *testing.T) []byte {
 	manager := testManager(t)
 	raw := encodeEnvelope(manager.Health())
-	assertJSONPath(t, raw, "response.isAlive")
-	assertJSONPath(t, raw, "response.xrayInternalStatusCached")
-	assertJSONPath(t, raw, "response.xrayVersion")
-	assertJSONPath(t, raw, "response.nodeVersion")
+	return raw
 }
 
 func statsService(t *testing.T) *stats.Service {
@@ -113,206 +122,206 @@ func statsService(t *testing.T) *stats.Service {
 	return stats.NewService(stubStatsProvider{}, stubReportsCounter{})
 }
 
-func testGetUserOnlineStatusResponseShape(t *testing.T) {
+func testGetUserOnlineStatusResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-user-online-status", strings.NewReader(`{"username":"u1"}`))
+	req := officialRequest(t, "/node/stats/get-user-online-status")
 	rec := httptest.NewRecorder()
 	service.HandleGetUserOnlineStatus(rec, req, writeTestJSON)
-	assertJSONPath(t, rec.Body.Bytes(), "response.isOnline")
+	return rec.Body.Bytes()
 }
 
-func testGetSystemStatsResponseShape(t *testing.T) {
+func testGetSystemStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
 	rec := httptest.NewRecorder()
 	service.HandleGetSystemStats(rec, writeTestJSON)
 	raw := rec.Body.Bytes()
-	assertJSONPath(t, raw, "response.plugins.torrentBlocker.reportsCount")
-	assertJSONPath(t, raw, "response.system.stats.memoryFree")
-	assertJSONPath(t, raw, "response.system.stats.loadAvg")
+	return raw
 }
 
-func testGetUsersStatsResponseShape(t *testing.T) {
+func testGetUsersStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-users-stats", strings.NewReader(`{"reset":false}`))
+	req := officialRequest(t, "/node/stats/get-users-stats")
 	rec := httptest.NewRecorder()
 	service.HandleGetUsersStats(rec, req, writeTestJSON)
-	assertJSONPathArray(t, rec.Body.Bytes(), "response.users")
+	return rec.Body.Bytes()
 }
 
-func testGetInboundStatsResponseShape(t *testing.T) {
+func testGetInboundStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-inbound-stats", strings.NewReader(`{"tag":"in-1","reset":false}`))
+	req := officialRequest(t, "/node/stats/get-inbound-stats")
 	rec := httptest.NewRecorder()
 	service.HandleGetInboundStats(rec, req, writeTestJSON)
 	raw := rec.Body.Bytes()
-	assertJSONPath(t, raw, "response.inbound")
-	assertJSONPath(t, raw, "response.downlink")
-	assertJSONPath(t, raw, "response.uplink")
+	return raw
 }
 
-func testGetOutboundStatsResponseShape(t *testing.T) {
+func testGetOutboundStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-outbound-stats", strings.NewReader(`{"tag":"out-1","reset":false}`))
+	req := officialRequest(t, "/node/stats/get-outbound-stats")
 	rec := httptest.NewRecorder()
 	service.HandleGetOutboundStats(rec, req, writeTestJSON)
 	raw := rec.Body.Bytes()
-	assertJSONPath(t, raw, "response.outbound")
-	assertJSONPath(t, raw, "response.downlink")
-	assertJSONPath(t, raw, "response.uplink")
+	return raw
 }
 
-func testGetAllInboundsStatsResponseShape(t *testing.T) {
+func testGetAllInboundsStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-all-inbounds-stats", strings.NewReader(`{"reset":false}`))
+	req := officialRequest(t, "/node/stats/get-all-inbounds-stats")
 	rec := httptest.NewRecorder()
 	service.HandleGetAllInboundsStats(rec, req, writeTestJSON)
-	assertJSONPathArray(t, rec.Body.Bytes(), "response.inbounds")
+	return rec.Body.Bytes()
 }
 
-func testGetAllOutboundsStatsResponseShape(t *testing.T) {
+func testGetAllOutboundsStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-all-outbounds-stats", strings.NewReader(`{"reset":false}`))
+	req := officialRequest(t, "/node/stats/get-all-outbounds-stats")
 	rec := httptest.NewRecorder()
 	service.HandleGetAllOutboundsStats(rec, req, writeTestJSON)
-	assertJSONPathArray(t, rec.Body.Bytes(), "response.outbounds")
+	return rec.Body.Bytes()
 }
 
-func testGetCombinedStatsResponseShape(t *testing.T) {
+func testGetCombinedStatsResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-combined-stats", strings.NewReader(`{"reset":false}`))
+	req := officialRequest(t, "/node/stats/get-combined-stats")
 	rec := httptest.NewRecorder()
 	service.HandleGetCombinedStats(rec, req, writeTestJSON)
 	raw := rec.Body.Bytes()
-	assertJSONPathArray(t, raw, "response.inbounds")
-	assertJSONPathArray(t, raw, "response.outbounds")
+	return raw
 }
 
-func testGetUserIPListResponseShape(t *testing.T) {
+func testGetUserIPListResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-user-ip-list", strings.NewReader(`{"userId":"u1"}`))
+	req := officialRequest(t, "/node/stats/get-user-ip-list")
 	rec := httptest.NewRecorder()
 	service.HandleGetUserIPList(rec, req, writeTestJSON)
-	assertJSONPathArray(t, rec.Body.Bytes(), "response.ips")
+	return rec.Body.Bytes()
 }
 
-func testGetUsersIPListResponseShape(t *testing.T) {
+func testGetUsersIPListResponseShape(t *testing.T) []byte {
 	service := statsService(t)
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-users-ip-list", strings.NewReader(`{}`))
+	req := officialRequest(t, "/node/stats/get-users-ip-list")
 	rec := httptest.NewRecorder()
 	service.HandleGetUsersIPList(rec, req, writeTestJSON)
-	assertJSONPathArray(t, rec.Body.Bytes(), "response.users")
+	return rec.Body.Bytes()
 }
 
 func handlerService() *nodehandler.Service {
 	return nodehandler.NewService(stubHandlerProvider{}, connections.NewDropper(nil))
 }
 
-func testRemoveUserResponseShape(t *testing.T) {
+func testRemoveUserResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/remove-user", strings.NewReader(`{
-		"username":"u1",
-		"hashData":{"vlessUuid":"00000000-0000-4000-8000-000000000001"}
-	}`))
+	req := officialRequest(t, "/node/handler/remove-user")
 	rec := httptest.NewRecorder()
 	service.HandleRemoveUser(rec, req, writeTestJSON)
 	raw := rec.Body.Bytes()
-	assertJSONPath(t, raw, "response.success")
-	assertJSONPath(t, raw, "response.error")
+	return raw
 }
 
-func testGetInboundUsersResponseShape(t *testing.T) {
+func testGetInboundUsersResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/get-inbound-users", strings.NewReader(`{"tag":"in-1"}`))
+	req := officialRequest(t, "/node/handler/get-inbound-users")
 	rec := httptest.NewRecorder()
 	service.HandleGetInboundUsers(rec, req, writeTestJSON)
-	assertJSONPathArray(t, rec.Body.Bytes(), "response.users")
+	return rec.Body.Bytes()
 }
 
-func testAddUsersResponseShape(t *testing.T) {
+func testAddUsersResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	body := `{
-		"data":[{"type":"vless","tag":"in-1","username":"u1","uuid":"00000000-0000-4000-8000-000000000001","flow":""}],
-		"hashData":{"vlessUuid":"00000000-0000-4000-8000-000000000002"}
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/add-users", strings.NewReader(body))
+	req := officialRequest(t, "/node/handler/add-users")
 	rec := httptest.NewRecorder()
 	service.HandleAddUsers(rec, req, writeTestJSON)
 	raw := rec.Body.Bytes()
-	assertJSONPath(t, raw, "response.success")
-	assertJSONPath(t, raw, "response.error")
+	return raw
 }
 
-func testRemoveUsersResponseShape(t *testing.T) {
+func testRemoveUsersResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/remove-users", strings.NewReader(`{
-		"usernames":["u1"],
-		"hashData":{"vlessUuid":"00000000-0000-4000-8000-000000000001"}
-	}`))
+	req := officialRequest(t, "/node/handler/remove-users")
 	rec := httptest.NewRecorder()
 	service.HandleRemoveUsers(rec, req, writeTestJSON)
 	raw := rec.Body.Bytes()
-	assertJSONPath(t, raw, "response.success")
-	assertJSONPath(t, raw, "response.error")
+	return raw
 }
 
-func testDropIPsResponseShape(t *testing.T) {
+func testDropIPsResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/drop-ips", strings.NewReader(`{"ips":["203.0.113.10"]}`))
+	req := officialRequest(t, "/node/handler/drop-ips")
 	rec := httptest.NewRecorder()
 	service.HandleDropIPs(rec, req, writeTestJSON)
-	assertJSONPath(t, rec.Body.Bytes(), "response.success")
+	return rec.Body.Bytes()
 }
 
-func testAddUserResponseShape(t *testing.T) {
+func testAddUserResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/add-user", strings.NewReader(`{
-		"data":[{"type":"vless","tag":"in-1","username":"u1","uuid":"00000000-0000-4000-8000-000000000001","flow":""}],
-		"hashData":{"vlessUuid":"00000000-0000-4000-8000-000000000002"}
-	}`))
+	req := officialRequest(t, "/node/handler/add-user")
 	rec := httptest.NewRecorder()
 	service.HandleAddUser(rec, req, writeTestJSON)
 	raw := rec.Body.Bytes()
-	assertJSONPath(t, raw, "response.success")
-	assertJSONPath(t, raw, "response.error")
+	return raw
 }
 
-func testDropUsersConnectionsResponseShape(t *testing.T) {
+func testDropUsersConnectionsResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/drop-users-connections", strings.NewReader(`{"userIds":["user-1"]}`))
+	req := officialRequest(t, "/node/handler/drop-users-connections")
 	rec := httptest.NewRecorder()
 	service.HandleDropUsersConnections(rec, req, writeTestJSON)
-	assertJSONPath(t, rec.Body.Bytes(), "response.success")
+	return rec.Body.Bytes()
 }
 
-func testGetInboundUsersCountResponseShape(t *testing.T) {
+func testGetInboundUsersCountResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/get-inbound-users-count", strings.NewReader(`{"tag":"in-1"}`))
+	req := officialRequest(t, "/node/handler/get-inbound-users-count")
 	rec := httptest.NewRecorder()
 	service.HandleGetInboundUsersCount(rec, req, writeTestJSON)
-	assertJSONPath(t, rec.Body.Bytes(), "response.count")
+	return rec.Body.Bytes()
 }
 
-func testPluginSyncResponseShape(t *testing.T) {
+func testPluginSyncResponseShape(t *testing.T) []byte {
 	service := pluginService()
-	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", strings.NewReader(`{"plugin":null}`))
+	req := officialRequest(t, "/node/plugin/sync")
 	rec := httptest.NewRecorder()
 	service.HandleSync(rec, req, writeTestJSON)
-	assertJSONPath(t, rec.Body.Bytes(), "response.accepted")
+	return rec.Body.Bytes()
 }
 
-func testPluginCollectReportsResponseShape(t *testing.T) {
-	service := pluginService()
+func testPluginCollectReportsResponseShape(t *testing.T) []byte {
+	state := plugin.NewState()
+	var report plugin.TorrentReport
+	report.ActionReport.Blocked = true
+	report.ActionReport.IP = "203.0.113.10"
+	report.ActionReport.BlockDuration = 60
+	report.ActionReport.WillUnblockAt = time.Now().Add(time.Minute)
+	report.ActionReport.UserID = "user-1"
+	report.ActionReport.ProcessedAt = time.Now()
+	report.XrayReport = map[string]any{
+		"email":          "user-1",
+		"level":          1,
+		"protocol":       "vless",
+		"network":        "tcp",
+		"source":         "203.0.113.10:12345",
+		"destination":    "198.51.100.20:443",
+		"routeTarget":    nil,
+		"originalTarget": nil,
+		"inboundTag":     "inbound-1",
+		"inboundName":    nil,
+		"inboundLocal":   nil,
+		"outboundTag":    "direct",
+		"ts":             time.Now().UnixMilli(),
+	}
+	state.AddReport(report)
+	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), nil)
 	rec := httptest.NewRecorder()
 	service.HandleCollectReports(rec, writeTestJSON)
-	assertJSONPathArray(t, rec.Body.Bytes(), "response.reports")
+	return rec.Body.Bytes()
 }
 
-func testPluginBlockIPsResponseShape(t *testing.T) {
+func testPluginBlockIPsResponseShape(t *testing.T) []byte {
 	service := pluginService()
-	req := httptest.NewRequest(http.MethodPost, "/node/plugin/nftables/block-ips", strings.NewReader(`{"ips":[{"ip":"203.0.113.10","timeout":60}]}`))
+	req := officialRequest(t, "/node/plugin/nftables/block-ips")
 	rec := httptest.NewRecorder()
 	service.HandleBlockIPs(rec, req, writeTestJSON)
-	assertJSONPath(t, rec.Body.Bytes(), "response.accepted")
+	return rec.Body.Bytes()
 }
 
 func pluginService() *plugin.Service {
@@ -320,20 +329,20 @@ func pluginService() *plugin.Service {
 	return plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), nil)
 }
 
-func testPluginUnblockIPsResponseShape(t *testing.T) {
+func testPluginUnblockIPsResponseShape(t *testing.T) []byte {
 	service := pluginService()
-	req := httptest.NewRequest(http.MethodPost, "/node/plugin/nftables/unblock-ips", strings.NewReader(`{"ips":["203.0.113.10"]}`))
+	req := officialRequest(t, "/node/plugin/nftables/unblock-ips")
 	rec := httptest.NewRecorder()
 	service.HandleUnblockIPs(rec, req, writeTestJSON)
-	assertJSONPath(t, rec.Body.Bytes(), "response.accepted")
+	return rec.Body.Bytes()
 }
 
-func testPluginRecreateTablesResponseShape(t *testing.T) {
+func testPluginRecreateTablesResponseShape(t *testing.T) []byte {
 	service := pluginService()
-	req := httptest.NewRequest(http.MethodPost, "/node/plugin/nftables/recreate-tables", nil)
+	req := officialRequest(t, "/node/plugin/nftables/recreate-tables")
 	rec := httptest.NewRecorder()
 	service.HandleRecreateTables(rec, req, writeTestJSON)
-	assertJSONPath(t, rec.Body.Bytes(), "response.accepted")
+	return rec.Body.Bytes()
 }
 
 type stubStatsProvider struct{}
@@ -363,7 +372,10 @@ func (stubStatsProvider) GetUserIPList(context.Context, string, bool) ([]xtls.IP
 	return []xtls.IPEntry{{IP: "203.0.113.10", LastSeen: time.Now()}}, nil
 }
 func (stubStatsProvider) GetUsersIPList(context.Context) ([]xtls.UserIPEntry, error) {
-	return []xtls.UserIPEntry{{UserID: "u1"}}, nil
+	return []xtls.UserIPEntry{{
+		UserID: "user-1",
+		IPs:    []xtls.IPEntry{{IP: "203.0.113.10", LastSeen: time.Now()}},
+	}}, nil
 }
 
 type stubReportsCounter struct{}

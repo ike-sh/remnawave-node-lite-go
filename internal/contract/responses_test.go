@@ -36,7 +36,7 @@ func (stubHandlerProvider) HandlerAddHysteriaUser(context.Context, string, strin
 	return xtls.HandlerResult{OK: false}
 }
 func (stubHandlerProvider) HandlerGetInboundUsers(context.Context, string) ([]xtls.InboundUser, xtls.HandlerResult) {
-	return nil, xtls.HandlerResult{OK: true}
+	return []xtls.InboundUser{{Username: "user-1", Email: "user-1", Level: 1}}, xtls.HandlerResult{OK: true}
 }
 func (stubHandlerProvider) HandlerGetInboundUsersCount(context.Context, string) (int64, xtls.HandlerResult) {
 	return 0, xtls.HandlerResult{OK: true}

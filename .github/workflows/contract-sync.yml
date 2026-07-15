@@ -42,3 +42,5 @@ jobs:
 
       - name: Test contract package
         run: go test ./internal/contract/...
+        env:
+          REMNANODE_OFFICIAL_SOURCE: /tmp/remnawave-node
