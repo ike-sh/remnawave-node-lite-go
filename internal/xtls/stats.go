@@ -84,6 +84,8 @@ func NewStatsAPI(conn grpc.ClientConnInterface, capabilities *StatsCapabilities)
 }
 
 func (s *StatsAPI) GetSysStats(ctx context.Context) (*SysStats, error) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	resp, err := s.client.GetSysStats(ctx, &statscommand.SysStatsRequest{})
 	if err != nil {
 		return nil, err
@@ -103,6 +105,8 @@ func (s *StatsAPI) GetSysStats(ctx context.Context) (*SysStats, error) {
 }
 
 func (s *StatsAPI) GetUserOnlineStatus(ctx context.Context, username string) (bool, error) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	_, err := s.client.GetStatsOnline(ctx, &statscommand.GetStatsRequest{
 		Name:   fmt.Sprintf("user>>>%s>>>online", username),
 		Reset_: false,
@@ -120,6 +124,8 @@ func (s *StatsAPI) GetUserOnlineStatus(ctx context.Context, username string) (bo
 }
 
 func (s *StatsAPI) GetAllUsersStats(ctx context.Context, reset bool) ([]UserTraffic, error) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	// Align with official @remnawave/xtls-sdk getAllUsersStats(): QueryStats only.
 	// Preferring GetUsersStats here returns empty traffic on rw-core even when counters exist.
 	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
@@ -133,6 +139,8 @@ func (s *StatsAPI) GetAllUsersStats(ctx context.Context, reset bool) ([]UserTraf
 }
 
 func (s *StatsAPI) GetInboundStats(ctx context.Context, tag string, reset bool) (TagTraffic, error) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
 		Pattern: fmt.Sprintf("inbound>>>%s>>>", tag),
 		Reset_:  reset,
@@ -146,6 +154,8 @@ func (s *StatsAPI) GetInboundStats(ctx context.Context, tag string, reset bool) 
 }
 
 func (s *StatsAPI) GetOutboundStats(ctx context.Context, tag string, reset bool) (TagTraffic, error) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
 		Pattern: fmt.Sprintf("outbound>>>%s>>>", tag),
 		Reset_:  reset,
@@ -159,6 +169,8 @@ func (s *StatsAPI) GetOutboundStats(ctx context.Context, tag string, reset bool)
 }
 
 func (s *StatsAPI) GetAllInboundsStats(ctx context.Context, reset bool) ([]TagTraffic, error) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
 		Pattern: "inbound>>>",
 		Reset_:  reset,
@@ -170,6 +182,8 @@ func (s *StatsAPI) GetAllInboundsStats(ctx context.Context, reset bool) ([]TagTr
 }
 
 func (s *StatsAPI) GetAllOutboundsStats(ctx context.Context, reset bool) ([]TagTraffic, error) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	resp, err := s.client.QueryStats(ctx, &statscommand.QueryStatsRequest{
 		Pattern: "outbound>>>",
 		Reset_:  reset,
@@ -181,13 +195,15 @@ func (s *StatsAPI) GetAllOutboundsStats(ctx context.Context, reset bool) ([]TagT
 }
 
 func (s *StatsAPI) Ping(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := withRPCDeadline(ctx, 3*time.Second)
 	defer cancel()
 	_, err := s.client.GetSysStats(ctx, &statscommand.SysStatsRequest{})
 	return err
 }
 
 func (s *StatsAPI) GetUserIPList(ctx context.Context, userID string, reset bool) ([]IPEntry, error) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	resp, err := s.client.GetStatsOnlineIpList(ctx, &statscommand.GetStatsRequest{
 		Name:   fmt.Sprintf("user>>>%s>>>online", userID),
 		Reset_: reset,
@@ -202,6 +218,8 @@ func (s *StatsAPI) GetUserIPList(ctx context.Context, userID string, reset bool)
 }
 
 func (s *StatsAPI) GetUsersIPList(ctx context.Context) ([]UserIPEntry, error) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	if s.capabilities.usersStats.Load() != usersStatsLegacy {
 		items, err := s.getUsersIPListNative(ctx)
 		if err == nil {

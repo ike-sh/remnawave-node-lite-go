@@ -96,11 +96,15 @@ func (h *HandlerAPI) AddHysteriaUser(ctx context.Context, tag, username, auth st
 }
 
 func (h *HandlerAPI) RemoveOutbound(ctx context.Context, tag string) error {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	_, err := h.client.RemoveOutbound(ctx, &proxcommand.RemoveOutboundRequest{Tag: tag})
 	return err
 }
 
 func (h *HandlerAPI) RemoveUser(ctx context.Context, tag, username string) HandlerResult {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	_, err := h.client.AlterInbound(ctx, &proxcommand.AlterInboundRequest{
 		Tag: tag,
 		Operation: serial.ToTypedMessage(&proxcommand.RemoveUserOperation{
@@ -114,6 +118,8 @@ func (h *HandlerAPI) RemoveUser(ctx context.Context, tag, username string) Handl
 }
 
 func (h *HandlerAPI) GetInboundUsers(ctx context.Context, tag string) ([]InboundUser, HandlerResult) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	resp, err := h.client.GetInboundUsers(ctx, &proxcommand.GetInboundUserRequest{Tag: tag})
 	if err != nil {
 		return nil, HandlerResult{OK: false, Message: grpcErrorMessage(err)}
@@ -134,6 +140,8 @@ func (h *HandlerAPI) GetInboundUsers(ctx context.Context, tag string) ([]Inbound
 }
 
 func (h *HandlerAPI) GetInboundUsersCount(ctx context.Context, tag string) (int64, HandlerResult) {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	resp, err := h.client.GetInboundUsersCount(ctx, &proxcommand.GetInboundUserRequest{Tag: tag})
 	if err != nil {
 		return 0, HandlerResult{OK: false, Message: grpcErrorMessage(err)}
@@ -142,6 +150,8 @@ func (h *HandlerAPI) GetInboundUsersCount(ctx context.Context, tag string) (int6
 }
 
 func (h *HandlerAPI) addUser(ctx context.Context, tag string, user *protocol.User) HandlerResult {
+	ctx, cancel := withRPCTimeout(ctx)
+	defer cancel()
 	_, err := h.client.AlterInbound(ctx, &proxcommand.AlterInboundRequest{
 		Tag: tag,
 		Operation: serial.ToTypedMessage(&proxcommand.AddUserOperation{
