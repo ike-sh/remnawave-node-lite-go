@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"strings"
 )
@@ -30,14 +31,14 @@ func isIPv6CIDR(value string) bool {
 
 func isIPCidrOrExt(value string) bool {
 	if strings.HasPrefix(value, "ext:") {
-		return len(value) > 4
+		return true
 	}
 	return isPlainIP(value) || isIPv4CIDR(value) || isIPv6CIDR(value)
 }
 
 func isIPOrExt(value string) bool {
 	if strings.HasPrefix(value, "ext:") {
-		return len(value) > 4
+		return true
 	}
 	return isPlainIP(value)
 }
@@ -69,7 +70,8 @@ func validateASNArray(field string, raw any) error {
 		return fmt.Errorf("%s must be an array", field)
 	}
 	for i, item := range items {
-		if _, ok := parseASN(item); !ok {
+		asn, ok := numberValue(item)
+		if !ok || math.Trunc(asn) != asn || asn < 1 || asn > 4294967295 {
 			return fmt.Errorf("%s[%d] must be a positive AS number", field, i)
 		}
 	}
@@ -77,9 +79,6 @@ func validateASNArray(field string, raw any) error {
 }
 
 func validateSharedLists(raw any) error {
-	if raw == nil {
-		return nil
-	}
 	lists, ok := raw.([]any)
 	if !ok {
 		return fmt.Errorf("sharedLists must be an array")
@@ -110,9 +109,6 @@ func validateSharedLists(raw any) error {
 }
 
 func validateTorrentBlockerSection(raw any) error {
-	if raw == nil {
-		return nil
-	}
 	section, ok := raw.(map[string]any)
 	if !ok {
 		return fmt.Errorf("torrentBlocker must be an object")
@@ -159,9 +155,6 @@ func validateTorrentBlockerSection(raw any) error {
 }
 
 func validateConnectionDropSection(raw any) error {
-	if raw == nil {
-		return nil
-	}
 	section, ok := raw.(map[string]any)
 	if !ok {
 		return fmt.Errorf("connectionDrop must be an object")
@@ -176,9 +169,6 @@ func validateConnectionDropSection(raw any) error {
 }
 
 func validateIngressFilterSection(raw any) error {
-	if raw == nil {
-		return nil
-	}
 	section, ok := raw.(map[string]any)
 	if !ok {
 		return fmt.Errorf("ingressFilter must be an object")
@@ -193,9 +183,6 @@ func validateIngressFilterSection(raw any) error {
 }
 
 func validateEgressFilterSection(raw any) error {
-	if raw == nil {
-		return nil
-	}
 	section, ok := raw.(map[string]any)
 	if !ok {
 		return fmt.Errorf("egressFilter must be an object")
@@ -217,16 +204,26 @@ func validateEgressFilterSection(raw any) error {
 }
 
 func isIntNumber(value any) bool {
+	number, ok := numberValue(value)
+	return ok && math.Trunc(number) == number
+}
+
+func numberValue(value any) (float64, bool) {
+	var number float64
 	switch v := value.(type) {
 	case float64:
-		return v == float64(int(v))
+		number = v
 	case int:
-		return true
+		number = float64(v)
 	case int64:
-		return true
+		number = float64(v)
 	default:
-		return false
+		return 0, false
 	}
+	if math.IsNaN(number) || math.IsInf(number, 0) {
+		return 0, false
+	}
+	return number, true
 }
 
 func validateIntArray(field string, raw any) error {

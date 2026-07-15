@@ -11,20 +11,24 @@ func ValidatePluginConfig(config map[string]any) error {
 		return fmt.Errorf("plugin config is required")
 	}
 
-	if err := validateSharedLists(config["sharedLists"]); err != nil {
-		return err
+	validators := []struct {
+		name     string
+		validate func(any) error
+	}{
+		{name: "sharedLists", validate: validateSharedLists},
+		{name: "ingressFilter", validate: validateIngressFilterSection},
+		{name: "egressFilter", validate: validateEgressFilterSection},
+		{name: "connectionDrop", validate: validateConnectionDropSection},
+		{name: "torrentBlocker", validate: validateTorrentBlockerSection},
 	}
-	if err := validateIngressFilterSection(config["ingressFilter"]); err != nil {
-		return err
-	}
-	if err := validateEgressFilterSection(config["egressFilter"]); err != nil {
-		return err
-	}
-	if err := validateConnectionDropSection(config["connectionDrop"]); err != nil {
-		return err
-	}
-	if err := validateTorrentBlockerSection(config["torrentBlocker"]); err != nil {
-		return err
+	for _, validator := range validators {
+		raw, present := config[validator.name]
+		if !present {
+			continue
+		}
+		if err := validator.validate(raw); err != nil {
+			return err
+		}
 	}
 
 	return nil

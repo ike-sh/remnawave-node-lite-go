@@ -89,4 +89,23 @@ func TestValidateSharedListsRejectsBadASNAndType(t *testing.T) {
 	}); err == nil {
 		t.Error("unknown shared list type should fail validation")
 	}
+	if err := validateSharedLists([]any{
+		map[string]any{"name": "ext:google", "type": "asList", "items": []any{"AS15169"}},
+	}); err == nil {
+		t.Error("string ASN should fail the official numeric schema")
+	}
+	if err := validateSharedLists([]any{
+		map[string]any{"name": "ext:max", "type": "asList", "items": []any{float64(4294967296)}},
+	}); err == nil {
+		t.Error("ASN above uint32 should fail validation")
+	}
+}
+
+func TestValidateSharedListsAcceptsMaximumASN(t *testing.T) {
+	t.Parallel()
+	if err := validateSharedLists([]any{
+		map[string]any{"name": "ext:max", "type": "asList", "items": []any{float64(4294967295)}},
+	}); err != nil {
+		t.Fatalf("maximum uint32 ASN rejected: %v", err)
+	}
 }

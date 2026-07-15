@@ -31,6 +31,45 @@ func TestValidatePluginConfigAcceptsMinimalConfig(t *testing.T) {
 	}
 }
 
+func TestValidatePluginConfigAcceptsOfficialIntegerAndExtEdges(t *testing.T) {
+	t.Parallel()
+
+	for _, duration := range []any{float64(0), float64(-1), float64(1e100)} {
+		cfg := validTorrentBlocker(true)
+		cfg["blockDuration"] = duration
+		cfg["ignoreLists"] = map[string]any{"ip": []any{"ext:"}}
+		if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err != nil {
+			t.Errorf("blockDuration=%v rejected: %v", duration, err)
+		}
+	}
+}
+
+func TestValidatePluginConfigRejectsExplicitNullSections(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{
+		"sharedLists",
+		"torrentBlocker",
+		"ingressFilter",
+		"egressFilter",
+		"connectionDrop",
+	} {
+		if err := ValidatePluginConfig(map[string]any{field: nil}); err == nil {
+			t.Errorf("explicit null %s was accepted", field)
+		}
+	}
+}
+
+func TestValidatePluginConfigRejectsFractionalBlockDuration(t *testing.T) {
+	t.Parallel()
+
+	cfg := validTorrentBlocker(true)
+	cfg["blockDuration"] = 1.5
+	if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err == nil {
+		t.Fatal("fractional blockDuration was accepted")
+	}
+}
+
 func TestValidatePluginConfigRequiresTorrentFields(t *testing.T) {
 	t.Parallel()
 	err := ValidatePluginConfig(map[string]any{

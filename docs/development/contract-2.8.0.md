@@ -11,6 +11,8 @@
 
 路由方法取自四个官方 controller；请求和响应取自 `libs/contract/commands` 下的 Zod schema；应用错误取自 `libs/contract/constants/errors` 和 `HttpExceptionFilter`。CI 会验证官方 Git 提交、包版本以及所有引用的证据文件。
 
+插件 `config` 的 schema 不在 Node 仓库内定义，而是来自官方 lockfile 固定的 `@remnawave/node-plugins@0.4.5`。审计证据为 npm tarball `node-plugins-0.4.5.tgz`，SHA-1 `3bfc3988278790ec40a93d6e6169f893c31bf62d`，SHA-512 integrity `sha512-r9Lce/l/kHQATNhWbcutApFSJ5hH/Yu6Kv0+/qjpUDIEa1+DFb54Q8IwuvqWzxxbGkG9oO0cAeN4busBzz0a5Q==`；Go 端插件校验以其中 `build/backend/models/node-plugins.schema.js` 为准。
+
 ## 通用语义
 
 - 外部 API 使用双向 TLS；官方最低版本为 TLS 1.3。
