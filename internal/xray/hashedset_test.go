@@ -15,14 +15,14 @@ func TestHashedSetMatchesReference(t *testing.T) {
 		want  string
 	}{
 		{"empty", nil, "0000000000000000"},
-		{"single uuid", []string{"66ad4540-b58c-4ad2-9926-ea63445a9b57"}, "75ccc662b84d9abc"},
+		{"single uuid", []string{"66ad4540-b58c-4ad2-9926-ea63445a9b57"}, "75ccc662-47b26544"},
 		{
 			"two uuids",
 			[]string{
 				"66ad4540-b58c-4ad2-9926-ea63445a9b57",
 				"a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 			},
-			"fb09473ff4fa709f",
+			"-4f6b8c1-b058f61",
 		},
 	}
 
@@ -35,6 +35,23 @@ func TestHashedSetMatchesReference(t *testing.T) {
 				t.Fatalf("Hash64String() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFormatJavaScriptHashWordMatchesSignedPadStart(t *testing.T) {
+	t.Parallel()
+
+	cases := map[uint32]string{
+		0:          "00000000",
+		0x75ccc662: "75ccc662",
+		0xb84d9abc: "-47b26544",
+		0x80000000: "-80000000",
+		0xffffffff: "000000-1",
+	}
+	for input, want := range cases {
+		if got := formatJavaScriptHashWord(input); got != want {
+			t.Errorf("formatJavaScriptHashWord(%08x) = %q, want %q", input, got, want)
+		}
 	}
 }
 

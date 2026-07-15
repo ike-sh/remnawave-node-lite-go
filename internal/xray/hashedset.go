@@ -1,8 +1,9 @@
 package xray
 
 import (
-	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // HashedSet mirrors @remnawave/hashed-set: XOR of per-string djb2Dual hashes.
@@ -46,7 +47,17 @@ func (s *HashedSet) Size() int {
 }
 
 func (s *HashedSet) Hash64String() string {
-	return fmt.Sprintf("%08x%08x", s.hashHigh, s.hashLow)
+	return formatJavaScriptHashWord(s.hashHigh) + formatJavaScriptHashWord(s.hashLow)
+}
+
+// JavaScript bitwise operators publish signed int32 values. The official
+// @remnawave/hashed-set package formats those signed values before padStart.
+func formatJavaScriptHashWord(value uint32) string {
+	encoded := strconv.FormatInt(int64(int32(value)), 16)
+	if len(encoded) >= 8 {
+		return encoded
+	}
+	return strings.Repeat("0", 8-len(encoded)) + encoded
 }
 
 func djb2Dual(value string) (high, low uint32) {
