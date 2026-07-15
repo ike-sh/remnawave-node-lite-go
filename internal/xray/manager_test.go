@@ -2,7 +2,6 @@ package xray
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -59,7 +58,7 @@ func TestGenerateAPIConfigInjectsRemnawaveAPI(t *testing.T) {
 	}
 }
 
-func TestStartStoresFullConfigWhenCommandFails(t *testing.T) {
+func TestStartDoesNotCommitConfigWhenCommandFails(t *testing.T) {
 	manager, err := NewManager(Options{
 		XrayBin:            "definitely-missing-rw-core",
 		GeoDir:             "/tmp",
@@ -83,10 +82,8 @@ func TestStartStoresFullConfigWhenCommandFails(t *testing.T) {
 		t.Fatalf("expected start error, got %#v", response.Error)
 	}
 
-	config := manager.CurrentConfig()
-	inbounds, ok := config["inbounds"].([]any)
-	if !ok || len(inbounds) != 2 {
-		t.Fatalf("expected generated config to be saved, got %#v", config)
+	if config := manager.CurrentConfig(); len(config) != 0 {
+		t.Fatalf("failed start committed config: %#v", config)
 	}
 }
 
@@ -108,7 +105,7 @@ func TestStopClearsConfig(t *testing.T) {
 	}
 }
 
-func TestCurrentConfigJSONCachedAndCleared(t *testing.T) {
+func TestCurrentConfigJSONRemainsEmptyAfterFailedStart(t *testing.T) {
 	manager, err := NewManager(Options{
 		XrayBin:            "definitely-missing-rw-core",
 		GeoDir:             "/tmp",
@@ -127,13 +124,8 @@ func TestCurrentConfigJSONCachedAndCleared(t *testing.T) {
 		"inbounds": []any{map[string]any{"tag": "public"}},
 	}})
 
-	raw := manager.CurrentConfigJSON()
-	var decoded map[string]any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("cached JSON must be valid: %v", err)
-	}
-	if _, ok := decoded["inbounds"]; !ok {
-		t.Fatalf("expected inbounds in cached JSON, got %s", raw)
+	if got := string(manager.CurrentConfigJSON()); got != "{}" {
+		t.Fatalf("failed start committed cached JSON: %s", got)
 	}
 
 	manager.Stop()

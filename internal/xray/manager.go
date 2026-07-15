@@ -5,19 +5,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/system"
-	"github.com/Luxiaba/remnawave-node-lite-go/internal/unixconfig"
 	nodeversion "github.com/Luxiaba/remnawave-node-lite-go/internal/version"
 )
 
@@ -37,6 +34,9 @@ type TorrentBlockerConfigProvider interface {
 }
 
 type Manager struct {
+	// lifecycleMu serializes process ownership. State publication and
+	// lifecycleMu acquisition/release are performed while mu is held.
+	lifecycleMu      sync.Mutex
 	mu               sync.RWMutex
 	xrayBin          string
 	geoDir           string
@@ -48,28 +48,29 @@ type Manager struct {
 	lowMemory        bool
 	torrentBlocker   TorrentBlockerConfigProvider
 
-	xrayVersion     *string
-	xrayOnline      bool
-	startProcessing bool
-	currentConfig   map[string]any
-	// currentConfigJSON caches the serialized form served via the internal
-	// get-config socket, so each rw-core poll avoids a full re-marshal.
-	currentConfigJSON []byte
+	xrayVersion *string
+	state       lifecycleState
+	generation  uint64
+	startCancel context.CancelFunc
+	stopOp      *stopOperation
+	process     *processState
+
+	// pendingConfig is visible to a starting rw-core through the internal
+	// socket. It is promoted to activeConfig only after the gRPC API is ready.
+	pendingConfig     map[string]any
+	pendingConfigJSON []byte
+	activeConfig      map[string]any
+	activeConfigJSON  []byte
 	emptyConfigHash   string
 	inboundHashes     map[string]*HashedSet
 	inboundTags       map[string]struct{}
-	process           *processState
-}
 
-type processState struct {
-	cmd    *exec.Cmd
-	done   chan error
-	stdout *os.File
-	stderr *os.File
-
-	mu      sync.Mutex
-	exited  bool
-	exitErr error
+	readinessProbe    func(context.Context) bool
+	readinessInterval time.Duration
+	startupTimeout    time.Duration
+	interruptTimeout  time.Duration
+	killTimeout       time.Duration
+	processCommand    func() *exec.Cmd
 }
 
 type StartRequest struct {
@@ -122,16 +123,19 @@ func NewManager(opts Options) (*Manager, error) {
 		return nil, fmt.Errorf("generate xtls api socket name: %w", err)
 	}
 	manager := &Manager{
-		xrayBin:          opts.XrayBin,
-		geoDir:           opts.GeoDir,
-		logDir:           opts.LogDir,
-		socketPath:       opts.InternalSocketPath,
-		token:            opts.InternalRESTToken,
-		xtlsSocket:       socket,
-		disableHashCheck: opts.DisableHashCheck,
-		lowMemory:        opts.LowMemory,
+		xrayBin:           opts.XrayBin,
+		geoDir:            opts.GeoDir,
+		logDir:            opts.LogDir,
+		socketPath:        opts.InternalSocketPath,
+		token:             opts.InternalRESTToken,
+		xtlsSocket:        socket,
+		disableHashCheck:  opts.DisableHashCheck,
+		lowMemory:         opts.LowMemory,
+		readinessInterval: defaultReadinessInterval,
+		interruptTimeout:  defaultInterruptTimeout,
+		killTimeout:       defaultKillTimeout,
 	}
-	manager.refreshVersion()
+	manager.refreshVersion(context.Background())
 	return manager, nil
 }
 
@@ -170,153 +174,15 @@ func (m *Manager) torrentBlockerOptions() TorrentBlockerOptions {
 	return opts
 }
 
-func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
-	log.Printf("xray/start received (forceRestart=%v)", req.Internals.ForceRestart)
-
-	if err := os.MkdirAll(m.logDir, 0o755); err != nil {
-		message := err.Error()
-		log.Printf("xray/start failed: %s", message)
-		return m.startResponse(false, &message)
-	}
-
-	m.mu.Lock()
-	if m.startProcessing {
-		m.mu.Unlock()
-		message := "Request already in progress"
-		log.Printf("xray/start rejected: %s", message)
-		return m.startResponse(false, &message)
-	}
-	m.startProcessing = true
-	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		m.startProcessing = false
-		m.mu.Unlock()
-	}()
-
-	fullConfig := generateAPIConfig(req.XrayConfig, m.xtlsSocket, m.torrentBlockerOptions())
-	fullConfigJSON := marshalConfigJSON(fullConfig)
-
-	m.mu.RLock()
-	online := m.xrayOnline
-	disableCheck := m.disableHashCheck
-	forceRestart := req.Internals.ForceRestart
-	m.mu.RUnlock()
-
-	if online && !disableCheck && !forceRestart {
-		if m.PingXrayGRPC(ctx) {
-			m.mu.RLock()
-			needRestart := m.isNeedRestartCoreLocked(req.Internals.Hashes)
-			m.mu.RUnlock()
-			if !needRestart {
-				m.mu.Lock()
-				m.currentConfig = fullConfig
-				m.currentConfigJSON = fullConfigJSON
-				m.extractUsersFromConfigLocked(req.Internals.Hashes, fullConfig)
-				m.mu.Unlock()
-				log.Printf("xray/start skipped: core already online and config unchanged")
-				return m.startResponse(true, nil)
-			}
-		} else {
-			m.mu.Lock()
-			m.xrayOnline = false
-			m.mu.Unlock()
-		}
-	}
-
-	m.mu.Lock()
-	m.currentConfig = fullConfig
-	m.currentConfigJSON = fullConfigJSON
-	m.extractUsersFromConfigLocked(req.Internals.Hashes, fullConfig)
-	if err := m.stopProcessLocked(false); err != nil {
-		m.mu.Unlock()
-		message := err.Error()
-		log.Printf("xray/start failed: stop previous rw-core: %s", message)
-		return m.startResponse(false, &message)
-	}
-
-	process, err := m.startProcessLocked()
-	if err != nil {
-		m.xrayOnline = false
-		m.mu.Unlock()
-		message := err.Error()
-		log.Printf("xray/start failed: spawn rw-core: %s", message)
-		return m.startResponse(false, &message)
-	}
-	m.process = process
-	m.xrayOnline = false
-	m.mu.Unlock()
-
-	started := m.waitForGRPC(ctx, m.grpcStartupTimeout())
-
-	m.mu.Lock()
-	if started {
-		m.xrayOnline = true
-		m.mu.Unlock()
-		// Refresh once per successful core (re)start; rw-core may have been upgraded.
-		m.refreshVersion()
-		log.Printf("xray/start succeeded: rw-core online on gRPC @%s", m.xtlsSocket)
-		return m.startResponse(true, nil)
-	}
-	_ = m.stopProcessLocked(false)
-	m.xrayOnline = false
-	m.mu.Unlock()
-
-	message := fmt.Sprintf("xray gRPC API on @%s did not become reachable within %s (see %s/xray.err.log)", m.xtlsSocket, m.grpcStartupTimeout(), m.logDir)
-	if hint := m.rwCoreExitHint(); hint != "" {
-		message += "; " + hint
-	}
-	if tail := tailLogFile(filepath.Join(m.logDir, "xray.err.log"), 3); tail != "" {
-		message += "; xray.err: " + tail
-	}
-	log.Printf("xray/start failed: %s", message)
-	return m.startResponse(false, &message)
-}
-
-func (m *Manager) grpcStartupTimeout() time.Duration {
-	if m.lowMemory {
-		return 90 * time.Second
-	}
-	return 20 * time.Second
-}
-
-func (m *Manager) Stop() StopResponse {
-	m.mu.Lock()
-	err := m.stopProcessLocked(true)
-	m.mu.Unlock()
-	return StopResponse{IsStopped: err == nil}
-}
-
 func (m *Manager) Health() HealthResponse {
 	m.mu.RLock()
-	versionKnown := m.xrayVersion != nil
-	m.mu.RUnlock()
-	if !versionKnown {
-		// rw-core binary may appear after boot (install order); probe until known.
-		// Once cached, healthcheck no longer forks `xray version` every poll.
-		m.refreshVersion()
-	}
-
-	m.mu.RLock()
-	process := m.process
-	cached := m.xrayOnline
+	running := m.state == lifecycleRunning
 	version := m.xrayVersion
 	m.mu.RUnlock()
 
-	online := cached
-	if process != nil || cached {
-		pingCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		online = m.PingXrayGRPC(pingCtx)
-		cancel()
-	}
-
-	m.mu.Lock()
-	m.xrayOnline = online
-	m.mu.Unlock()
-
 	return HealthResponse{
 		IsAlive:                  true,
-		XrayInternalStatusCached: online,
+		XrayInternalStatusCached: running,
 		XrayVersion:              version,
 		NodeVersion:              nodeversion.ReportedNodeVersion(),
 	}
@@ -326,10 +192,11 @@ func (m *Manager) CurrentConfig() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if m.currentConfig == nil {
+	config := m.servedConfigLocked()
+	if config == nil {
 		return map[string]any{}
 	}
-	return cloneMap(m.currentConfig)
+	return cloneMap(config)
 }
 
 // CurrentConfigJSON returns the config exactly as served to rw-core,
@@ -339,10 +206,34 @@ func (m *Manager) CurrentConfigJSON() []byte {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if len(m.currentConfigJSON) == 0 {
+	config := m.servedConfigJSONLocked()
+	if len(config) == 0 {
 		return []byte("{}")
 	}
-	return m.currentConfigJSON
+	return config
+}
+
+func (m *Manager) servedConfigLocked() map[string]any {
+	if m.pendingConfig != nil {
+		return m.pendingConfig
+	}
+	return m.activeConfig
+}
+
+func (m *Manager) servedConfigJSONLocked() []byte {
+	if len(m.pendingConfigJSON) != 0 {
+		return m.pendingConfigJSON
+	}
+	return m.activeConfigJSON
+}
+
+func (m *Manager) clearRuntimeLocked() {
+	m.pendingConfig = nil
+	m.pendingConfigJSON = nil
+	m.activeConfig = nil
+	m.activeConfigJSON = nil
+	m.clearHashStateLocked()
+	m.clearInboundTagsLocked()
 }
 
 func marshalConfigJSON(config map[string]any) []byte {
@@ -379,150 +270,8 @@ func BuildConfigURL(socketPath string) string {
 	return fmt.Sprintf("http+unix://%s/internal/get-config", socketPath)
 }
 
-func (m *Manager) startProcessLocked() (*processState, error) {
-	m.rotateLogs()
-	stdout, err := os.OpenFile(filepath.Join(m.logDir, "xray.out.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("open xray stdout log: %w", err)
-	}
-	stderr, err := os.OpenFile(filepath.Join(m.logDir, "xray.err.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		_ = stdout.Close()
-		return nil, fmt.Errorf("open xray stderr log: %w", err)
-	}
-
-	cmd := exec.Command(m.xrayBin, BuildCommandArgs(m.socketPath)...)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	cmd.Env = append(os.Environ(),
-		"XRAY_LOCATION_ASSET="+m.geoDir,
-		unixconfig.InternalTokenEnvVar+"="+m.token,
-	)
-
-	if err := cmd.Start(); err != nil {
-		_ = stdout.Close()
-		_ = stderr.Close()
-		return nil, fmt.Errorf("start rw-core: %w", err)
-	}
-
-	process := &processState{
-		cmd:    cmd,
-		done:   make(chan error, 1),
-		stdout: stdout,
-		stderr: stderr,
-	}
-	go m.monitorProcess(process)
-
-	return process, nil
-}
-
-func (m *Manager) monitorProcess(process *processState) {
-	err := process.cmd.Wait()
-	_ = process.stdout.Close()
-	_ = process.stderr.Close()
-	process.markExited(err)
-	if err != nil {
-		log.Printf("rw-core exited: %v", err)
-	}
-	process.done <- err
-	close(process.done)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.process == process {
-		m.process = nil
-		m.xrayOnline = false
-	}
-}
-
-func (p *processState) markExited(err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.exited = true
-	p.exitErr = err
-}
-
-func (p *processState) exitStatus() (exited bool, err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.exited, p.exitErr
-}
-
-func (m *Manager) rwCoreExitHint() string {
-	m.mu.RLock()
-	process := m.process
-	m.mu.RUnlock()
-	if process == nil {
-		return "rw-core is not running"
-	}
-	exited, err := process.exitStatus()
-	if !exited {
-		return ""
-	}
-	if err != nil {
-		return "rw-core exited: " + err.Error()
-	}
-	return "rw-core exited"
-}
-
-func tailLogFile(path string, maxLines int) string {
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
-		return ""
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-	if len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-	return strings.Join(lines, " | ")
-}
-
-func (m *Manager) stopProcessLocked(clearConfig bool) error {
-	process := m.process
-	if process == nil {
-		m.xrayOnline = false
-		if clearConfig {
-			m.currentConfig = nil
-			m.currentConfigJSON = nil
-		}
-		return nil
-	}
-
-	if process.cmd.Process != nil {
-		if err := process.cmd.Process.Signal(os.Interrupt); err != nil {
-			_ = process.cmd.Process.Kill()
-		}
-	}
-
-	select {
-	case <-process.done:
-	case <-time.After(5 * time.Second):
-		if process.cmd.Process != nil {
-			_ = process.cmd.Process.Kill()
-		}
-		select {
-		case <-process.done:
-		case <-time.After(5 * time.Second):
-			return errors.New("timed out stopping rw-core process")
-		}
-	}
-
-	m.process = nil
-	m.xrayOnline = false
-	if clearConfig {
-		m.currentConfig = nil
-		m.currentConfigJSON = nil
-		m.clearHashStateLocked()
-		m.clearInboundTagsLocked()
-	}
-	return nil
-}
-
-func (m *Manager) refreshVersion() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (m *Manager) refreshVersion(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 
 	output, err := exec.CommandContext(ctx, m.xrayBin, "version").Output()

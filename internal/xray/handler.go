@@ -9,7 +9,7 @@ import (
 
 func (m *Manager) handlerAPI(ctx context.Context) (*xtls.HandlerAPI, func(), error) {
 	m.mu.RLock()
-	online := m.xrayOnline
+	online := m.state == lifecycleRunning
 	socket := m.xtlsSocket
 	m.mu.RUnlock()
 
@@ -113,7 +113,7 @@ func (m *Manager) RemoveTorrentBlockerOutbound() error {
 
 func (m *Manager) StopIfOnline() bool {
 	m.mu.RLock()
-	online := m.xrayOnline
+	online := m.state == lifecycleRunning
 	m.mu.RUnlock()
 	if !online {
 		return false

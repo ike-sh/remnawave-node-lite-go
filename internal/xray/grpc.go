@@ -3,15 +3,13 @@ package xray
 import (
 	"context"
 	"fmt"
-	"strings"
-	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
 
 func (m *Manager) statsAPI(ctx context.Context, requireOnline bool) (*xtls.StatsAPI, func(), error) {
 	m.mu.RLock()
-	online := m.xrayOnline
+	online := m.state == lifecycleRunning
 	socket := m.xtlsSocket
 	m.mu.RUnlock()
 
@@ -116,25 +114,4 @@ func (m *Manager) GetUsersIPList(ctx context.Context) ([]xtls.UserIPEntry, error
 	}
 	defer closeFn()
 	return api.GetUsersIPList(ctx)
-}
-
-func (m *Manager) waitForGRPC(ctx context.Context, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if hint := m.rwCoreExitHint(); hint != "" && strings.Contains(hint, "exited") {
-			return false
-		}
-		if m.PingXrayGRPC(ctx) {
-			return true
-		}
-		// Align official @remnawave/node pRetry: 2s between gRPC readiness attempts.
-		timer := time.NewTimer(2 * time.Second)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return false
-		case <-timer.C:
-		}
-	}
-	return false
 }
