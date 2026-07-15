@@ -114,21 +114,21 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 
 	// handler
 	case routeHandlerAddUser:
-		s.handlerService.HandleAddUser(w, r, write)
+		s.handleAddUser(w, r)
 	case routeHandlerRemoveUser:
-		s.handlerService.HandleRemoveUser(w, r, write)
+		s.handleRemoveUser(w, r)
 	case routeHandlerGetInboundUsersCount:
-		s.handlerService.HandleGetInboundUsersCount(w, r, write)
+		s.handleGetInboundUsersCount(w, r)
 	case routeHandlerGetInboundUsers:
-		s.handlerService.HandleGetInboundUsers(w, r, write)
+		s.handleGetInboundUsers(w, r)
 	case routeHandlerAddUsers:
-		s.handlerService.HandleAddUsers(w, r, write)
+		s.handleAddUsers(w, r)
 	case routeHandlerRemoveUsers:
-		s.handlerService.HandleRemoveUsers(w, r, write)
+		s.handleRemoveUsers(w, r)
 	case routeHandlerDropUsersConnections:
-		s.handlerService.HandleDropUsersConnections(w, r, write)
+		s.handleDropUsersConnections(w, r)
 	case routeHandlerDropIPs:
-		s.handlerService.HandleDropIPs(w, r, write)
+		s.handleDropIPs(w, r)
 
 	// plugin
 	case routePluginSync:

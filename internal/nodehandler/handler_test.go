@@ -2,13 +2,10 @@ package nodehandler_test
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/nodeapi"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/nodehandler"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
@@ -51,123 +48,104 @@ func (s *stubProvider) HandlerGetInboundUsersCount(context.Context, string) (int
 	return 0, xtls.HandlerResult{OK: true}
 }
 
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func TestHandleAddUsersAlwaysSuccess(t *testing.T) {
+func TestAddUsersAlwaysSuccess(t *testing.T) {
 	t.Parallel()
 
 	service := nodehandler.NewService(&stubProvider{}, connections.NewDropper(nil))
-	body := `{
-		"affectedInboundTags":["in-1"],
-		"users":[{
-			"inboundData":[{"type":"vless","tag":"in-1","flow":""}],
-			"userData":{"userId":"u1","hashUuid":"h1","vlessUuid":"uuid-1","trojanPassword":"","ssPassword":""}
-		}]
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/add-users", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	service.HandleAddUsers(rec, req, writeJSON)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	var resp struct {
-		Response struct {
-			Success bool    `json:"success"`
-			Error   *string `json:"error"`
-		} `json:"response"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	response, err := service.AddUsers(context.Background(), nodehandler.AddUsersRequest{
+		AffectedInboundTags: []string{"in-1"},
+		Users: []nodehandler.BatchUser{{
+			InboundData: []nodehandler.BatchInbound{{Type: "vless", Tag: "in-1", Flow: ""}},
+			UserData: nodehandler.BatchUserData{
+				UserID: "u1", HashUUID: "h1", VlessUUID: "uuid-1",
+			},
+		}},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !resp.Response.Success {
-		t.Fatalf("success = false, error = %v", resp.Response.Error)
+	if !response.Success || response.Error != nil {
+		t.Fatalf("response = %+v, want success", response)
 	}
 }
 
-type failingInboundProvider struct{}
+type failingInboundProvider struct {
+	stubProvider
+}
 
-func (failingInboundProvider) AddInboundTag(string)                     {}
-func (failingInboundProvider) InboundTags() []string                    { return nil }
-func (failingInboundProvider) AddUserToInboundHash(string, string)      {}
-func (failingInboundProvider) RemoveUserFromInboundHash(string, string) {}
-func (failingInboundProvider) GetUserIPList(context.Context, string, bool) ([]xtls.IPEntry, error) {
-	return nil, nil
-}
-func (failingInboundProvider) HandlerRemoveUser(context.Context, string, string) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddVlessUser(context.Context, string, string, string, string, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddTrojanUser(context.Context, string, string, string, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddShadowsocksUser(context.Context, string, string, string, int, bool, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddShadowsocks2022User(context.Context, string, string, string, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddHysteriaUser(context.Context, string, string, string, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerGetInboundUsers(context.Context, string) ([]xtls.InboundUser, xtls.HandlerResult) {
-	return nil, xtls.HandlerResult{OK: true}
-}
 func (failingInboundProvider) HandlerGetInboundUsersCount(context.Context, string) (int64, xtls.HandlerResult) {
 	return 0, xtls.HandlerResult{OK: false, Message: "xray is not online"}
 }
 
-func TestHandleGetInboundUsersCountGRPCFailure(t *testing.T) {
+func TestGetInboundUsersCountGRPCFailure(t *testing.T) {
 	t.Parallel()
 
-	service := nodehandler.NewService(failingInboundProvider{}, connections.NewDropper(nil))
-	body := `{"tag":"in-1"}`
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/get-inbound-users-count", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	service.HandleGetInboundUsersCount(rec, req, writeJSON)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
-	}
-	var resp map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if resp["errorCode"] != "A014" {
-		t.Fatalf("errorCode = %v, want A014", resp["errorCode"])
+	service := nodehandler.NewService(&failingInboundProvider{}, connections.NewDropper(nil))
+	_, err := service.GetInboundUsersCount(context.Background(), "in-1")
+	serviceError, ok := nodeapi.AsServiceError(err)
+	if !ok || serviceError.Code != "A014" || serviceError.Message != "Failed to get inbound users" {
+		t.Fatalf("error = %+v, want A014", err)
 	}
 }
 
-func TestHandleAddUserReportsFailureWhenAllFail(t *testing.T) {
+func TestAddUserReportsFailureWhenAllFail(t *testing.T) {
 	t.Parallel()
 
 	service := nodehandler.NewService(&stubProvider{}, connections.NewDropper(nil))
-	body := `{
-		"data":[{"type":"vless","tag":"in-1","username":"u1","uuid":"x","flow":""}],
-		"hashData":{"vlessUuid":"uuid-1"}
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/add-user", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	service.HandleAddUser(rec, req, writeJSON)
-
-	var resp struct {
-		Response struct {
-			Success bool `json:"success"`
-		} `json:"response"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	response, err := service.AddUser(context.Background(), nodehandler.AddUserRequest{
+		Data: []nodehandler.AddUserItem{{
+			Type: "vless", Tag: "in-1", Username: "u1", UUID: "x", Flow: "",
+		}},
+		HashData: nodehandler.AddUserHashData{VlessUUID: "uuid-1"},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Response.Success {
-		t.Fatal("expected add-user failure when all operations fail")
+	if response.Success || response.Error == nil || *response.Error != "boom" {
+		t.Fatalf("response = %+v, want handler failure", response)
+	}
+}
+
+func TestAddUserEmptyDataFailsWithoutPanic(t *testing.T) {
+	t.Parallel()
+
+	service := nodehandler.NewService(&stubProvider{inboundTags: []string{"in-1"}}, connections.NewDropper(nil))
+	response, err := service.AddUser(context.Background(), nodehandler.AddUserRequest{
+		HashData: nodehandler.AddUserHashData{VlessUUID: "uuid-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Success || response.Error != nil {
+		t.Fatalf("response = %+v, want safe failure", response)
+	}
+}
+
+type shadowsocksTrackingProvider struct {
+	stubProvider
+	ivChecks []bool
+}
+
+func (p *shadowsocksTrackingProvider) HandlerAddShadowsocksUser(_ context.Context, _, _, _ string, _ int, ivCheck bool, _ uint32) xtls.HandlerResult {
+	p.ivChecks = append(p.ivChecks, ivCheck)
+	return xtls.HandlerResult{OK: true}
+}
+
+func TestAddUserMatchesOfficialShadowsocksIVCheckBehavior(t *testing.T) {
+	t.Parallel()
+
+	provider := &shadowsocksTrackingProvider{}
+	service := nodehandler.NewService(provider, connections.NewDropper(nil))
+	_, err := service.AddUser(context.Background(), nodehandler.AddUserRequest{
+		Data: []nodehandler.AddUserItem{{
+			Type: "shadowsocks", Tag: "in-1", Username: "u1", Password: "secret", CipherType: 5, IVCheck: true,
+		}},
+		HashData: nodehandler.AddUserHashData{VlessUUID: "uuid-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.ivChecks) != 1 || provider.ivChecks[0] {
+		t.Fatalf("ivCheck calls = %v, want [false] matching official 2.8.0", provider.ivChecks)
 	}
 }

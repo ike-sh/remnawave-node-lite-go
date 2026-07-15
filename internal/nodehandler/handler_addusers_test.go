@@ -2,10 +2,6 @@ package nodehandler_test
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
@@ -22,23 +18,15 @@ func (p *hashTrackingProvider) AddUserToInboundHash(tag, uuid string) {
 	p.hashAdds = append(p.hashAdds, tag+":"+uuid)
 }
 
-func TestHandleAddUsersSkipsHashOnHandlerFailure(t *testing.T) {
+func TestAddUsersSkipsHashOnHandlerFailure(t *testing.T) {
 	t.Parallel()
 
 	provider := &hashTrackingProvider{stubProvider: stubProvider{inboundTags: []string{"in-1"}}}
 	service := nodehandler.NewService(provider, connections.NewDropper(nil))
-	body := `{
-		"affectedInboundTags":["in-1"],
-		"users":[{
-			"inboundData":[{"type":"vless","tag":"in-1","flow":""}],
-			"userData":{"userId":"u1","hashUuid":"h1","vlessUuid":"uuid-1","trojanPassword":"","ssPassword":""}
-		}]
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/add-users", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	service.HandleAddUsers(rec, req, writeJSON)
-
+	_, err := service.AddUsers(context.Background(), batchVlessRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(provider.hashAdds) != 0 {
 		t.Fatalf("expected no hash updates on handler failure, got %#v", provider.hashAdds)
 	}
@@ -57,36 +45,31 @@ func (p *successVlessProvider) AddUserToInboundHash(tag, uuid string) {
 	p.hashAdds = append(p.hashAdds, tag+":"+uuid)
 }
 
-func TestHandleAddUsersAddsHashOnHandlerSuccess(t *testing.T) {
+func TestAddUsersAddsHashOnHandlerSuccess(t *testing.T) {
 	t.Parallel()
 
 	provider := &successVlessProvider{stubProvider: stubProvider{inboundTags: []string{"in-1"}}}
 	service := nodehandler.NewService(provider, connections.NewDropper(nil))
-	body := `{
-		"affectedInboundTags":["in-1"],
-		"users":[{
-			"inboundData":[{"type":"vless","tag":"in-1","flow":""}],
-			"userData":{"userId":"u1","hashUuid":"h1","vlessUuid":"uuid-1","trojanPassword":"","ssPassword":""}
-		}]
-	}`
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/add-users", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	service.HandleAddUsers(rec, req, writeJSON)
-
+	response, err := service.AddUsers(context.Background(), batchVlessRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(provider.hashAdds) != 1 || provider.hashAdds[0] != "in-1:uuid-1" {
 		t.Fatalf("unexpected hash adds: %#v", provider.hashAdds)
 	}
-
-	var resp struct {
-		Response struct {
-			Success bool `json:"success"`
-		} `json:"response"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if !resp.Response.Success {
+	if !response.Success {
 		t.Fatal("expected success=true matching upstream addUsers contract")
+	}
+}
+
+func batchVlessRequest() nodehandler.AddUsersRequest {
+	return nodehandler.AddUsersRequest{
+		AffectedInboundTags: []string{"in-1"},
+		Users: []nodehandler.BatchUser{{
+			InboundData: []nodehandler.BatchInbound{{Type: "vless", Tag: "in-1", Flow: ""}},
+			UserData: nodehandler.BatchUserData{
+				UserID: "u1", HashUUID: "h1", VlessUUID: "uuid-1",
+			},
+		}},
 	}
 }

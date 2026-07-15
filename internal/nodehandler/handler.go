@@ -3,8 +3,6 @@ package nodehandler
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
-	"net/http"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
@@ -26,271 +24,259 @@ type Provider interface {
 	HandlerGetInboundUsersCount(ctx context.Context, tag string) (int64, xtls.HandlerResult)
 }
 
-type Service struct {
-	provider Provider
-	dropper  *connections.Dropper
+type ConnectionDropper interface {
+	DropIPs(ips []string) bool
+	DropUsers(ctx context.Context, provider connections.IPListProvider, userIDs []string) bool
 }
 
-func NewService(provider Provider, dropper *connections.Dropper) *Service {
+type Service struct {
+	provider Provider
+	dropper  ConnectionDropper
+}
+
+func NewService(provider Provider, dropper ConnectionDropper) *Service {
 	return &Service{provider: provider, dropper: dropper}
 }
 
-type envelope[T any] struct {
-	Response T `json:"response"`
-}
-
-type genericResponse struct {
+type GenericResponse struct {
 	Success bool    `json:"success"`
 	Error   *string `json:"error"`
 }
 
-type writeJSONFn func(w http.ResponseWriter, status int, value any)
+type SuccessResponse struct {
+	Success bool `json:"success"`
+}
 
-func (s *Service) HandleAddUser(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	defer recoverHandler(write, w)
-	var req addUserRequest
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
+type InboundUsersCountResponse struct {
+	Count int64 `json:"count"`
+}
+
+type InboundUsersResponse struct {
+	Users []xtls.InboundUser `json:"users"`
+}
+
+type AddUserRequest struct {
+	Data     []AddUserItem
+	HashData AddUserHashData
+}
+
+type AddUserHashData struct {
+	VlessUUID     string
+	PrevVlessUUID *string
+}
+
+type AddUserItem struct {
+	Type       string
+	Tag        string
+	Username   string
+	Password   string
+	UUID       string
+	Flow       string
+	CipherType int
+	IVCheck    bool
+}
+
+type RemoveUserRequest struct {
+	Username  string
+	VlessUUID string
+}
+
+type AddUsersRequest struct {
+	AffectedInboundTags []string
+	Users               []BatchUser
+}
+
+type BatchUser struct {
+	InboundData []BatchInbound
+	UserData    BatchUserData
+}
+
+type BatchInbound struct {
+	Type string
+	Tag  string
+	Flow string
+}
+
+type BatchUserData struct {
+	UserID         string
+	HashUUID       string
+	VlessUUID      string
+	TrojanPassword string
+	SSPassword     string
+}
+
+type RemoveUsersRequest struct {
+	Users []RemoveUsersItem
+}
+
+type RemoveUsersItem struct {
+	UserID   string
+	HashUUID string
+}
+
+func (s *Service) AddUser(ctx context.Context, request AddUserRequest) (response GenericResponse, err error) {
+	defer recoverServiceError(&err)
+	if s.provider == nil {
+		return GenericResponse{}, errInternalServer
 	}
-	if len(req.Data) == 0 {
-		writeError(write, w, "data is required")
-		return
+	if len(request.Data) == 0 {
+		return GenericResponse{Success: false, Error: nil}, nil
 	}
 
-	for _, item := range req.Data {
+	for _, item := range request.Data {
 		s.provider.AddInboundTag(item.Tag)
 	}
 
-	hashUUID := req.HashData.VlessUUID
-	if req.HashData.PrevVlessUUID != nil && *req.HashData.PrevVlessUUID != "" {
-		hashUUID = *req.HashData.PrevVlessUUID
+	hashUUID := request.HashData.VlessUUID
+	if request.HashData.PrevVlessUUID != nil {
+		hashUUID = *request.HashData.PrevVlessUUID
+	}
+	username := request.Data[0].Username
+	for _, tag := range s.provider.InboundTags() {
+		s.provider.HandlerRemoveUser(ctx, tag, username)
+		s.provider.RemoveUserFromInboundHash(tag, hashUUID)
 	}
 
-	username := req.Data[0].Username
-	if username != "" {
-		for _, tag := range s.provider.InboundTags() {
-			s.provider.HandlerRemoveUser(r.Context(), tag, username)
-			s.provider.RemoveUserFromInboundHash(tag, hashUUID)
-		}
-	}
-
-	results := make([]xtls.HandlerResult, 0, len(req.Data))
-	for _, item := range req.Data {
-		result := s.addSingleUser(r.Context(), item)
+	results := make([]xtls.HandlerResult, 0, len(request.Data))
+	for _, item := range request.Data {
+		result := s.addSingleUser(ctx, item)
 		if result.OK {
-			s.provider.AddUserToInboundHash(item.Tag, req.HashData.VlessUUID)
+			s.provider.AddUserToInboundHash(item.Tag, request.HashData.VlessUUID)
 		}
 		results = append(results, result)
 	}
-
-	write(w, http.StatusOK, envelope[genericResponse]{Response: aggregateResults(results)})
+	return aggregateResults(results), nil
 }
 
-func (s *Service) HandleRemoveUser(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	defer recoverHandler(write, w)
-	var req removeUserRequest
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
+func (s *Service) RemoveUser(ctx context.Context, request RemoveUserRequest) (response GenericResponse, err error) {
+	defer recoverServiceError(&err)
+	if s.provider == nil {
+		return GenericResponse{}, errInternalServer
 	}
 
 	tags := s.provider.InboundTags()
 	if len(tags) == 0 {
-		write(w, http.StatusOK, envelope[genericResponse]{Response: genericResponse{Success: true, Error: nil}})
-		return
+		return GenericResponse{Success: true, Error: nil}, nil
 	}
 
-	userIPs := collectUserIPs(r.Context(), s.provider, req.Username)
+	userIPs := collectUserIPs(ctx, s.provider, request.Username)
 	results := make([]xtls.HandlerResult, 0, len(tags))
 	for _, tag := range tags {
-		results = append(results, s.provider.HandlerRemoveUser(r.Context(), tag, req.Username))
-		s.provider.RemoveUserFromInboundHash(tag, req.HashData.VlessUUID)
+		results = append(results, s.provider.HandlerRemoveUser(ctx, tag, request.Username))
+		s.provider.RemoveUserFromInboundHash(tag, request.VlessUUID)
 	}
 	s.dropIPs(userIPs)
-	write(w, http.StatusOK, envelope[genericResponse]{Response: aggregateResults(results)})
+	return aggregateResults(results), nil
 }
 
-func (s *Service) HandleAddUsers(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	defer recoverHandler(write, w)
-	var req addUsersRequest
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
+func (s *Service) AddUsers(ctx context.Context, request AddUsersRequest) (response GenericResponse, err error) {
+	defer recoverServiceError(&err)
+	if s.provider == nil {
+		return GenericResponse{}, errInternalServer
 	}
 
-	for _, tag := range req.AffectedInboundTags {
+	for _, tag := range request.AffectedInboundTags {
 		s.provider.AddInboundTag(tag)
 	}
-
-	for _, user := range req.Users {
-		for _, inbound := range user.InboundData {
-			s.provider.AddInboundTag(inbound.Tag)
-		}
+	for _, user := range request.Users {
 		for _, tag := range s.provider.InboundTags() {
-			s.provider.HandlerRemoveUser(r.Context(), tag, user.UserData.UserID)
+			s.provider.HandlerRemoveUser(ctx, tag, user.UserData.UserID)
 			s.provider.RemoveUserFromInboundHash(tag, user.UserData.HashUUID)
 		}
 		for _, inbound := range user.InboundData {
-			result := s.addBatchUser(r.Context(), inbound, user.UserData)
+			result := s.addBatchUser(ctx, inbound, user.UserData)
 			if result.OK {
 				s.provider.AddUserToInboundHash(inbound.Tag, user.UserData.VlessUUID)
 			}
 		}
 	}
 
-	// Match upstream addUsers: always success:true on HTTP 200 (individual failures are silent).
-	write(w, http.StatusOK, envelope[genericResponse]{Response: genericResponse{Success: true, Error: nil}})
+	// Official addUsers intentionally does not expose individual SDK failures.
+	return GenericResponse{Success: true, Error: nil}, nil
 }
 
-func (s *Service) HandleRemoveUsers(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	defer recoverHandler(write, w)
-	var req removeUsersRequest
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
+func (s *Service) RemoveUsers(ctx context.Context, request RemoveUsersRequest) (response GenericResponse, err error) {
+	defer recoverServiceError(&err)
+	if s.provider == nil {
+		return GenericResponse{}, errInternalServer
 	}
 
 	tags := s.provider.InboundTags()
 	if len(tags) == 0 {
-		write(w, http.StatusOK, envelope[genericResponse]{Response: genericResponse{Success: true, Error: nil}})
-		return
+		return GenericResponse{Success: true, Error: nil}, nil
 	}
 
-	results := make([]xtls.HandlerResult, 0, len(req.Users)*len(tags))
-	for _, user := range req.Users {
-		userIPs := collectUserIPs(r.Context(), s.provider, user.UserID)
-		userTags := s.provider.InboundTags()
-		for _, tag := range userTags {
-			results = append(results, s.provider.HandlerRemoveUser(r.Context(), tag, user.UserID))
+	results := make([]xtls.HandlerResult, 0, len(request.Users)*len(tags))
+	for _, user := range request.Users {
+		userIPs := collectUserIPs(ctx, s.provider, user.UserID)
+		for _, tag := range tags {
+			results = append(results, s.provider.HandlerRemoveUser(ctx, tag, user.UserID))
 			s.provider.RemoveUserFromInboundHash(tag, user.HashUUID)
 		}
 		s.dropIPs(userIPs)
 	}
-
-	write(w, http.StatusOK, envelope[genericResponse]{Response: aggregateResults(results)})
+	return aggregateResults(results), nil
 }
 
-func (s *Service) HandleGetInboundUsersCount(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	var req tagRequest
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
+func (s *Service) GetInboundUsersCount(ctx context.Context, tag string) (InboundUsersCountResponse, error) {
+	if s.provider == nil {
+		return InboundUsersCountResponse{Count: 0}, nil
 	}
-
-	if s.provider == nil || req.Tag == "" {
-		write(w, http.StatusOK, envelope[struct {
-			Count int64 `json:"count"`
-		}]{Response: struct {
-			Count int64 `json:"count"`
-		}{Count: 0}})
-		return
-	}
-	count, result := s.provider.HandlerGetInboundUsersCount(r.Context(), req.Tag)
+	count, result := s.provider.HandlerGetInboundUsersCount(ctx, tag)
 	if !result.OK {
-		writeHandlerAPIError(write, w, errFailedInboundUsers, handlerErrorMessage(result.Message, errFailedInboundUsers.Message))
-		return
+		return InboundUsersCountResponse{}, errFailedInboundUsers
 	}
-
-	write(w, http.StatusOK, envelope[struct {
-		Count int64 `json:"count"`
-	}]{Response: struct {
-		Count int64 `json:"count"`
-	}{Count: count}})
+	return InboundUsersCountResponse{Count: count}, nil
 }
 
-func (s *Service) HandleGetInboundUsers(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	var req tagRequest
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
+func (s *Service) GetInboundUsers(ctx context.Context, tag string) (InboundUsersResponse, error) {
+	if s.provider == nil {
+		return InboundUsersResponse{Users: []xtls.InboundUser{}}, nil
 	}
-
-	if s.provider == nil || req.Tag == "" {
-		write(w, http.StatusOK, envelope[struct {
-			Users []xtls.InboundUser `json:"users"`
-		}]{Response: struct {
-			Users []xtls.InboundUser `json:"users"`
-		}{Users: []xtls.InboundUser{}}})
-		return
-	}
-	users, result := s.provider.HandlerGetInboundUsers(r.Context(), req.Tag)
+	users, result := s.provider.HandlerGetInboundUsers(ctx, tag)
 	if !result.OK {
-		writeHandlerAPIError(write, w, errFailedInboundUsers, handlerErrorMessage(result.Message, errFailedInboundUsers.Message))
-		return
+		return InboundUsersResponse{}, errFailedInboundUsers
 	}
 	if users == nil {
-		users = make([]xtls.InboundUser, 0)
+		users = []xtls.InboundUser{}
 	}
-
-	write(w, http.StatusOK, envelope[struct {
-		Users []xtls.InboundUser `json:"users"`
-	}]{Response: struct {
-		Users []xtls.InboundUser `json:"users"`
-	}{Users: users}})
+	return InboundUsersResponse{Users: users}, nil
 }
 
-func (s *Service) HandleDropUsersConnections(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	var req struct {
-		UserIDs []string `json:"userIds"`
-	}
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
-	}
-
+func (s *Service) DropUsersConnections(ctx context.Context, userIDs []string) SuccessResponse {
 	success := true
 	if s.dropper != nil && s.provider != nil {
-		success = s.dropper.DropUsers(r.Context(), s.provider, req.UserIDs)
+		success = s.dropper.DropUsers(ctx, s.provider, userIDs)
 	}
-
-	write(w, http.StatusOK, envelope[struct {
-		Success bool `json:"success"`
-	}]{Response: struct {
-		Success bool `json:"success"`
-	}{Success: success}})
+	return SuccessResponse{Success: success}
 }
 
-func (s *Service) HandleDropIPs(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	var req struct {
-		IPs []string `json:"ips"`
-	}
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
-	}
-
+func (s *Service) DropIPs(ips []string) SuccessResponse {
 	success := true
 	if s.dropper != nil {
-		success = s.dropper.DropIPs(req.IPs)
+		success = s.dropper.DropIPs(ips)
 	}
-
-	write(w, http.StatusOK, envelope[struct {
-		Success bool `json:"success"`
-	}]{Response: struct {
-		Success bool `json:"success"`
-	}{Success: success}})
+	return SuccessResponse{Success: success}
 }
 
-func (s *Service) addSingleUser(ctx context.Context, item addUserItem) xtls.HandlerResult {
+func (s *Service) addSingleUser(ctx context.Context, item AddUserItem) xtls.HandlerResult {
 	switch item.Type {
 	case "vless":
 		return s.provider.HandlerAddVlessUser(ctx, item.Tag, item.Username, item.UUID, item.Flow, 0)
 	case "trojan":
 		return s.provider.HandlerAddTrojanUser(ctx, item.Tag, item.Username, item.Password, 0)
 	case "shadowsocks":
-		return s.provider.HandlerAddShadowsocksUser(ctx, item.Tag, item.Username, item.Password, item.CipherType, item.IVCheck, 0)
+		return s.provider.HandlerAddShadowsocksUser(ctx, item.Tag, item.Username, item.Password, item.CipherType, false, 0)
 	case "shadowsocks22":
 		return s.provider.HandlerAddShadowsocks2022User(ctx, item.Tag, item.Username, item.Password, 0)
 	case "hysteria":
 		return s.provider.HandlerAddHysteriaUser(ctx, item.Tag, item.Username, item.Password, 0)
 	default:
-		msg := "unsupported user type: " + item.Type
-		return xtls.HandlerResult{OK: false, Message: msg}
+		return xtls.HandlerResult{OK: false, Message: "unsupported user type: " + item.Type}
 	}
 }
 
-func (s *Service) addBatchUser(ctx context.Context, inbound batchInboundItem, user batchUserData) xtls.HandlerResult {
+func (s *Service) addBatchUser(ctx context.Context, inbound BatchInbound, user BatchUserData) xtls.HandlerResult {
 	switch inbound.Type {
 	case "vless":
 		return s.provider.HandlerAddVlessUser(ctx, inbound.Tag, user.UserID, user.VlessUUID, inbound.Flow, 0)
@@ -304,13 +290,12 @@ func (s *Service) addBatchUser(ctx context.Context, inbound batchInboundItem, us
 	case "hysteria":
 		return s.provider.HandlerAddHysteriaUser(ctx, inbound.Tag, user.UserID, user.VlessUUID, 0)
 	default:
-		msg := "unsupported user type: " + inbound.Type
-		return xtls.HandlerResult{OK: false, Message: msg}
+		return xtls.HandlerResult{OK: false, Message: "unsupported user type: " + inbound.Type}
 	}
 }
 
 func collectUserIPs(ctx context.Context, provider Provider, username string) []string {
-	if provider == nil || username == "" {
+	if provider == nil {
 		return nil
 	}
 	entries, err := provider.GetUserIPList(ctx, username, true)
@@ -327,17 +312,12 @@ func collectUserIPs(ctx context.Context, provider Provider, username string) []s
 }
 
 func (s *Service) dropIPs(ips []string) {
-	if s.dropper == nil || len(ips) == 0 {
-		return
+	if s.dropper != nil && len(ips) != 0 {
+		s.dropper.DropIPs(ips)
 	}
-	s.dropper.DropIPs(ips)
 }
 
-func aggregateResults(results []xtls.HandlerResult) genericResponse {
-	if len(results) == 0 {
-		return genericResponse{Success: true, Error: nil}
-	}
-
+func aggregateResults(results []xtls.HandlerResult) GenericResponse {
 	allFailed := true
 	var firstError string
 	for _, result := range results {
@@ -349,40 +329,16 @@ func aggregateResults(results []xtls.HandlerResult) genericResponse {
 			firstError = result.Message
 		}
 	}
-
 	if allFailed {
-		if firstError == "" {
-			firstError = "all handler operations failed"
-		}
-		return genericResponse{Success: false, Error: stringPtr(firstError)}
+		return GenericResponse{Success: false, Error: stringPtr(firstError)}
 	}
-	return genericResponse{Success: true, Error: nil}
+	return GenericResponse{Success: true, Error: nil}
 }
 
-func decodeBody(r *http.Request, target any) bool {
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(target); err != nil {
-		return false
-	}
-	return true
-}
-
-func writeError(write writeJSONFn, w http.ResponseWriter, message string) {
-	write(w, http.StatusBadRequest, map[string]any{"message": message})
-}
-
-func recoverHandler(write writeJSONFn, w http.ResponseWriter) {
+func recoverServiceError(err *error) {
 	if recover() != nil {
-		writeHandlerAPIError(write, w, errInternalServer, errInternalServer.Message)
+		*err = errInternalServer
 	}
-}
-
-func handlerErrorMessage(resultMessage, fallback string) string {
-	if resultMessage != "" {
-		return resultMessage
-	}
-	return fallback
 }
 
 func stringPtr(value string) *string {
@@ -390,67 +346,4 @@ func stringPtr(value string) *string {
 		return nil
 	}
 	return &value
-}
-
-type tagRequest struct {
-	Tag string `json:"tag"`
-}
-
-type addUserRequest struct {
-	Data     []addUserItem `json:"data"`
-	HashData hashData      `json:"hashData"`
-}
-
-type hashData struct {
-	VlessUUID     string  `json:"vlessUuid"`
-	PrevVlessUUID *string `json:"prevVlessUuid,omitempty"`
-}
-
-type addUserItem struct {
-	Type       string `json:"type"`
-	Tag        string `json:"tag"`
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	UUID       string `json:"uuid"`
-	Flow       string `json:"flow"`
-	CipherType int    `json:"cipherType"`
-	IVCheck    bool   `json:"ivCheck"`
-}
-
-type removeUserRequest struct {
-	Username string   `json:"username"`
-	HashData hashData `json:"hashData"`
-}
-
-type addUsersRequest struct {
-	AffectedInboundTags []string    `json:"affectedInboundTags"`
-	Users               []batchUser `json:"users"`
-}
-
-type batchUser struct {
-	InboundData []batchInboundItem `json:"inboundData"`
-	UserData    batchUserData      `json:"userData"`
-}
-
-type batchInboundItem struct {
-	Type string `json:"type"`
-	Tag  string `json:"tag"`
-	Flow string `json:"flow"`
-}
-
-type batchUserData struct {
-	UserID         string `json:"userId"`
-	HashUUID       string `json:"hashUuid"`
-	VlessUUID      string `json:"vlessUuid"`
-	TrojanPassword string `json:"trojanPassword"`
-	SSPassword     string `json:"ssPassword"`
-}
-
-type removeUsersRequest struct {
-	Users []removeUsersItem `json:"users"`
-}
-
-type removeUsersItem struct {
-	UserID   string `json:"userId"`
-	HashUUID string `json:"hashUuid"`
 }

@@ -206,70 +206,92 @@ func handlerService() *nodehandler.Service {
 
 func testRemoveUserResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := officialRequest(t, "/node/handler/remove-user")
-	rec := httptest.NewRecorder()
-	service.HandleRemoveUser(rec, req, writeTestJSON)
-	raw := rec.Body.Bytes()
-	return raw
+	response, err := service.RemoveUser(context.Background(), nodehandler.RemoveUserRequest{
+		Username:  "user-1",
+		VlessUUID: "00000000-0000-4000-8000-000000000001",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testGetInboundUsersResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := officialRequest(t, "/node/handler/get-inbound-users")
-	rec := httptest.NewRecorder()
-	service.HandleGetInboundUsers(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	response, err := service.GetInboundUsers(context.Background(), "inbound-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testAddUsersResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := officialRequest(t, "/node/handler/add-users")
-	rec := httptest.NewRecorder()
-	service.HandleAddUsers(rec, req, writeTestJSON)
-	raw := rec.Body.Bytes()
-	return raw
+	response, err := service.AddUsers(context.Background(), nodehandler.AddUsersRequest{
+		AffectedInboundTags: []string{"inbound-1"},
+		Users: []nodehandler.BatchUser{{
+			InboundData: []nodehandler.BatchInbound{{Type: "vless", Tag: "inbound-1", Flow: ""}},
+			UserData: nodehandler.BatchUserData{
+				UserID:         "user-1",
+				HashUUID:       "00000000-0000-4000-8000-000000000001",
+				VlessUUID:      "00000000-0000-4000-8000-000000000002",
+				TrojanPassword: "trojan-secret",
+				SSPassword:     "ss-secret",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testRemoveUsersResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := officialRequest(t, "/node/handler/remove-users")
-	rec := httptest.NewRecorder()
-	service.HandleRemoveUsers(rec, req, writeTestJSON)
-	raw := rec.Body.Bytes()
-	return raw
+	response, err := service.RemoveUsers(context.Background(), nodehandler.RemoveUsersRequest{
+		Users: []nodehandler.RemoveUsersItem{{
+			UserID:   "user-1",
+			HashUUID: "00000000-0000-4000-8000-000000000001",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testDropIPsResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := officialRequest(t, "/node/handler/drop-ips")
-	rec := httptest.NewRecorder()
-	service.HandleDropIPs(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	return encodeEnvelope(service.DropIPs([]string{"203.0.113.10"}))
 }
 
 func testAddUserResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := officialRequest(t, "/node/handler/add-user")
-	rec := httptest.NewRecorder()
-	service.HandleAddUser(rec, req, writeTestJSON)
-	raw := rec.Body.Bytes()
-	return raw
+	response, err := service.AddUser(context.Background(), nodehandler.AddUserRequest{
+		Data: []nodehandler.AddUserItem{{
+			Type: "vless", Tag: "inbound-1", Username: "user-1",
+			UUID: "00000000-0000-4000-8000-000000000001", Flow: "",
+		}},
+		HashData: nodehandler.AddUserHashData{VlessUUID: "00000000-0000-4000-8000-000000000002"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testDropUsersConnectionsResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := officialRequest(t, "/node/handler/drop-users-connections")
-	rec := httptest.NewRecorder()
-	service.HandleDropUsersConnections(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	return encodeEnvelope(service.DropUsersConnections(context.Background(), []string{"user-1"}))
 }
 
 func testGetInboundUsersCountResponseShape(t *testing.T) []byte {
 	service := handlerService()
-	req := officialRequest(t, "/node/handler/get-inbound-users-count")
-	rec := httptest.NewRecorder()
-	service.HandleGetInboundUsersCount(rec, req, writeTestJSON)
-	return rec.Body.Bytes()
+	response, err := service.GetInboundUsersCount(context.Background(), "inbound-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encodeEnvelope(response)
 }
 
 func testPluginSyncResponseShape(t *testing.T) []byte {

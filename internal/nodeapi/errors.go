@@ -10,7 +10,7 @@ import (
 type Issue struct {
 	Code       string `json:"code"`
 	Expected   string `json:"expected,omitempty"`
-	Received   string `json:"received,omitempty"`
+	Received   any    `json:"received,omitempty"`
 	Minimum    *int   `json:"minimum,omitempty"`
 	Type       string `json:"type,omitempty"`
 	Inclusive  *bool  `json:"inclusive,omitempty"`
@@ -52,14 +52,21 @@ func MissingIssue(path []any, expected string) Issue {
 	}
 }
 
-func InvalidTypeIssue(path []any, expected, received string) Issue {
+func InvalidTypeIssue(path []any, expected string, received any) Issue {
 	return Issue{
 		Code:     "invalid_type",
 		Expected: expected,
 		Received: received,
 		Path:     nonNilPath(path),
-		Message:  "Expected " + expected + ", received " + received,
+		Message:  "Expected " + expected + ", received " + receivedName(received),
 	}
+}
+
+func receivedName(received any) string {
+	if value, ok := received.(string); ok {
+		return value
+	}
+	return "invalid value"
 }
 
 func nonNilPath(path []any) []any {
