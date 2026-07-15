@@ -56,6 +56,32 @@ func TestLoadEnvironmentOverridesDotEnv(t *testing.T) {
 	}
 }
 
+func TestHTTPAddr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{name: "all interfaces", host: "", want: ":2222"},
+		{name: "IPv4", host: "127.0.0.1", want: "127.0.0.1:2222"},
+		{name: "hostname", host: "localhost", want: "localhost:2222"},
+		{name: "IPv6", host: "::1", want: "[::1]:2222"},
+		{name: "bracketed IPv6", host: "[::1]", want: "[::1]:2222"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := Config{BindAddr: test.host, NodePort: 2222}
+			if got := cfg.HTTPAddr(); got != test.want {
+				t.Fatalf("HTTPAddr() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadSecretFromFile(t *testing.T) {
 	t.Setenv("SECRET_KEY", "")
 	t.Setenv("SECRET_KEY_FILE", "")

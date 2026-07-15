@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -132,10 +133,11 @@ func Load(dotenvPath string) (Config, error) {
 }
 
 func (c Config) HTTPAddr() string {
-	if c.BindAddr != "" {
-		return c.BindAddr + ":" + strconv.Itoa(c.NodePort)
+	host := c.BindAddr
+	if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
+		host = host[1 : len(host)-1]
 	}
-	return ":" + strconv.Itoa(c.NodePort)
+	return net.JoinHostPort(host, strconv.Itoa(c.NodePort))
 }
 
 func parseDotEnv(path string) (map[string]string, error) {
