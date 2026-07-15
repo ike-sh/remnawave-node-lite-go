@@ -1,76 +1,66 @@
 package contract_test
 
 import (
+	"net/http"
+	"reflect"
+	"sort"
 	"testing"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/httpserver"
 )
 
-// Official @remnawave/node REST paths (from libs/contract/api/routes.ts).
-// Baseline: official Node 2.8.0 at 596f015; contract-sync CI verifies this pin.
-var officialRoutes = []string{
-	"/node/xray/start",
-	"/node/xray/stop",
-	"/node/xray/healthcheck",
-	"/node/stats/get-user-online-status",
-	"/node/stats/get-users-stats",
-	"/node/stats/get-system-stats",
-	"/node/stats/get-inbound-stats",
-	"/node/stats/get-outbound-stats",
-	"/node/stats/get-all-outbounds-stats",
-	"/node/stats/get-all-inbounds-stats",
-	"/node/stats/get-combined-stats",
-	"/node/stats/get-user-ip-list",
-	"/node/stats/get-users-ip-list",
-	"/node/handler/add-user",
-	"/node/handler/remove-user",
-	"/node/handler/get-inbound-users-count",
-	"/node/handler/get-inbound-users",
-	"/node/handler/add-users",
-	"/node/handler/remove-users",
-	"/node/handler/drop-users-connections",
-	"/node/handler/drop-ips",
-	"/node/plugin/sync",
-	"/node/plugin/torrent-blocker/collect",
-	"/node/plugin/nftables/block-ips",
-	"/node/plugin/nftables/unblock-ips",
-	"/node/plugin/nftables/recreate-tables",
+// This list is independent evidence transcribed from the controllers at
+// remnawave/node 2.8.0@596f015. The dispatcher consumes its own registry;
+// comparing the two prevents a hand-maintained coverage map from self-passing.
+var officialRoutes = []httpserver.NodeRoute{
+	{Method: http.MethodPost, Path: "/node/xray/start"},
+	{Method: http.MethodGet, Path: "/node/xray/stop"},
+	{Method: http.MethodGet, Path: "/node/xray/healthcheck"},
+	{Method: http.MethodPost, Path: "/node/stats/get-user-online-status"},
+	{Method: http.MethodPost, Path: "/node/stats/get-users-stats"},
+	{Method: http.MethodGet, Path: "/node/stats/get-system-stats"},
+	{Method: http.MethodPost, Path: "/node/stats/get-inbound-stats"},
+	{Method: http.MethodPost, Path: "/node/stats/get-outbound-stats"},
+	{Method: http.MethodPost, Path: "/node/stats/get-all-outbounds-stats"},
+	{Method: http.MethodPost, Path: "/node/stats/get-all-inbounds-stats"},
+	{Method: http.MethodPost, Path: "/node/stats/get-combined-stats"},
+	{Method: http.MethodPost, Path: "/node/stats/get-user-ip-list"},
+	{Method: http.MethodGet, Path: "/node/stats/get-users-ip-list"},
+	{Method: http.MethodPost, Path: "/node/handler/add-user"},
+	{Method: http.MethodPost, Path: "/node/handler/remove-user"},
+	{Method: http.MethodPost, Path: "/node/handler/get-inbound-users-count"},
+	{Method: http.MethodPost, Path: "/node/handler/get-inbound-users"},
+	{Method: http.MethodPost, Path: "/node/handler/add-users"},
+	{Method: http.MethodPost, Path: "/node/handler/remove-users"},
+	{Method: http.MethodPost, Path: "/node/handler/drop-users-connections"},
+	{Method: http.MethodPost, Path: "/node/handler/drop-ips"},
+	{Method: http.MethodPost, Path: "/node/plugin/sync"},
+	{Method: http.MethodPost, Path: "/node/plugin/torrent-blocker/collect"},
+	{Method: http.MethodPost, Path: "/node/plugin/nftables/block-ips"},
+	{Method: http.MethodPost, Path: "/node/plugin/nftables/unblock-ips"},
+	{Method: http.MethodPost, Path: "/node/plugin/nftables/recreate-tables"},
 }
 
-// liteGoImplemented marks routes wired in this repository.
-var liteGoImplemented = map[string]bool{
-	"/node/xray/start":                      true,
-	"/node/xray/stop":                       true,
-	"/node/xray/healthcheck":                true,
-	"/node/stats/get-user-online-status":    true,
-	"/node/stats/get-users-stats":           true,
-	"/node/stats/get-system-stats":          true,
-	"/node/stats/get-inbound-stats":         true,
-	"/node/stats/get-outbound-stats":        true,
-	"/node/stats/get-all-outbounds-stats":   true,
-	"/node/stats/get-all-inbounds-stats":    true,
-	"/node/stats/get-combined-stats":        true,
-	"/node/stats/get-user-ip-list":          true,
-	"/node/stats/get-users-ip-list":         true,
-	"/node/handler/add-user":                true,
-	"/node/handler/remove-user":             true,
-	"/node/handler/get-inbound-users-count": true,
-	"/node/handler/get-inbound-users":       true,
-	"/node/handler/add-users":               true,
-	"/node/handler/remove-users":            true,
-	"/node/handler/drop-users-connections":  true,
-	"/node/handler/drop-ips":                true,
-	"/node/plugin/sync":                     true,
-	"/node/plugin/torrent-blocker/collect":  true,
-	"/node/plugin/nftables/block-ips":       true,
-	"/node/plugin/nftables/unblock-ips":     true,
-	"/node/plugin/nftables/recreate-tables": true,
-}
-
-func TestOfficialRoutesCoverage(t *testing.T) {
+func TestOfficialRouteRegistry(t *testing.T) {
 	t.Parallel()
 
-	for _, route := range officialRoutes {
-		if !liteGoImplemented[route] {
-			t.Fatalf("route %s not marked implemented in lite-go", route)
-		}
+	want := append([]httpserver.NodeRoute(nil), officialRoutes...)
+	sortRoutes(want)
+	got := httpserver.RegisteredNodeRoutes()
+
+	if len(got) != 26 {
+		t.Fatalf("registered route count = %d, want 26", len(got))
 	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("registered routes do not match official 2.8.0\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func sortRoutes(routes []httpserver.NodeRoute) {
+	sort.Slice(routes, func(i, j int) bool {
+		if routes[i].Path == routes[j].Path {
+			return routes[i].Method < routes[j].Method
+		}
+		return routes[i].Path < routes[j].Path
+	})
 }

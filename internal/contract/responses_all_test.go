@@ -49,11 +49,11 @@ var responseShapeTests = map[string]func(t *testing.T){
 func TestOfficialResponseShapes(t *testing.T) {
 	for _, route := range officialRoutes {
 		route := route
-		t.Run(route, func(t *testing.T) {
+		t.Run(route.Path, func(t *testing.T) {
 			t.Parallel()
-			fn, ok := responseShapeTests[route]
+			fn, ok := responseShapeTests[route.Path]
 			if !ok {
-				t.Fatalf("missing response shape test for %s", route)
+				t.Fatalf("missing response shape test for %s", route.Path)
 			}
 			fn(t)
 		})

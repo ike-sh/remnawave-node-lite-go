@@ -79,3 +79,23 @@ func TestHandleNodeRoutesUnknownPath(t *testing.T) {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
+
+func TestHandleNodeRoutesRejectsUnregisteredMethod(t *testing.T) {
+	t.Parallel()
+
+	server := &Server{}
+	for _, route := range RegisteredNodeRoutes() {
+		wrongMethod := http.MethodGet
+		if route.Method == http.MethodGet {
+			wrongMethod = http.MethodPost
+		}
+		req := httptest.NewRequest(wrongMethod, route.Path, nil)
+		rec := httptest.NewRecorder()
+
+		server.handleNodeRoutes(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s %s status = %d, want 404", wrongMethod, route.Path, rec.Code)
+		}
+	}
+}

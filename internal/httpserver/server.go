@@ -73,76 +73,74 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
 	write := writeJSON
+	route, ok := lookupNodeRoute(r.Method, r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 
-	switch {
+	switch route {
 	// xray
-	case r.Method == http.MethodGet && path == "/node/xray/healthcheck":
+	case routeXrayHealthcheck:
 		writeJSON(w, http.StatusOK, envelope[xray.HealthResponse]{Response: s.manager.Health()})
-	case (r.Method == http.MethodPost || r.Method == http.MethodGet) && path == "/node/xray/stop":
-		if r.Method == http.MethodGet {
-			slog.Warn("deprecated HTTP method for /node/xray/stop; use POST")
-		}
+	case routeXrayStop:
 		s.pluginService.ResetPlugins()
 		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: s.manager.Stop(true)})
-	case r.Method == http.MethodPost && path == "/node/xray/start":
+	case routeXrayStart:
 		s.handleStart(w, r)
 
 	// stats
-	case r.Method == http.MethodPost && path == "/node/stats/get-user-online-status":
+	case routeStatsGetUserOnlineStatus:
 		s.statsService.HandleGetUserOnlineStatus(w, r, write)
-	case r.Method == http.MethodGet && path == "/node/stats/get-system-stats":
+	case routeStatsGetSystemStats:
 		s.statsService.HandleGetSystemStats(w, write)
-	case r.Method == http.MethodPost && path == "/node/stats/get-users-stats":
+	case routeStatsGetUsersStats:
 		s.statsService.HandleGetUsersStats(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/stats/get-inbound-stats":
+	case routeStatsGetInboundStats:
 		s.statsService.HandleGetInboundStats(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/stats/get-outbound-stats":
+	case routeStatsGetOutboundStats:
 		s.statsService.HandleGetOutboundStats(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/stats/get-all-inbounds-stats":
+	case routeStatsGetAllInboundsStats:
 		s.statsService.HandleGetAllInboundsStats(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/stats/get-all-outbounds-stats":
+	case routeStatsGetAllOutboundsStats:
 		s.statsService.HandleGetAllOutboundsStats(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/stats/get-combined-stats":
+	case routeStatsGetCombinedStats:
 		s.statsService.HandleGetCombinedStats(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/stats/get-user-ip-list":
+	case routeStatsGetUserIPList:
 		s.statsService.HandleGetUserIPList(w, r, write)
-	case r.Method == http.MethodGet && path == "/node/stats/get-users-ip-list":
+	case routeStatsGetUsersIPList:
 		s.statsService.HandleGetUsersIPList(w, r, write)
 
 	// handler
-	case r.Method == http.MethodPost && path == "/node/handler/add-user":
+	case routeHandlerAddUser:
 		s.handlerService.HandleAddUser(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/handler/remove-user":
+	case routeHandlerRemoveUser:
 		s.handlerService.HandleRemoveUser(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/handler/get-inbound-users-count":
+	case routeHandlerGetInboundUsersCount:
 		s.handlerService.HandleGetInboundUsersCount(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/handler/get-inbound-users":
+	case routeHandlerGetInboundUsers:
 		s.handlerService.HandleGetInboundUsers(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/handler/add-users":
+	case routeHandlerAddUsers:
 		s.handlerService.HandleAddUsers(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/handler/remove-users":
+	case routeHandlerRemoveUsers:
 		s.handlerService.HandleRemoveUsers(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/handler/drop-users-connections":
+	case routeHandlerDropUsersConnections:
 		s.handlerService.HandleDropUsersConnections(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/handler/drop-ips":
+	case routeHandlerDropIPs:
 		s.handlerService.HandleDropIPs(w, r, write)
 
 	// plugin
-	case r.Method == http.MethodPost && path == "/node/plugin/sync":
+	case routePluginSync:
 		s.pluginService.HandleSync(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/plugin/torrent-blocker/collect":
+	case routePluginCollectTorrentReports:
 		s.pluginService.HandleCollectReports(w, write)
-	case r.Method == http.MethodPost && path == "/node/plugin/nftables/block-ips":
+	case routePluginBlockIPs:
 		s.pluginService.HandleBlockIPs(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/plugin/nftables/unblock-ips":
+	case routePluginUnblockIPs:
 		s.pluginService.HandleUnblockIPs(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/plugin/nftables/recreate-tables":
+	case routePluginRecreateTables:
 		s.pluginService.HandleRecreateTables(w, r, write)
-
-	default:
-		http.NotFound(w, r)
 	}
 }
 
