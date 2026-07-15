@@ -41,7 +41,8 @@
 | M3 Xray 生命周期 | 已完成 | `checkpoint-m03-xray-lifecycle` |
 | M4 插件与 nftables | 已完成 | `checkpoint-m04-plugin-nftables` |
 | M5 用户、连接与统计 | 已完成 | `checkpoint-m05-users-connections-stats` |
-| M6-M8 | 待推进 | - |
+| M6 512 MiB 资源优化 | 已完成 | `checkpoint-m06-low-memory` |
+| M7-M8 | 待推进 | - |
 
 ## 里程碑
 
@@ -92,6 +93,7 @@
 - 限制 zstd 解码内存、报告队列、临时切片和请求峰值。
 - 评估使用最小 protobuf 客户端替代完整 Xray Go 实现依赖。
 - 在 cgroup 限制下记录 idle、启动、同步和大用户集峰值。
+- 50k 用户真实 rw-core 峰值为 `143.9 MiB`；完整预算和复现方式见 [`resource-budget.md`](resource-budget.md)。
 
 ### M7 - 系统与供应链
 

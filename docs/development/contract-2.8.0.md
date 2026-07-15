@@ -68,6 +68,14 @@ M5 将所有用户 mutation 放入可取消的串行 gate。每次 add/remove �
 
 `get-users-ip-list` 优先使用 rw-core 的单次 `GetUsersStats` 扩展 RPC；旧 core 返回 `UNIMPLEMENTED` 后会缓存 capability 并降级为最多 8 个固定 worker，不再为每个在线用户创建 goroutine。所有 Handler/Stats unary RPC 默认共享最多 5 秒 deadline，健康探测为 3 秒，调用方已有的更早 deadline 和取消信号保持生效；legacy 批量查询使用单一总预算，不会为每个用户重新续期。
 
+## Go 资源预算实现
+
+M6 在不改变官方 HTTP 契约的前提下收紧资源边界。Xray 配置仅在启动阶段保留解码树和规范 JSON，rw-core ready 后只留下 hash、inbound tag 与运行状态；torrent reports 使用 1024 条有界环形队列；zstd decoder、窗口、并发、请求体和 gRPC 响应均有明确上限。完整 Xray Go module 已由与官方生成类型校准的最小 protobuf wire client 替代，五种账号、Handler 请求、Stats 消息和确定性 wire golden 共同固定兼容性。
+
+`LOW_MEMORY=1` 时默认请求体上限为 16 MiB，Go heap 软上限为 180 MiB。显式 `BODY_LIMIT_MB` 允许 `1..1024`，非法、负数或溢出值会使进程启动失败，而不是静默回退。Debian 与 Alpine 安装器在整机内存不超过 512 MiB 时自动启用该模式。
+
+真实 rw-core `v26.6.27` 的 1 CPU / 448 MiB / no-swap 门禁覆盖 1k 用户启动、无变化同步、50k 用户重启、热增删与统计 RPC，实测 cgroup 峰值为 143.9 MiB。复现条件和阶段数据见 [`resource-budget.md`](resource-budget.md)。
+
 ## 路由清单
 
 表中只列核心约束；完整类型、nullable、枚举、UUID、IP、日期和数组长度约束以 `internal/contract/official_schemas.go` 的可执行 schema 为准。
@@ -119,7 +127,6 @@ M5 将所有用户 mutation 放入可取消的串行 gate。每次 add/remove �
 
 | 范围 | 当前偏差 | 收敛里程碑 |
 | --- | --- | --- |
-| 资源 | 配置及解码过程存在多份大对象，未完成 512 MiB 峰值验收 | M6 |
 | 传输 | 当前 TLS 最低版本为 1.2；认证失败和未知路由返回 HTTP，而官方销毁 socket | M7 |
 | 系统 | systemd 权限过宽，安装资产和辅助数据尚未全部固定摘要 | M7 |
 
