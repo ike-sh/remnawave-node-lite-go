@@ -12,6 +12,7 @@
 - 固化官方 Node `2.8.0@596f015` 的 26 条路由、Zod 请求/响应、错误格式和副作用为可执行契约。
 - 新增默认只读、需 mTLS/JWT 的 `contract-probe`，用于官方 Node 与 Go Node 的黑盒语义差分。
 - 新增统一 Node API 边界，覆盖 Zod 等价的必填字段、联合类型、UUID/IP、枚举、nullable/default 和数组长度校验。
+- 新增 Linux network namespace nftables 集成门禁，真实覆盖双栈规则替换、封禁、解封、重建与退出清理。
 
 ### 修复
 
@@ -22,6 +23,10 @@
 - Xray 启动、停止、健康检查和自然退出改为显式四态生命周期；stop 可取消正在启动的 core，失败/超时不再提交配置或 hash，所有子进程均被回收。
 - 移除非官方的 `last-start.json` 持久化与开机旧配置恢复；Node 重启后由 Panel 健康检查重新下发 start，`healthcheck` 只读缓存状态。
 - Panel stop 固定先清理插件再停止 core；正常停止先发 SIGINT、超时升级 SIGKILL，Linux 上 Node 异常退出也不会遗留孤儿 rw-core。
+- 插件同步改为不可变 plan 的 `apply -> Xray reconcile -> commit` 事务；nft/Xray 失败不再提前提交状态，并会尝试恢复上一份 firewall plan。
+- nftables 初始化、双栈批处理、ingress/torrent 解封、recreate 重放、错误传播和退出清表统一收口；缺失元素的多种 nft 错误文案均按幂等成功处理。
+- nft 不可用时合法配置仍按官方语义接受，但 torrent effective state 保持禁用；reset 不再丢弃未 collect reports，ASN/shared list 降级会写入明确日志。
+- listener 异常不再从 goroutine 调用 `log.Fatalf` 跳过清理；统一关闭路径先停止 rw-core，再删除本项目 nftables 表。
 
 ### 维护
 
@@ -30,6 +35,7 @@
 - 建立行为兼容、架构修复和 512 MiB 小内存验收路线。
 - 契约 CI 验证固定官方提交、版本和所有引用的源码证据文件。
 - HTTP transport 与 stats、用户 handler、plugin 业务服务分离，业务层不再依赖 `net/http` 或自行解码 JSON。
+- 固定并校准外部 `@remnawave/node-plugins@0.4.5` schema 证据，覆盖显式 null、AS number、`ext:` 与数值边界。
 
 ## 参考仓库历史
 

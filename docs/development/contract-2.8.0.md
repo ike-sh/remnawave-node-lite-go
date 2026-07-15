@@ -52,6 +52,14 @@ Go manager 使用单一显式状态，而不是多个可形成非法组合的布
 
 进程级测试覆盖 pending 到 active 的提交边界、并发 start、start 与 stop 交错、context cancel、启动超时、就绪前后退出、自然退出、并发/重复 stop、SIGINT 与 SIGKILL 升级。路由测试同时固定 Panel stop 的 `ResetPlugins -> Stop` 顺序。
 
+## Go 插件与 nftables 实现
+
+M4 以官方 `plugin.service.ts`、`nft.service.ts`、`plugin-state.service.ts`、torrent blocker state/webhook handler，以及 `@remnawave/node-plugins@0.4.5` 为行为依据。每次变更先从已校验配置构建不可变 plan，一次完成 shared list/ASN 展开、connection-drop whitelist、torrent effective state 和 firewall plan；随后严格执行 `firewall apply -> Xray reconcile -> state commit`。firewall 或 Xray 失败时不发布新状态，并尽力重放上一份 firewall plan，使同一 Panel 请求可以安全重试。
+
+所有 sync、reset、webhook、block、unblock、recreate 和 close 操作由 Service operation mutex 串行化。nftables 初始化与 Go 对象构造分离；缺少 `CAP_NET_ADMIN` 或 nft 初始化失败时仍接受合法插件配置，但 ingress/egress/torrent 保持不可用，torrent 状态不会错误注入 Xray。reset 只替换插件快照，不丢弃 Panel 尚未 collect 的 torrent reports；recreate 重放当前已提交过滤计划，而不是错误地创建空表。
+
+nft backend 在单个 `nft -f` 原子事务内替换 IPv4/IPv6 私有表和过滤元素，批量处理 block，unblock 同时覆盖 torrent/ingress 的双栈 set。进程退出先停止 rw-core，再删除 `remnanode`/`remnanode6`，listener 失败也会进入同一清理路径。Linux network namespace 集成测试真实覆盖初始化、两次 plan 替换、双栈 block、重复 block/unblock、recreate 和 close；M4 checkpoint 已在 Linux arm64 6.8 内核与 nftables 上通过，amd64 测试二进制已交叉编译并纳入同一 CI 门控。
+
 ## 路由清单
 
 表中只列核心约束；完整类型、nullable、枚举、UUID、IP、日期和数组长度约束以 `internal/contract/official_schemas.go` 的可执行 schema 为准。
@@ -104,7 +112,6 @@ Go manager 使用单一显式状态，而不是多个可形成非法组合的布
 | 范围 | 当前偏差 | 收敛里程碑 |
 | --- | --- | --- |
 | 用户操作 | 请求校验已先于副作用，但合法批量操作仍可能部分成功，失败聚合与状态提交语义尚未事务化 | M5 |
-| 插件 | 状态可能先于 nftables 成功提交，部分 nft 错误被吞，清理不完整 | M4 |
 | 并发 | 用户 IP 查询存在 N+1 RPC 和无界 goroutine；连接踢除结果不够真实 | M5 |
 | 资源 | 配置及解码过程存在多份大对象，未完成 512 MiB 峰值验收 | M6 |
 | 传输 | 当前 TLS 最低版本为 1.2；认证失败和未知路由返回 HTTP，而官方销毁 socket | M7 |
@@ -123,6 +130,13 @@ go test ./internal/contract
 ```bash
 REMNANODE_OFFICIAL_SOURCE=/tmp/remnawave-node-official-2.8.0-codex \
   go test ./internal/contract
+```
+
+在具备 root/unshare/nft 的 Linux 验收机上运行隔离防火墙测试：
+
+```bash
+sudo env "PATH=$PATH" REMNANODE_NFT_INTEGRATION=1 \
+  go test ./internal/plugin -run '^TestNFTManagerInNetworkNamespace$' -count=1 -v
 ```
 
 测试会验证：26 条 method/path 与真实 dispatcher 完全相同；所有合法请求样例；缺字段、错类型、额外字段、未知联合类型、UUID/IP/minItems；实际 Go handler 的完整成功响应 schema；官方统一错误 schema。

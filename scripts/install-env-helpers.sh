@@ -207,7 +207,7 @@ print_panel_address_hint() {
   echo
   echo "  节点已就绪。Panel 通常 10s 内自动上线。"
   echo "  若仍离线：检查防火墙 / Secret Key，或 Panel 禁用→启用一次。"
-  echo "  首次成功启用后，服务器 reboot 将自动恢复。"
+  echo "  服务器 reboot 后由 Panel 健康检查重新下发配置并自动上线。"
 }
 
 wait_for_service_stable() {

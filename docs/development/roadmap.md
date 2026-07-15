@@ -39,7 +39,8 @@
 | M1 契约证据 | 已完成 | `checkpoint-m01-contract-evidence` |
 | M2 API 边界 | 已完成 | `checkpoint-m02-api-boundary` |
 | M3 Xray 生命周期 | 已完成 | `checkpoint-m03-xray-lifecycle` |
-| M4-M8 | 待推进 | - |
+| M4 插件与 nftables | 已完成 | `checkpoint-m04-plugin-nftables` |
+| M5-M8 | 待推进 | - |
 
 ## 里程碑
 
