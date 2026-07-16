@@ -403,10 +403,12 @@ main() {
   require_root
   require_command curl
 
-  if is_alpine; then
-    require_command rc-service
-  else
-    require_command systemctl
+  if [ "$DRY_RUN" -eq 0 ]; then
+    if is_alpine; then
+      require_command rc-service
+    else
+      require_command systemctl
+    fi
   fi
 
   if [ ! -f "${PREFIX}/${BIN_NAME}" ] && [ "$DRY_RUN" -eq 0 ]; then

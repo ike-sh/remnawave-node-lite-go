@@ -17,6 +17,7 @@ logs/
 
 # Local reference repo, only if you accidentally put it inside this project
 remnawave-node-reference/
+.official-source/
 
 # Go
 *.test

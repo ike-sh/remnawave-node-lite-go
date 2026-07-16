@@ -12,69 +12,27 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: remnawave/node
+          ref: 596f015a5c8f876dc9a9d61b6cb78d35bd8e379b
+          path: .official-source
+          persist-credentials: false
+
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version: "1.26.5"
 
-      - name: shell and supply-chain guards
-        shell: bash
+      - name: Install pinned static checks
         run: |
-          set -euo pipefail
-          shellcheck -x scripts/*.sh deploy/remnawave-node.openrc
-          for script in scripts/*.sh deploy/remnawave-node.openrc; do
-            bash -n "$script"
-          done
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
-          # shellcheck source=scripts/install-env-helpers.sh
-          source scripts/install-env-helpers.sh
-          version_output="$(go run ./cmd/remnanode-lite version)"
-          release_binary_version_matches_tag "$version_output" v0.1.0
-          if release_binary_version_matches_tag "$version_output" v0.1.1; then
-            echo "release version matcher accepted the wrong tag" >&2
-            exit 1
-          fi
-          if RNL_TAG='../../../../../etc' \
-            resolve_install_tag Luxiaba/remnawave-node-lite-go v0.1.0 >/dev/null 2>&1; then
-            echo "release tag path traversal unexpectedly passed" >&2
-            exit 1
-          fi
-          if RNL_TAG='..' \
-            resolve_install_tag Luxiaba/remnawave-node-lite-go v0.1.0 >/dev/null 2>&1; then
-            echo "release tag parent-directory alias unexpectedly passed" >&2
-            exit 1
-          fi
-          for bootstrap in scripts/install-node.sh scripts/install-node-alpine.sh scripts/upgrade.sh; do
-            if RNL_TAG='../../../../../etc' bash -s -- --help <"$bootstrap" >/dev/null 2>&1; then
-              echo "$bootstrap accepted a path-like bootstrap tag" >&2
-              exit 1
-            fi
-          done
-
-          dry_run_output="$(RNL_UPGRADE_XRAY=1 \
-            bash scripts/upgrade.sh --yes --dry-run)"
-          grep -q '目标 Release 中已校验的 install-xray.sh' <<<"$dry_run_output"
-          wrapper_dry_run_output="$(bash scripts/install-node.sh --upgrade --yes --dry-run)"
-          grep -q '\[dry-run\] 更新 /etc/systemd/system/remnawave-node.service' \
-            <<<"$wrapper_dry_run_output"
-
-          if CUSTOM_CORE_URL=https://example.invalid/rw-core \
-            bash scripts/install-xray.sh --dry-run; then
-            echo "CUSTOM_CORE_URL without SHA-256 unexpectedly passed" >&2
-            exit 1
-          fi
-          if ASN_DB_URL=https://example.invalid/asn-prefixes.bin \
-            bash scripts/install-xray.sh --dry-run; then
-            echo "ASN_DB_URL without SHA-256 unexpectedly passed" >&2
-            exit 1
-          fi
-          if XRAY_CORE_SHA256=0000000000000000000000000000000000000000000000000000000000000000 \
-            bash scripts/install-xray.sh --dry-run; then
-            echo "pinned rw-core SHA-256 override unexpectedly passed" >&2
-            exit 1
-          fi
-
-      - name: go test
-        run: go test ./...
+      - name: Portable repository gate
+        env:
+          REMNANODE_OFFICIAL_SOURCE: ${{ github.workspace }}/.official-source
+          REQUIRE_GOVULNCHECK: "1"
+        run: bash scripts/check.sh
 
       - name: network administration integration in isolated namespaces
         run: |
@@ -84,6 +42,3 @@ jobs:
             go test ./internal/plugin -run '^TestNFTManagerInNetworkNamespace$' -count=1 -v
           sudo env "PATH=$PATH" REMNANODE_SOCKET_KILL_INTEGRATION=1 \
             go test ./internal/netadmin -run '^TestKillSocketsInNetworkNamespace$' -count=1 -v
-
-      - name: go build
-        run: go build -o /dev/null ./cmd/remnanode-lite

@@ -1,7 +1,7 @@
 name: release
 
 env:
-  ASN_SOURCE_URL: https://github.com/remnawave/asn-index/releases/download/latest/asn-prefixes.json
+  ASN_SOURCE_URL: https://github.com/remnawave/asn-index/releases/download/2026-03-30/asn-prefixes.json
   ASN_SOURCE_SHA256: 78db1c6b8bc86861a9c4bbca07229fcc4ee8b4fe8fa5b7c6069161f66c365cfc
 
 on:
@@ -17,27 +17,54 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: remnawave/node
+          ref: 596f015a5c8f876dc9a9d61b6cb78d35bd8e379b
+          path: .official-source
+          persist-credentials: false
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version: "1.26.5"
+
+      - name: Install pinned static checks
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Release preflight
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REQUIRE_GOVULNCHECK: "1"
+          REQUIRE_TAG_AT_HEAD: "1"
+          REMNANODE_OFFICIAL_SOURCE: ${{ github.workspace }}/.official-source
+        run: bash scripts/release-check.sh
+
+      - name: Network administration integration in isolated namespaces
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes iproute2 nftables
+          sudo env "PATH=$PATH" REMNANODE_NFT_INTEGRATION=1 \
+            go test ./internal/plugin -run '^TestNFTManagerInNetworkNamespace$' -count=1 -v
+          sudo env "PATH=$PATH" REMNANODE_SOCKET_KILL_INTEGRATION=1 \
+            go test ./internal/netadmin -run '^TestKillSocketsInNetworkNamespace$' -count=1 -v
 
       - name: Build release archives
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          VERSION="${GITHUB_REF_NAME#v}"
-          CONTRACT_VERSION="$(tr -d ' \n\r' < internal/version/contract.version)"
+          mkdir -p dist/binaries
+          bash scripts/build-release-binaries.sh dist/binaries
 
           host_arch="$(uname -m)"
           for arch in amd64 arm64; do
             out_dir="$(mktemp -d)"
-            CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
-              go build -trimpath \
-                -ldflags="-s -w -X github.com/Luxiaba/remnawave-node-lite-go/internal/version.Version=${VERSION} -X github.com/Luxiaba/remnawave-node-lite-go/internal/version.ContractVersion=${CONTRACT_VERSION}" \
-                -o "${out_dir}/remnanode-lite" \
-                ./cmd/remnanode-lite
+            install -m 0755 "dist/binaries/remnanode-lite_linux_${arch}" "${out_dir}/remnanode-lite"
 
             # amd64 runner cannot execute arm64 binaries (Exec format error)
             case "${arch}:${host_arch}" in
@@ -69,6 +96,7 @@ jobs:
               remnanode-lite README.txt support
             rm -rf "${out_dir}"
           done
+          rm -rf dist/binaries
 
           curl --fail --location --silent --show-error \
             --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
@@ -89,6 +117,8 @@ jobs:
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          body_path: docs/releases/${{ github.ref_name }}.md
+          fail_on_unmatched_files: true
           files: |
             dist/remnanode-lite_linux_amd64.tar.gz
             dist/remnanode-lite_linux_arm64.tar.gz
