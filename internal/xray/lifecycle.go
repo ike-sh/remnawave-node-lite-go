@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ const (
 	defaultReadinessInterval = 2 * time.Second
 	defaultInterruptTimeout  = 5 * time.Second
 	defaultKillTimeout       = 5 * time.Second
+	defaultProcessWaitDelay  = 2 * time.Second
 )
 
 var (
@@ -59,8 +61,8 @@ type processState struct {
 	cmd        *exec.Cmd
 	generation uint64
 	done       chan struct{}
-	stdout     *os.File
-	stderr     *os.File
+	stdout     io.WriteCloser
+	stderr     io.WriteCloser
 
 	mu      sync.Mutex
 	exited  bool
@@ -174,17 +176,22 @@ func (m *Manager) Start(parent context.Context, req StartRequest) StartResponse 
 	readyErr := m.waitForGRPC(ctx, process, startupTimeout)
 
 	if readyErr == nil {
-		committed, owned, exitErr := m.commitRunningStart(generation, process, prepared.hashState)
-		if committed {
-			cancel()
-			log.Printf("xray/start succeeded: rw-core online on gRPC @%s", m.xtlsSocket)
-			return m.startResponse(true, nil)
+		version := m.probeVersion(ctx)
+		if err := ctx.Err(); err != nil {
+			readyErr = err
+		} else {
+			committed, owned, exitErr := m.commitRunningStart(generation, process, prepared.hashState, version)
+			if committed {
+				cancel()
+				log.Printf("xray/start succeeded: rw-core online on gRPC @%s", m.xtlsSocket)
+				return m.startResponse(true, nil)
+			}
+			if !owned {
+				cancel()
+				return m.startFailure("xray start canceled", context.Canceled)
+			}
+			readyErr = processExitedError(exitErr)
 		}
-		if !owned {
-			cancel()
-			return m.startFailure("xray start canceled", context.Canceled)
-		}
-		readyErr = processExitedError(exitErr)
 	}
 
 	stopErr := m.terminateProcess(process)
@@ -297,7 +304,7 @@ func (m *Manager) assignProcess(generation uint64, process *processState) bool {
 	return true
 }
 
-func (m *Manager) commitRunningStart(generation uint64, process *processState, hashState runtimeHashState) (committed, owned bool, exitErr error) {
+func (m *Manager) commitRunningStart(generation uint64, process *processState, hashState runtimeHashState, version *string) (committed, owned bool, exitErr error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.generation != generation || m.state != lifecycleStarting {
@@ -313,6 +320,7 @@ func (m *Manager) commitRunningStart(generation uint64, process *processState, h
 
 	m.pendingConfigJSON = nil
 	m.applyRuntimeHashStateLocked(hashState)
+	m.publishVersionLocked(version)
 	m.state = lifecycleRunning
 	m.startCancel = nil
 	m.lifecycleMu.Unlock()
@@ -509,12 +517,11 @@ func (m *Manager) startFailure(action string, err error) StartResponse {
 }
 
 func (m *Manager) startProcess(generation uint64) (*processState, error) {
-	m.rotateLogs()
-	stdout, err := os.OpenFile(filepath.Join(m.logDir, "xray.out.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	stdout, err := openCappedLogWriter(filepath.Join(m.logDir, "xray.out.log"), maxLogSize)
 	if err != nil {
 		return nil, fmt.Errorf("open xray stdout log: %w", err)
 	}
-	stderr, err := os.OpenFile(filepath.Join(m.logDir, "xray.err.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	stderr, err := openCappedLogWriter(filepath.Join(m.logDir, "xray.err.log"), maxLogSize)
 	if err != nil {
 		_ = stdout.Close()
 		return nil, fmt.Errorf("open xray stderr log: %w", err)
@@ -522,6 +529,7 @@ func (m *Manager) startProcess(generation uint64) (*processState, error) {
 
 	m.mu.RLock()
 	commandFactory := m.processCommand
+	processWaitDelay := m.processWaitDelay
 	xrayBin := m.xrayBin
 	socketPath := m.socketPath
 	geoDir := m.geoDir
@@ -538,6 +546,12 @@ func (m *Manager) startProcess(generation uint64) (*processState, error) {
 		_ = stdout.Close()
 		_ = stderr.Close()
 		return nil, errors.New("create rw-core command: command factory returned nil")
+	}
+	if processWaitDelay <= 0 {
+		processWaitDelay = defaultProcessWaitDelay
+	}
+	if cmd.WaitDelay <= 0 {
+		cmd.WaitDelay = processWaitDelay
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -572,6 +586,9 @@ func (m *Manager) monitorProcess(process *processState) {
 	err := process.cmd.Wait()
 	_ = process.stdout.Close()
 	_ = process.stderr.Close()
+	if process.cmd.Process != nil {
+		err = errors.Join(err, cleanupOwnedProcessGroup(process.cmd.Process))
+	}
 	process.markExited(err)
 	close(process.done)
 	if err != nil {
@@ -630,13 +647,13 @@ func (m *Manager) terminateProcess(process *processState) error {
 	}
 
 	if process.cmd.Process != nil {
-		err := process.cmd.Process.Signal(os.Interrupt)
+		err := signalOwnedProcess(process.cmd.Process, os.Interrupt)
 		if err == nil || errors.Is(err, os.ErrProcessDone) {
 			if waitForProcess(process, interruptTimeout) {
 				return nil
 			}
 		}
-		if err := process.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := killOwnedProcess(process.cmd.Process); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return fmt.Errorf("kill rw-core: %w", err)
 		}
 	}
@@ -675,10 +692,29 @@ func processExitHint(process *processState) string {
 }
 
 func tailLogFile(path string, maxLines int) string {
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
+	const maxTailBytes int64 = 8 << 10
+	if maxLines <= 0 {
 		return ""
 	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.Size() == 0 {
+		return ""
+	}
+	start := info.Size() - maxTailBytes
+	if start < 0 {
+		start = 0
+	}
+	data := make([]byte, info.Size()-start)
+	n, err := file.ReadAt(data, start)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return ""
+	}
+	data = data[:n]
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]

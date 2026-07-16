@@ -3,10 +3,12 @@ package xray
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +38,22 @@ func TestXrayProcessHelper(t *testing.T) {
 		for {
 			time.Sleep(time.Second)
 		}
+	case "exit-with-stdio-child":
+		child := exec.Command(os.Args[0], "-test.run=^TestXrayProcessHelper$", "--")
+		child.Env = append(os.Environ(),
+			helperProcessEnv+"=1",
+			"XRAY_HELPER_MODE=stdio-child",
+		)
+		child.Stdout = os.Stdout
+		child.Stderr = os.Stderr
+		if err := child.Start(); err != nil {
+			os.Exit(24)
+		}
+		appendHelperEvent(events, "child-pid="+strconv.Itoa(child.Process.Pid)+"\n")
+		os.Exit(0)
+	case "stdio-child":
+		time.Sleep(2 * time.Second)
+		os.Exit(0)
 	default:
 		signals := make(chan os.Signal, 1)
 		signal.Notify(signals, os.Interrupt)
@@ -92,10 +110,16 @@ func newLifecycleManager(t *testing.T, mode string) (*Manager, *testProcess) {
 	manager.startupTimeout = 500 * time.Millisecond
 	manager.interruptTimeout = 500 * time.Millisecond
 	manager.killTimeout = time.Second
+	if mode == "exit-with-stdio-child" {
+		manager.processWaitDelay = 50 * time.Millisecond
+	}
 	t.Cleanup(func() {
 		manager.interruptTimeout = 50 * time.Millisecond
 		manager.killTimeout = time.Second
 		_ = manager.Stop()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = manager.Shutdown(ctx)
 	})
 	return manager, process
 }
@@ -177,6 +201,222 @@ func TestStartCommitsConfigOnlyAfterReadiness(t *testing.T) {
 	}
 	if got := string(manager.CurrentConfigJSON()); got != "{}" {
 		t.Fatalf("config cache retained after readiness: %s", got)
+	}
+}
+
+func TestSuccessfulStartRefreshesCoreVersion(t *testing.T) {
+	manager, _ := newLifecycleManager(t, "hold")
+	manager.readinessProbe = func(context.Context) bool { return true }
+	manager.versionProbe = func(context.Context) (string, error) {
+		return "26.6.27", nil
+	}
+
+	response := manager.Start(context.Background(), lifecycleStartRequest("client-a"))
+	if !response.IsStarted || response.Version == nil || *response.Version != "26.6.27" {
+		t.Fatalf("start response version = %#v", response.Version)
+	}
+	if health := manager.Health(); health.XrayVersion == nil || *health.XrayVersion != "26.6.27" {
+		t.Fatalf("health version = %#v", health.XrayVersion)
+	}
+}
+
+func TestStartCancellationDuringVersionProbeDoesNotCommit(t *testing.T) {
+	manager, _ := newLifecycleManager(t, "hold")
+	manager.readinessProbe = func(context.Context) bool { return true }
+	probeEntered := make(chan struct{})
+	manager.versionProbe = func(ctx context.Context) (string, error) {
+		close(probeEntered)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	response := make(chan StartResponse, 1)
+	go func() { response <- manager.Start(ctx, lifecycleStartRequest("client-a")) }()
+	awaitSignal(t, probeEntered, "version probe")
+	cancel()
+	resp := awaitStartResponse(t, response)
+	if resp.IsStarted || resp.Error == nil || !strings.Contains(*resp.Error, context.Canceled.Error()) {
+		t.Fatalf("canceled version probe response = %#v", resp)
+	}
+	assertStoppedAndCleared(t, manager)
+}
+
+func TestVersionProbePublishesOnlyWithRunningState(t *testing.T) {
+	manager, _ := newLifecycleManager(t, "hold")
+	manager.readinessProbe = func(context.Context) bool { return true }
+	oldVersion := "old"
+	manager.mu.Lock()
+	manager.xrayVersion = &oldVersion
+	manager.mu.Unlock()
+	probeEntered := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	manager.versionProbe = func(context.Context) (string, error) {
+		close(probeEntered)
+		<-releaseProbe
+		return "26.6.27", nil
+	}
+
+	response := make(chan StartResponse, 1)
+	go func() { response <- manager.Start(context.Background(), lifecycleStartRequest("client-a")) }()
+	awaitSignal(t, probeEntered, "version probe")
+	if health := manager.Health(); health.XrayVersion == nil || *health.XrayVersion != oldVersion || health.XrayInternalStatusCached {
+		t.Fatalf("version was published before lifecycle commit: %#v", health)
+	}
+	close(releaseProbe)
+	if resp := awaitStartResponse(t, response); !resp.IsStarted || resp.Version == nil || *resp.Version != "26.6.27" {
+		t.Fatalf("start response = %#v", resp)
+	}
+}
+
+func TestSuccessfulStartClearsStaleVersionWhenProbeFails(t *testing.T) {
+	manager, _ := newLifecycleManager(t, "hold")
+	manager.readinessProbe = func(context.Context) bool { return true }
+	oldVersion := "old"
+	manager.mu.Lock()
+	manager.xrayVersion = &oldVersion
+	manager.mu.Unlock()
+	manager.versionProbe = func(context.Context) (string, error) {
+		return "", errors.New("version failed")
+	}
+
+	response := manager.Start(context.Background(), lifecycleStartRequest("client-a"))
+	if !response.IsStarted || response.Version != nil {
+		t.Fatalf("start response = %#v", response)
+	}
+}
+
+func TestHealthRetriesUnknownVersionWithSingleFlight(t *testing.T) {
+	manager, _ := newLifecycleManager(t, "hold")
+	probeEntered := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	var probes atomic.Int32
+	manager.versionProbe = func(context.Context) (string, error) {
+		probes.Add(1)
+		close(probeEntered)
+		<-releaseProbe
+		return "26.6.27", nil
+	}
+	manager.mu.Lock()
+	manager.xrayVersion = nil
+	manager.nextVersionProbe = time.Time{}
+	manager.mu.Unlock()
+
+	for range 8 {
+		_ = manager.Health()
+	}
+	awaitSignal(t, probeEntered, "health version retry")
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("version probes = %d, want 1", got)
+	}
+	close(releaseProbe)
+	deadline := time.Now().Add(time.Second)
+	for {
+		if health := manager.Health(); health.XrayVersion != nil && *health.XrayVersion == "26.6.27" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("health retry did not publish version")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestShutdownCancelsAndWaitsForHealthVersionProbe(t *testing.T) {
+	manager, _ := newLifecycleManager(t, "hold")
+	probeEntered := make(chan struct{})
+	probeExited := make(chan struct{})
+	var probes atomic.Int32
+	manager.versionProbe = func(ctx context.Context) (string, error) {
+		probes.Add(1)
+		close(probeEntered)
+		<-ctx.Done()
+		close(probeExited)
+		return "", ctx.Err()
+	}
+	manager.mu.Lock()
+	manager.xrayVersion = nil
+	manager.nextVersionProbe = time.Time{}
+	manager.mu.Unlock()
+
+	_ = manager.Health()
+	awaitSignal(t, probeEntered, "health version retry")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	awaitSignal(t, probeExited, "canceled health version retry")
+
+	manager.mu.RLock()
+	busy := manager.versionProbeBusy
+	shutdown := manager.versionProbeShutdown
+	manager.mu.RUnlock()
+	if busy || !shutdown {
+		t.Fatalf("version probe state after shutdown: busy=%v shutdown=%v", busy, shutdown)
+	}
+	_ = manager.Health()
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("version probes after shutdown = %d, want 1", got)
+	}
+}
+
+func TestStaleHealthVersionProbeCannotCrossStartGeneration(t *testing.T) {
+	manager, _ := newLifecycleManager(t, "hold")
+	manager.readinessProbe = func(context.Context) bool { return true }
+	staleProbeEntered := make(chan struct{})
+	releaseStaleProbe := make(chan struct{})
+	manager.mu.Lock()
+	manager.xrayVersion = nil
+	manager.nextVersionProbe = time.Time{}
+	manager.versionProbe = func(context.Context) (string, error) {
+		close(staleProbeEntered)
+		<-releaseStaleProbe
+		return "1.2.3", nil
+	}
+	manager.mu.Unlock()
+	_ = manager.Health()
+	awaitSignal(t, staleProbeEntered, "stale health version probe")
+
+	manager.mu.Lock()
+	manager.versionProbe = func(context.Context) (string, error) {
+		return "", errors.New("fresh probe failed")
+	}
+	manager.mu.Unlock()
+	response := manager.Start(context.Background(), lifecycleStartRequest("client-a"))
+	if !response.IsStarted || response.Version != nil {
+		t.Fatalf("start response = %#v", response)
+	}
+	close(releaseStaleProbe)
+	deadline := time.Now().Add(time.Second)
+	for {
+		manager.mu.RLock()
+		busy := manager.versionProbeBusy
+		version := manager.xrayVersion
+		manager.mu.RUnlock()
+		if !busy {
+			if version != nil {
+				t.Fatalf("stale probe overwrote fresh start result: %q", *version)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stale health probe did not finish")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestProcessWaitDelayBoundsInheritedLogPipe(t *testing.T) {
+	manager, _ := newLifecycleManager(t, "exit-with-stdio-child")
+	manager.readinessProbe = func(context.Context) bool { return false }
+	started := time.Now()
+	response := manager.Start(context.Background(), lifecycleStartRequest("client-a"))
+	if response.IsStarted {
+		t.Fatalf("unexpected start response: %#v", response)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("inherited output pipe delayed process reap for %s", elapsed)
 	}
 }
 
@@ -281,6 +521,18 @@ func TestProcessExitBeforeReadinessIsReported(t *testing.T) {
 		t.Fatalf("early exit response = %#v", resp)
 	}
 	assertStoppedAndCleared(t, manager)
+}
+
+func TestTailLogFileReadsOnlyBoundedSuffix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "xray.err.log")
+	prefix := strings.Repeat("old-data-without-newline", 1024)
+	want := "last-one | last-two | last-three"
+	if err := os.WriteFile(path, []byte(prefix+"\nlast-one\nlast-two\nlast-three\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := tailLogFile(path, 3); got != want {
+		t.Fatalf("tailLogFile = %q, want %q", got, want)
+	}
 }
 
 func TestProcessExitAfterReadinessIsNotCommitted(t *testing.T) {
