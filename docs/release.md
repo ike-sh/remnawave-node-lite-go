@@ -1,77 +1,102 @@
-# GitHub Release 发布清单
+# 0.1.0 本地发布清单
 
-面向维护者：将 `remnawave-node-lite-go` 发布到 GitHub Releases，供 `install-node.sh` / `upgrade.sh` 一键安装。
+本项目默认只在本地提交和打 tag，不 push、不创建 PR。未来若明确决定公开发布，自有仓库的 tag workflow 才负责构建 GitHub Release。
 
-## 前置条件
+当前尚未冻结代码候选 `C`，也未生成真实验收 evidence；本清单是发布流程，不是已经完成的验收报告。
 
-- 发布归属：`Luxiaba/remnawave-node-lite-go`
-- 本地交付不依赖 `origin`，默认不 push、不创建 PR
-- 只有未来明确决定公开发布并向自有远端 push tag 时，GitHub Actions `release.yml` 才会创建 Release
+发布采用两阶段冻结：先形成代码候选 commit `C`，所有真实验收绑定 `C`；验收后只能修改发布文档和验收记录。任何 Go、脚本、workflow 或部署文件变化都会使证据失效，必须形成新候选并重跑验收。
 
-## 1. 版本号对齐
+## 1. 冻结代码候选
 
-发布前确保以下文件版本一致：
-
-| 文件 | 字段 |
-|------|------|
-| `internal/version/version.go` | `var Version` |
-| `internal/version/contract.version` | upstream contract 版本 |
-| `scripts/install-node.sh` | `VERSION=` |
-| `scripts/install-node-alpine.sh` | `VERSION=` |
-| `scripts/upgrade.sh` | `VERSION=` |
-| `scripts/uninstall.sh` | `VERSION=` |
-| `README.md` | 当前版本链接 |
-
-## 2. 本地验证
+准备固定官方源码 checkout、完整 Go module cache，以及 `shellcheck`、`actionlint`、`govulncheck`：
 
 ```bash
-go test ./...
-go test -race ./...
-go vet ./...
-shellcheck -x scripts/*.sh deploy/remnawave-node.openrc
-actionlint
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/remnanode-lite-amd64 ./cmd/remnanode-lite
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/remnanode-lite-arm64 ./cmd/remnanode-lite
+export REMNANODE_OFFICIAL_SOURCE=/path/to/remnawave-node-2.8.0-596f015
+export REQUIRE_GOVULNCHECK=1
+
+bash scripts/check.sh
+git status --short
 ```
 
-## 3. 本地提交并打 tag
+按主题显式暂存文件，不使用 `git add -A`。暂存后重新检查 staged diff：
 
 ```bash
-git add -A
-git commit -m "release: v0.1.0"
+git add <本次候选的明确文件列表>
+git diff --cached --check
+git diff --cached --stat
+git commit -m "chore(release): freeze 0.1.0 candidate"
+
+C="$(git rev-parse HEAD)"
+git rev-parse "${C}^{tree}"
+```
+
+此时可以记录本地辅助 tag `checkpoint-m08-code-candidate`，但不得创建 `v0.1.0`。
+
+## 2. 执行 M8 真实验收
+
+验收协议见 [`development/release-acceptance.md`](development/release-acceptance.md)。必须对同一个 `C` 完成：
+
+- 官方 Node `2.8.0@596f015` 的 26 路由黑盒语义差分。
+- Panel `2.8.1` 在 systemd 与 OpenRC 节点上的完整生命周期、统计、用户和插件流程。
+- 并发交错 `xray start/stop` 与 `plugin sync/recreate`，确认共用外层 lifecycle gate、固定锁序和取消传播。
+- Ubuntu 24.04/systemd 与 Alpine 3.22/OpenRC；两者架构并集覆盖 amd64、arm64。
+- rw-core `v26.6.27`、nftables、socket kill、安装、重复安装、升级、坏版本回滚、reboot 和卸载隔离；两种 init 环境都用 wrapper + child 验证独立进程组及后代清理。
+- 整机 `512 MiB / 1 CPU / 2 GiB / no swap`、50k 用户、至少 24 小时持续运行及故障恢复。
+
+证据写入 `docs/development/acceptance/v0.1.0/`。不得记录 JWT、证书、私钥、Secret Key、IP、hostname 或原始响应 body。
+
+## 3. 提交验收与发布资料
+
+所有验收通过后，填写四份 evidence、`manifest.json` 和 `docs/releases/v0.1.0.md`，并更新：
+
+- `README.md`：移除“开发中”。
+- `docs/CHANGELOG.md`：将 `Unreleased` 改为实际日期。
+- `docs/development/roadmap.md`：M8 标记为已完成。
+
+从候选 `C` 到最终 HEAD 只允许以下路径变化：
+
+```text
+README.md
+docs/CHANGELOG.md
+docs/development/roadmap.md
+docs/development/acceptance/v0.1.0/**
+docs/releases/v0.1.0.md
+```
+
+```bash
+git diff --name-only "${C}..HEAD"
+git add README.md docs/CHANGELOG.md docs/development/roadmap.md \
+  docs/development/acceptance/v0.1.0 docs/releases/v0.1.0.md
+git diff --cached --check
+git commit -m "docs(release): record v0.1.0 acceptance"
+```
+
+## 4. 最终门禁与本地 tag
+
+```bash
+RELEASE_TAG=v0.1.0 \
+REMNANODE_OFFICIAL_SOURCE="$REMNANODE_OFFICIAL_SOURCE" \
+REQUIRE_GOVULNCHECK=1 \
+  bash scripts/release-check.sh
+
+git tag -a checkpoint-m08-release-acceptance -m "checkpoint M8 release acceptance"
 git tag -a v0.1.0 -m "release v0.1.0"
+
+RELEASE_TAG=v0.1.0 \
+REMNANODE_OFFICIAL_SOURCE="$REMNANODE_OFFICIAL_SOURCE" \
+REQUIRE_GOVULNCHECK=1 \
+REQUIRE_TAG_AT_HEAD=1 \
+  bash scripts/release-check.sh
 ```
 
-到此即完成本项目当前约定的本地交付；不要自动执行 `git push`。未来若要公开发布，应先显式确认远端属于本项目，再单独推送该 tag。
+完成后只保留本地 commit/tag，不执行 `git push`。
 
-## 4. GitHub Release 资产（未来公开发布时）
+## 5. 未来公开发布
 
-1. GitHub → Actions → `release` workflow
-2. 确认 tag 构建成功
-3. Releases 页应出现 `remnanode-lite_linux_amd64.tar.gz`、`remnanode-lite_linux_arm64.tar.gz`、`asn-prefixes.bin`、`SHA256SUMS`
-4. 两个架构归档内均应包含 binary、systemd/OpenRC service 和已校验的 upgrade/uninstall/install-xray support 脚本
-
-可选：将 `docs/releases/vX.Y.Z.md` 同步为 Release 说明。
-
-## 5. 服务器验证
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/upgrade.sh | sudo bash -s -- --yes
-sudo remnanode-lite doctor
-journalctl -u remnawave-node -n 50 --no-pager
-```
+只有明确授权 push 自有仓库 tag 后，`.github/workflows/release.yml` 才会重新执行完整代码门禁和 Linux namespace 集成测试，构建 amd64/arm64 归档、ASN 数据及 `SHA256SUMS`，并以 `docs/releases/v0.1.0.md` 作为 Release body。
 
 ## 6. 回滚
 
-`upgrade.sh` 在替换前备份 binary、service、support、`node.env` 和可选 rw-core 资产。新服务未启动或未在配置端口监听时会自动恢复旧文件和旧服务；失败日志会保留 `/tmp/remnanode-upgrade.*` 备份目录供人工检查。正常成功后事务备份会删除。
+`upgrade.sh` 在替换前备份 binary、service、support、`node.env` 和可选 rw-core 资产。新服务未启动或未监听配置端口时会恢复旧文件与运行状态；失败日志保留事务目录供检查。
 
-版本回退使用本项目确实发布过的旧 tag：`sudo RNL_TAG=vX.Y.Z bash upgrade.sh --yes`，同样经过摘要校验和事务门禁；不要使用参考仓库的 `v0.8.x/v1.x` tag。
-
-## 7. 常见问题
-
-| 问题 | 处理 |
-|------|------|
-| install 404 | Release 未发布或 tag 名不匹配（需 `v` 前缀） |
-| Panel 连不上 | 检查 `SECRET_KEY`、防火墙、`NODE_PORT` |
-| nft 无规则 | 进程需 `CAP_NET_ADMIN`；见 systemd unit |
-| 升级后 Xray 未更新 | 使用 `--upgrade-xray` 或 `RNL_UPGRADE_XRAY=1` |
+版本回退只允许使用本项目确实发布过的旧 tag：`sudo RNL_TAG=vX.Y.Z bash upgrade.sh --yes`。不得使用参考仓库的历史 tag。

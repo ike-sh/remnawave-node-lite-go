@@ -14,7 +14,7 @@
 - 新增统一 Node API 边界，覆盖 Zod 等价的必填字段、联合类型、UUID/IP、枚举、nullable/default 和数组长度校验。
 - 新增 Linux network namespace nftables 与 socket-kill 集成门禁，真实覆盖双栈规则替换、封禁、解封、重建、退出清理和 TCP 连接关闭。
 - 新增固定官方 JSON 摘要的 ASN 构建链，Release 同时发布 compact `asn-prefixes.bin` 与 `SHA256SUMS`。
-- 新增 `448 MiB / 1 CPU / no-swap` 真实 rw-core 资源门禁，50k 用户场景峰值为 `143.9 MiB`。
+- 新增 `448 MiB / 1 CPU / no-swap` 真实 rw-core 资源门禁；M6 工程基线的 50k 用户场景峰值为 `143.9 MiB`，M8 冻结候选仍须重跑。
 
 ### 安全
 
@@ -30,8 +30,9 @@
 - 对齐官方边界细节：未知对象字段剥离、`forceRestart` 默认 false、空字符串与无最小长度数组、五种用户联合类型、数值型 nftables timeout。
 - Xray 启动、停止、健康检查和自然退出改为显式四态生命周期；stop 可取消正在启动的 core，失败/超时不再提交配置或 hash，所有子进程均被回收。
 - 移除非官方的 `last-start.json` 持久化与开机旧配置恢复；Node 重启后由 Panel 健康检查重新下发 start，`healthcheck` 只读缓存状态。
-- Panel stop 固定先清理插件再停止 core；正常停止先发 SIGINT、超时升级 SIGKILL，Linux 上 Node 异常退出也不会遗留孤儿 rw-core。
-- 插件同步改为不可变 plan 的 `apply -> Xray reconcile -> commit` 事务；nft/Xray 失败不再提前提交状态，并会尝试恢复上一份 firewall plan。
+- Panel stop 固定先确认 core 停止再清理插件；停止失败时保留插件快照与 nft 规则，避免运行中的 core 出现无过滤窗口。
+- Linux 将 rw-core 置于独立进程组，SIGINT、超时 SIGKILL 和 leader 自然退出后的兜底清理覆盖整个进程组；parent-death signal 保护直接子进程，Node 硬崩后的后代清理由 init manager 在 M8 实测。
+- 插件同步改为不可变 plan 的 `apply -> Xray reconcile -> commit` 事务；nft/Xray 失败不再提前提交状态，并会尝试恢复上一份 firewall plan。`plugin sync/recreate` 与 `xray start/stop` 共用应用层 lifecycle gate，消除 core 启动配置与插件快照竞态。
 - nftables 初始化、双栈批处理、ingress/torrent 解封、recreate 重放、错误传播和退出清表统一收口；缺失元素的多种 nft 错误文案均按幂等成功处理。
 - nft 不可用时合法配置仍按官方语义接受，但 torrent effective state 保持禁用；reset 不再丢弃未 collect reports，ASN/shared list 降级会写入明确日志。
 - listener 异常不再从 goroutine 调用 `log.Fatalf` 跳过清理；统一关闭路径先停止 rw-core，再删除本项目 nftables 表。
@@ -39,6 +40,9 @@
 - 连接踢除会规范化并去重 IP，保护非法、特殊、本机和白名单地址；缺少 capability、IP 查询失败、超时或任一 `ss -K` 失败不再伪报成功。
 - `get-users-ip-list` 优先使用单次批量 RPC；旧 core 只在 `UNIMPLEMENTED` 时降级到最多 8 个固定 worker，并缓存 capability，消除 N+1 无界 goroutine。
 - 所有内部 Handler/Stats unary gRPC 调用增加取消传播和有界 deadline；默认 5 秒，健康探测 3 秒，批量 legacy 查询共享总预算。
+- Xray webhook 改为 64 条有界非阻塞队列和单 worker；插件关闭使用不可逆 admission fence，超时或 nft 清理失败后拒绝新 mutation 并允许 Close 重试。
+- 整机退出改为共享 25 秒预算；后台版本探测可取消并等待，rw-core 确认停止后才清理 nft 表，避免独立 timeout 累加越过 service manager 的 TERM grace。
+- 公开 `xray/stop` 串行化 start/stop，并只在 core 停止成功后 reset 插件；停止失败不再提前撤销 nft 过滤。
 - 重复执行安装脚本会进入同一可回滚升级事务；坏 systemd/OpenRC service、binary/support/node.env/rw-core 写入失败均恢复升级前文件和运行状态。
 - 卸载不再按进程名终止任意 `rw-core`，也不再删除通用 Xray 路径，只清理本项目私有进程、socket、nftables 表与 `/usr/local/{lib,share}/remnanode`。
 - 非交互安装未提供 Secret Key 时会完成落盘但保持服务停止，不再错误等待未启动服务的端口。
@@ -51,10 +55,11 @@
 - Go module、安装脚本、发布地址和文档归属切换到本仓库。
 - 建立行为兼容、架构修复和 512 MiB 小内存验收路线。
 - 契约 CI 验证固定官方提交、版本和所有引用的源码证据文件。
+- 发布门禁绑定冻结候选 commit、严格 JSON 验收证据、兼容/资源/故障结果和只允许发布文档变化的两阶段流程。
 - HTTP transport 与 stats、用户 handler、plugin 业务服务分离，业务层不再依赖 `net/http` 或自行解码 JSON。
 - 固定并校准外部 `@remnawave/node-plugins@0.4.5` schema 证据，覆盖显式 null、AS number、`ext:` 与数值边界。
 - 用最小 rw-core protobuf wire client 替换完整 Xray Go module，双架构二进制缩小约 30%。
-- Ubuntu 24.04/systemd 与 Alpine 3.22/OpenRC 均完成全新安装、升级回滚、启停、专用用户/capability、日志、磁盘和卸载隔离实测。
+- M7 已在 Ubuntu 24.04/systemd 与 Alpine 3.22/OpenRC 完成全新安装、升级回滚、启停、专用用户/capability、日志、磁盘和卸载隔离工程基线；它不替代冻结候选的 M8 验收。
 
 ## 参考仓库历史
 

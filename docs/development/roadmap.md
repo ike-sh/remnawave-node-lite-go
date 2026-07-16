@@ -45,6 +45,8 @@
 | M7 系统与供应链 | 已完成 | `checkpoint-m07-system-supply-chain` |
 | M8 发布验收 | 推进中 | - |
 
+M6/M7 的资源与发行环境数据是对应 checkpoint 的历史工程基线，不是当前 M8 候选的发布证据；冻结候选 `C` 后必须按验收协议重新执行。
+
 ## 里程碑
 
 ### M0 - 自有项目基线
@@ -108,9 +110,13 @@
 ### M8 - 发布验收
 
 - 完成真实 rw-core、Panel、nftables、systemd/OpenRC 集成测试。
+- 验证 `xray start/stop` 与 `plugin sync/recreate` 的外层 lifecycle gate、固定锁序、取消传播和完整并发交错矩阵。
+- 在 systemd/OpenRC 中用 wrapper + child 验证 rw-core 独立进程组、整组信号、leader 自然退出和 Node 硬崩后的后代清理。
 - 通过 `go test`、race、vet、静态检查、脚本检查和多架构构建。
 - 在目标资源限制下完成持续运行与故障恢复测试。
 - 更新兼容矩阵、风险清单、运维文档和 `0.1.0` Release 资料。
+- 先冻结代码候选 commit；全部验收记录绑定该 commit，之后只允许发布文档白名单变化。
+- 使用严格 JSON、文件摘要和 Git ancestry 校验 M8 证据；协议见 [`release-acceptance.md`](release-acceptance.md)。
 
 ## Checkpoint 规则
 

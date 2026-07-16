@@ -35,7 +35,7 @@ transport 测试为 provider、连接 dropper、plugin service 和 Xray manager 
 
 ## Go Xray 生命周期实现
 
-M3 以官方 `src/modules/xray-core/xray.service.ts`、`xray-process.service.ts`、`xray.module.ts` 和应用关闭钩子为行为依据：Node 启动时 Xray 缓存状态为离线，不从磁盘恢复旧 Panel 配置；`healthcheck` 只读取缓存状态；Panel stop 先重置插件再停止 core；应用退出也停止 core。
+M3 以官方 `src/modules/xray-core/xray.service.ts`、`xray-process.service.ts`、`xray.module.ts` 和应用关闭钩子为行为依据：Node 启动时 Xray 缓存状态为离线，不从磁盘恢复旧 Panel 配置；`healthcheck` 只读取缓存状态；Panel stop 同时承担停止 core 和清理插件的语义。Go 实现先确认 core 已停止再重置插件，避免停止失败时提前撤销过滤规则；应用退出采用相同顺序。
 
 Go manager 使用单一显式状态，而不是多个可形成非法组合的布尔量：
 
@@ -48,15 +48,17 @@ Go manager 使用单一显式状态，而不是多个可形成非法组合的布
 | `starting` | stop | `stopping` | generation 失效并取消 start，由 stop 接管进程 |
 | `running` | stop 或自然退出 | `stopping` / `stopped` | 回收进程并清理配置与 hash 状态 |
 
-生命周期修改由独占 operation mutex 串行化，状态发布与所有权交接在 manager mutex 下完成。每个 start 使用单调 generation，旧操作不能覆盖新 stop；并发 start 返回官方兼容的 `Request already in progress`。所有成功 spawn 的子进程都由唯一 `Wait` goroutine 回收，正常 stop 先发送 SIGINT，超时后 SIGKILL；Linux 额外设置 parent-death signal，防止 Node 异常退出后遗留孤儿 core。
+生命周期修改由独占 operation mutex 串行化，状态发布与所有权交接在 manager mutex 下完成。每个 start 使用单调 generation，旧操作不能覆盖新 stop；并发 start 返回官方兼容的 `Request already in progress`。所有成功 spawn 的子进程都由唯一 `Wait` goroutine 回收。Linux 将 rw-core 启动在独立 process group 中并设置 parent-death signal；正常 stop 的 SIGINT、超时后的 SIGKILL 以及组长自然退出后的兜底清理都作用于整个进程组。parent-death signal 只直接保护组长，Node 硬崩时后代进程的最终清理仍依赖 systemd cgroup/OpenRC supervisor，M8 必须在两种发行环境用 wrapper + child 实测，不能把该信号表述为对所有后代的单独保证。
 
-进程级测试覆盖 pending 到 active 的提交边界、并发 start、start 与 stop 交错、context cancel、启动超时、就绪前后退出、自然退出、并发/重复 stop、SIGINT 与 SIGKILL 升级。路由测试同时固定 Panel stop 的 `ResetPlugins -> Stop` 顺序。
+进程级测试覆盖 pending 到 active 的提交边界、并发 start、start 与 stop 交错、context cancel、启动超时、就绪前后退出、自然退出、并发/重复 stop、SIGINT 与 SIGKILL 升级。Linux 测试额外固定独立进程组、整组信号与后代清理。路由测试固定 Panel stop 的 `Stop -> ResetPlugins` 顺序，并验证 Stop 失败时保留插件快照和 nft 规则。
 
 ## Go 插件与 nftables 实现
 
 M4 以官方 `plugin.service.ts`、`nft.service.ts`、`plugin-state.service.ts`、torrent blocker state/webhook handler，以及 `@remnawave/node-plugins@0.4.5` 为行为依据。每次变更先从已校验配置构建不可变 plan，一次完成 shared list/ASN 展开、connection-drop whitelist、torrent effective state 和 firewall plan；随后严格执行 `firewall apply -> Xray reconcile -> state commit`。firewall 或 Xray 失败时不发布新状态，并尽力重放上一份 firewall plan，使同一 Panel 请求可以安全重试。
 
-所有 sync、reset、webhook、block、unblock、recreate 和 close 操作由 Service operation mutex 串行化。nftables 初始化与 Go 对象构造分离；缺少 `CAP_NET_ADMIN` 或 nft 初始化失败时仍接受合法插件配置，但 ingress/egress/torrent 保持不可用，torrent 状态不会错误注入 Xray。reset 只替换插件快照，不丢弃 Panel 尚未 collect 的 torrent reports；recreate 重放当前已提交过滤计划，而不是错误地创建空表。
+Initialize、sync、reset、block、unblock 与 recreate 通过容量为 1、支持 context 取消的 operation gate 串行化。HTTP 应用层还使用同一个 Xray lifecycle gate 串行化 `plugin sync/recreate` 与 `xray start/stop`，固定锁序为 `Xray lifecycle gate -> Plugin operation gate -> Manager`，防止 core 启动读取配置期间插件快照变化；未来新增绕过 HTTP 的内部入口时也必须复用该协调器。webhook 接收不等待 gate，而是非阻塞写入最多 64 条的有界队列，再由单 worker 获取同一 gate 后执行 nft/report 副作用；collect 只在 State 锁下原子 drain 报告。nftables 初始化与 Go 对象构造分离；缺少 `CAP_NET_ADMIN` 或 nft 初始化失败时仍接受合法插件配置，但 ingress/egress/torrent 保持不可用，torrent 状态不会错误注入 Xray。reset 只替换插件快照，不丢弃 Panel 尚未 collect 的 torrent reports；recreate 重放当前已提交过滤计划，而不是错误地创建空表。
+
+Close 先设置不可逆的 mutation admission fence 并停止 webhook worker；此前已经接纳的 mutation 可以完成，新 mutation 一律拒绝。等待 gate、删除 nft 表和 join worker 共享调用方 deadline，并由服务再限制为最多 15 秒；清理失败保留已提交快照，只允许后续 Close 重试，不会重新开放业务操作。
 
 nft backend 在单个 `nft -f` 原子事务内替换 IPv4/IPv6 私有表和过滤元素，批量处理 block，unblock 同时覆盖 torrent/ingress 的双栈 set。进程退出先停止 rw-core，再删除 `remnanode`/`remnanode6`，listener 失败也会进入同一清理路径。Linux network namespace 集成测试真实覆盖初始化、两次 plan 替换、双栈 block、重复 block/unblock、recreate 和 close；M4 checkpoint 已在 Linux arm64 6.8 内核与 nftables 上通过，amd64 测试二进制已交叉编译并纳入同一 CI 门控。
 
@@ -83,6 +85,8 @@ M7 将外部 TLS 最低版本收敛为 1.3，并禁用 Go HTTP/2 自动协商以
 systemd 与 OpenRC 均使用专用 `remnanode:remnanode` 账号，配置为 `root:remnanode 0640`，状态和日志目录为 `remnanode:remnanode 0750`。服务只获得 `CAP_NET_ADMIN` 与 `CAP_NET_BIND_SERVICE`；systemd 同时将 bounding set 收紧到这两项，并启用 `NoNewPrivileges`、只读系统、namespace/syscall/address-family 限制、`448 MiB` 内存、零 swap、1 CPU 和 256 tasks。Alpine 3.22 的 supervise-daemon 实测 `CapInh/Prm/Eff/Amb=0x1400`、`NoNewPrivs=1`，且由服务派生的 `nft` 子进程可创建私有表。
 
 项目资产位于 `/usr/local/lib/remnanode` 和 `/usr/local/share/remnanode`，不再接管通用 Xray 路径。Release 归档、rw-core zip、自定义 core 与 ASN 数据都必须通过 SHA-256 和结构/版本自检后才写盘；固定 rw-core `v26.6.27` 不允许覆盖其已审计摘要。升级会备份 binary、service、support、`node.env` 以及可选 rw-core 资产，刷新后必须重新通过服务与端口门禁，否则自动逐项恢复。Ubuntu/systemd 与 Alpine/OpenRC 的坏 service 注入均验证了摘要和运行状态恢复；完全卸载也验证了不会终止无关同名进程或删除通用 Xray 文件。
+
+整机退出使用一个共享的 25 秒应用预算，而不是为各组件串行重置 timeout。HTTPS/Unix intake、日志轮转和后台版本探测先收到取消；rw-core 最多使用 5 秒 SIGINT 加 5 秒 SIGKILL，确认 core 停止后，插件再使用剩余预算清理私有 nft 表。core 或插件的瞬时清理错误会在同一 deadline 内重试一次。公开 `xray/stop` 也串行化 start/stop，只有 core 确认停止后才 reset 插件；Stop 失败会保留规则与快照。systemd 提供 30 秒 TERM grace，OpenRC 提供 `TERM/30/KILL/5` 外层兜底；deadline 或清理失败会形成聚合错误，不能被记录为优雅退出成功。
 
 ## 路由清单
 
