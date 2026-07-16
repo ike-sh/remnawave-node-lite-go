@@ -1,12 +1,15 @@
 package contract
 
 import (
+	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/executil"
 )
 
 func TestPinnedOfficialSourceEvidence(t *testing.T) {
@@ -15,11 +18,13 @@ func TestPinnedOfficialSourceEvidence(t *testing.T) {
 		t.Skip("REMNANODE_OFFICIAL_SOURCE is not set")
 	}
 
-	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command, err := executil.Run(ctx, nil, 256, "git", "-C", root, "rev-parse", "HEAD")
 	if err != nil {
 		t.Fatalf("read official Git HEAD: %v", err)
 	}
-	if got := strings.TrimSpace(string(head)); got != OfficialNodeCommit {
+	if got := strings.TrimSpace(string(command.Stdout)); got != OfficialNodeCommit {
 		t.Fatalf("official Git HEAD = %s, want %s", got, OfficialNodeCommit)
 	}
 

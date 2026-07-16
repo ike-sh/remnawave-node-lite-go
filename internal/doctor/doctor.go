@@ -1,13 +1,16 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/config"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/executil"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/version"
 )
@@ -162,7 +165,9 @@ func checkXrayBinary(bin string) []result {
 			fixHint: "sudo chmod +x " + bin,
 		}}
 	}
-	out, err := exec.Command(bin, "version").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	command, err := executil.Run(ctx, nil, 4<<10, bin, "version")
 	if err != nil {
 		return []result{{
 			level:  "WARN",
@@ -170,7 +175,7 @@ func checkXrayBinary(bin string) []result {
 			detail: bin + " 存在但 version 命令失败",
 		}}
 	}
-	line := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+	line := strings.TrimSpace(strings.Split(string(command.Stdout), "\n")[0])
 	return []result{{level: "OK", title: "rw-core", detail: line}}
 }
 

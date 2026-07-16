@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
 )
@@ -117,6 +118,30 @@ func TestDropIPsPropagatesCanceledContext(t *testing.T) {
 	cancel()
 	if dropper.DropIPs(ctx, []string{"203.0.113.10"}) {
 		t.Fatal("canceled socket kill must report failure")
+	}
+}
+
+func TestDropIPsAppliesOneDeadlineToWholeBatch(t *testing.T) {
+	t.Parallel()
+
+	dropper, _ := testDropper(true)
+	dropper.batchTimeout = 40 * time.Millisecond
+	dropper.socketTimeout = time.Second
+	var calls atomic.Int64
+	dropper.killSockets = func(ctx context.Context, _ string) error {
+		calls.Add(1)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	started := time.Now()
+	if dropper.DropIPs(context.Background(), []string{"203.0.113.10", "203.0.113.11"}) {
+		t.Fatal("expired batch reported success")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("batch deadline returned after %s", elapsed)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("socket killer calls = %d, want 1 before batch expiry", got)
 	}
 }
 

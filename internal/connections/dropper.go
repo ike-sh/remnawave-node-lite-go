@@ -21,9 +21,14 @@ type Dropper struct {
 	isWhitelisted func(ip string) bool
 	localIPs      map[netip.Addr]struct{}
 	killSockets   func(context.Context, string) error
+	socketTimeout time.Duration
+	batchTimeout  time.Duration
 }
 
-const socketKillTimeout = 3 * time.Second
+const (
+	socketKillTimeout      = 3 * time.Second
+	socketKillBatchTimeout = 15 * time.Second
+)
 
 func NewDropper(isWhitelisted func(ip string) bool) *Dropper {
 	if isWhitelisted == nil {
@@ -34,6 +39,8 @@ func NewDropper(isWhitelisted func(ip string) bool) *Dropper {
 		isWhitelisted: isWhitelisted,
 		localIPs:      discoverLocalIPs(),
 		killSockets:   netadmin.KillSocketsByIP,
+		socketTimeout: socketKillTimeout,
+		batchTimeout:  socketKillBatchTimeout,
 	}
 }
 
@@ -48,10 +55,23 @@ func (d *Dropper) DropIPs(ctx context.Context, ips []string) bool {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	batchTimeout := d.batchTimeout
+	if batchTimeout <= 0 {
+		batchTimeout = socketKillBatchTimeout
+	}
+	ctx, cancelBatch := context.WithTimeout(ctx, batchTimeout)
+	defer cancelBatch()
+	socketTimeout := d.socketTimeout
+	if socketTimeout <= 0 {
+		socketTimeout = socketKillTimeout
+	}
 
 	ok := true
 	seen := make(map[netip.Addr]struct{}, len(ips))
 	for _, raw := range ips {
+		if ctx.Err() != nil {
+			return false
+		}
 		ip := strings.TrimSpace(raw)
 		addr, err := netip.ParseAddr(ip)
 		if err != nil {
@@ -78,7 +98,7 @@ func (d *Dropper) DropIPs(ctx context.Context, ips []string) bool {
 			continue
 		}
 
-		killCtx, cancel := context.WithTimeout(ctx, socketKillTimeout)
+		killCtx, cancel := context.WithTimeout(ctx, socketTimeout)
 		err = d.killSockets(killCtx, canonical)
 		cancel()
 		if err != nil {
@@ -99,6 +119,12 @@ func (d *Dropper) DropUsers(ctx context.Context, provider IPListProvider, userID
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	batchTimeout := d.batchTimeout
+	if batchTimeout <= 0 {
+		batchTimeout = socketKillBatchTimeout
+	}
+	ctx, cancelBatch := context.WithTimeout(ctx, batchTimeout)
+	defer cancelBatch()
 
 	ok := true
 	seen := make(map[string]struct{}, len(userIDs))

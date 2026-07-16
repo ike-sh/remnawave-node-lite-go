@@ -7,9 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"os/exec"
 	"strings"
+	"time"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/executil"
 )
+
+const socketKillCommandTimeout = 3 * time.Second
 
 // KillSocketsByIP closes TCP sockets where ip matches source or destination.
 func KillSocketsByIP(ctx context.Context, ip string) error {
@@ -21,6 +25,8 @@ func KillSocketsByIP(ctx context.Context, ip string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx, cancel := context.WithTimeout(ctx, socketKillCommandTimeout)
+	defer cancel()
 
 	family := "-4"
 	target := addr.String()
@@ -37,11 +43,11 @@ func KillSocketsByIP(ctx context.Context, ip string) error {
 			errs = append(errs, err)
 			break
 		}
-		output, err := exec.CommandContext(ctx, "ss", family, "-K", direction, target).CombinedOutput()
+		result, err := executil.Run(ctx, nil, 512, "ss", family, "-K", direction, target)
 		if err != nil {
-			detail := strings.TrimSpace(string(output))
-			if len(detail) > 512 {
-				detail = detail[:512]
+			detail := strings.TrimSpace(string(result.DiagnosticOutput()))
+			if result.AnyTruncated() {
+				detail += "..."
 			}
 			if detail != "" {
 				err = fmt.Errorf("ss -K %s %s: %w: %s", direction, addr, err, detail)

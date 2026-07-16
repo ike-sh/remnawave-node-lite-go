@@ -24,6 +24,7 @@ type NetworkMonitor struct {
 	current      *NetworkInterface
 	pollInterval time.Duration
 	stop         chan struct{}
+	stopOnce     sync.Once
 }
 
 var defaultMonitor = NewNetworkMonitor()
@@ -42,17 +43,18 @@ func NewNetworkMonitor() *NetworkMonitor {
 	if m.available {
 		m.defaultIface = resolveDefaultInterface()
 		m.previous = readProcNetDev()
+		stampInterfaceSamples(m.previous, time.Now())
 		go m.loop()
 	}
 	return m
 }
 
 func (m *NetworkMonitor) Stop() {
-	select {
-	case <-m.stop:
-	default:
-		close(m.stop)
-	}
+	m.stopOnce.Do(func() {
+		if m.stop != nil {
+			close(m.stop)
+		}
+	})
 }
 
 func (m *NetworkMonitor) GetDefaultInterface() *NetworkInterface {
@@ -79,15 +81,25 @@ func (m *NetworkMonitor) loop() {
 }
 
 func (m *NetworkMonitor) tick() {
-	current := readProcNetDev()
-	now := time.Now()
+	m.updateSamplesForInterface(readProcNetDev(), time.Now(), resolveDefaultInterface())
+}
 
+func (m *NetworkMonitor) updateSamples(current map[string]interfaceSample, now time.Time) {
+	m.mu.RLock()
+	defaultIface := m.defaultIface
+	m.mu.RUnlock()
+	m.updateSamplesForInterface(current, now, defaultIface)
+}
+
+func (m *NetworkMonitor) updateSamplesForInterface(current map[string]interfaceSample, now time.Time, defaultIface string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.defaultIface != "" {
-		if cur, ok := current[m.defaultIface]; ok {
-			if prev, ok := m.previous[m.defaultIface]; ok && !prev.timestamp.IsZero() {
+	m.defaultIface = defaultIface
+	m.current = nil
+	if defaultIface != "" {
+		if cur, ok := current[defaultIface]; ok {
+			if prev, ok := m.previous[defaultIface]; ok && !prev.timestamp.IsZero() {
 				elapsed := now.Sub(prev.timestamp).Seconds()
 				// uint64 counter wrap / interface reset makes cur < prev; the
 				// unsigned subtraction would yield an absurdly large rate, so
@@ -96,7 +108,7 @@ func (m *NetworkMonitor) tick() {
 					rxRate := float64(cur.rxBytes-prev.rxBytes) / elapsed
 					txRate := float64(cur.txBytes-prev.txBytes) / elapsed
 					m.current = &NetworkInterface{
-						Interface:     m.defaultIface,
+						Interface:     defaultIface,
 						RxBytesPerSec: int64(rxRate),
 						TxBytesPerSec: int64(txRate),
 						RxTotal:       int64(cur.rxBytes),
@@ -109,7 +121,15 @@ func (m *NetworkMonitor) tick() {
 
 	for name, sample := range current {
 		sample.timestamp = now
-		m.previous[name] = sample
+		current[name] = sample
+	}
+	m.previous = current
+}
+
+func stampInterfaceSamples(samples map[string]interfaceSample, now time.Time) {
+	for name, sample := range samples {
+		sample.timestamp = now
+		samples[name] = sample
 	}
 }
 
@@ -139,7 +159,7 @@ func readProcNetDev() map[string]interfaceSample {
 		iface := strings.TrimSuffix(parts[0], ":")
 		rx, _ := strconv.ParseUint(parts[1], 10, 64)
 		tx, _ := strconv.ParseUint(parts[9], 10, 64)
-		result[iface] = interfaceSample{rxBytes: rx, txBytes: tx, timestamp: time.Now()}
+		result[iface] = interfaceSample{rxBytes: rx, txBytes: tx}
 	}
 	return result
 }
