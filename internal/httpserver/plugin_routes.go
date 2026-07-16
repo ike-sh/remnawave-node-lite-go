@@ -21,7 +21,11 @@ func (s *Server) handlePluginSync(w http.ResponseWriter, r *http.Request) {
 			Config: *request.Plugin.Value.Config,
 		}
 	}
-	writeNodeResponse(w, s.pluginService.Sync(command))
+	if !s.acquireXrayLifecycle(r.Context()) {
+		panic(http.ErrAbortHandler)
+	}
+	defer s.releaseXrayLifecycle()
+	writeNodeResponse(w, s.pluginService.SyncContext(r.Context(), command))
 }
 
 func (s *Server) handlePluginCollectReports(w http.ResponseWriter) {
@@ -37,7 +41,7 @@ func (s *Server) handlePluginBlockIPs(w http.ResponseWriter, r *http.Request) {
 	for _, item := range *request.IPs {
 		items = append(items, plugin.BlockIP{IP: *item.IP, Timeout: *item.Timeout})
 	}
-	writeNodeResponse(w, s.pluginService.BlockIPs(items))
+	writeNodeResponse(w, s.pluginService.BlockIPsContext(r.Context(), items))
 }
 
 func (s *Server) handlePluginUnblockIPs(w http.ResponseWriter, r *http.Request) {
@@ -45,9 +49,13 @@ func (s *Server) handlePluginUnblockIPs(w http.ResponseWriter, r *http.Request) 
 	if !decodeNodeRequest(w, r, &request) {
 		return
 	}
-	writeNodeResponse(w, s.pluginService.UnblockIPs(*request.IPs))
+	writeNodeResponse(w, s.pluginService.UnblockIPsContext(r.Context(), *request.IPs))
 }
 
-func (s *Server) handlePluginRecreateTables(w http.ResponseWriter) {
-	writeNodeResponse(w, s.pluginService.RecreateTables())
+func (s *Server) handlePluginRecreateTables(w http.ResponseWriter, r *http.Request) {
+	if !s.acquireXrayLifecycle(r.Context()) {
+		panic(http.ErrAbortHandler)
+	}
+	defer s.releaseXrayLifecycle()
+	writeNodeResponse(w, s.pluginService.RecreateTablesContext(r.Context()))
 }

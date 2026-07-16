@@ -28,6 +28,8 @@ import (
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xray"
 )
 
+const nodeShutdownTimeout = 25 * time.Second
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -111,13 +113,24 @@ func runNode() (runErr error) {
 	if err := pluginService.Initialize(); err != nil {
 		log.Printf("warning: plugin nftables unavailable; nft-dependent plugins are disabled: %v", err)
 	}
+	cleanup := &nodeComponentCleanup{
+		stopNetwork:     system.DefaultNetworkMonitor().Stop,
+		shutdownManager: manager.Shutdown,
+		stopCore: func() error {
+			if response := manager.Stop(); !response.IsStopped {
+				return errors.New("process did not stop")
+			}
+			return nil
+		},
+		closePlugin: pluginService.CloseContext,
+	}
+	cleanupComponents := cleanup.Run
+	cleanupCompleted := false
 	defer func() {
-		system.DefaultNetworkMonitor().Stop()
-		if response := manager.Stop(); !response.IsStopped {
-			runErr = errors.Join(runErr, errors.New("stop rw-core: process did not stop"))
-		}
-		if err := pluginService.Close(); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("close plugin service: %w", err))
+		if !cleanupCompleted {
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), nodeShutdownTimeout)
+			runErr = errors.Join(runErr, cleanupComponents(cleanupCtx))
+			cancelCleanup()
 		}
 	}()
 
@@ -157,9 +170,13 @@ func runNode() (runErr error) {
 	log.Printf("internal config socket listening on %s", cfg.InternalSocketPath)
 	startServer("internal config socket", func() error { return unixServer.ListenAndServe(ctx) })
 	log.Printf("remnawave-node-lite-go listening on %s", cfg.HTTPAddr())
-	startServer("HTTPS server", server.ListenAndServeTLS)
+	startServer("HTTPS server", func() error { return server.ListenAndServeTLS(ctx) })
 
-	go manager.StartLogRotation(ctx)
+	servers.Add(1)
+	go func() {
+		defer servers.Done()
+		manager.StartLogRotation(ctx)
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -168,8 +185,10 @@ func runNode() (runErr error) {
 	}
 	stop()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), nodeShutdownTimeout)
 	defer cancel()
+	cleanupDone := make(chan error, 1)
+	go func() { cleanupDone <- cleanupComponents(shutdownCtx) }()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		runErr = errors.Join(runErr, fmt.Errorf("shutdown HTTPS server: %w", err))
 		if closeErr := server.Close(); closeErr != nil {
@@ -187,6 +206,8 @@ func runNode() (runErr error) {
 	case <-shutdownCtx.Done():
 		runErr = errors.Join(runErr, fmt.Errorf("wait for servers: %w", shutdownCtx.Err()))
 	}
+	runErr = errors.Join(runErr, <-cleanupDone)
+	cleanupCompleted = true
 	for {
 		select {
 		case err := <-serveErrors:

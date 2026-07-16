@@ -8,9 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/net/netutil"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/auth"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/bodylimit"
@@ -25,11 +29,22 @@ import (
 
 type Server struct {
 	httpServer     *http.Server
+	maxConnections int
+	xrayGateOnce   sync.Once
+	xrayGate       chan struct{}
 	manager        xrayController
 	statsService   *stats.Service
 	handlerService *nodehandler.Service
 	pluginService  pluginController
 }
+
+const (
+	defaultMaxConnections = 128
+	defaultMaxHandlers    = 32
+	lowMemoryConnections  = 16
+	lowMemoryHandlers     = 4
+	maxRequestDuration    = 5 * time.Minute
+)
 
 type xrayController interface {
 	Start(ctx context.Context, request xray.StartRequest) xray.StartResponse
@@ -38,12 +53,12 @@ type xrayController interface {
 }
 
 type pluginController interface {
-	ResetPlugins() error
-	Sync(request *plugin.SyncPlugin) plugin.AcceptedResponse
+	ResetPluginsContext(ctx context.Context) error
+	SyncContext(ctx context.Context, request *plugin.SyncPlugin) plugin.AcceptedResponse
 	CollectReports() plugin.CollectReportsResponse
-	BlockIPs(items []plugin.BlockIP) plugin.AcceptedResponse
-	UnblockIPs(ips []string) plugin.AcceptedResponse
-	RecreateTables() plugin.AcceptedResponse
+	BlockIPsContext(ctx context.Context, items []plugin.BlockIP) plugin.AcceptedResponse
+	UnblockIPsContext(ctx context.Context, ips []string) plugin.AcceptedResponse
+	RecreateTablesContext(ctx context.Context) plugin.AcceptedResponse
 	ReportsCount() int
 }
 
@@ -60,9 +75,12 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 		pluginService:  pluginService,
 	}
 
+	maxConnections, maxHandlers := serverCapacity(cfg.LowMemory)
 	nodeRoutes := bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes)))
-	protected := requireJWT(validator, nodeRoutes)
+	limited := limitActiveHandlers(maxHandlers, withRequestTimeout(maxRequestDuration, nodeRoutes))
+	protected := requireJWT(validator, requireKnownNodeRoute(limited))
 
+	server.maxConnections = maxConnections
 	server.httpServer = &http.Server{
 		Addr:              cfg.HTTPAddr(),
 		Handler:           rejectUnknownPaths(protected),
@@ -98,12 +116,82 @@ func rejectUnknownPaths(nodeHandler http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) ListenAndServeTLS() error {
-	err := s.httpServer.ListenAndServeTLS("", "")
+func requireKnownNodeRoute(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := lookupNodeRoute(r.Method, r.URL.Path); !ok {
+			panic(http.ErrAbortHandler)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) ListenAndServeTLS(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.httpServer.BaseContext = func(net.Listener) context.Context { return ctx }
+	listener, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return err
+	}
+	limited := netutil.LimitListener(listener, s.maxConnections)
+	err = s.httpServer.ServeTLS(limited, "", "")
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+func serverCapacity(lowMemory bool) (connections, handlers int) {
+	if lowMemory {
+		return lowMemoryConnections, lowMemoryHandlers
+	}
+	return defaultMaxConnections, defaultMaxHandlers
+}
+
+func limitActiveHandlers(maxActive int, next http.Handler) http.Handler {
+	if maxActive <= 0 {
+		maxActive = 1
+	}
+	slots := make(chan struct{}, maxActive)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+			next.ServeHTTP(w, r)
+		default:
+			r.Close = true
+			w.Header().Set("Connection", "close")
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "request capacity unavailable", http.StatusServiceUnavailable)
+		}
+	})
+}
+
+func withRequestTimeout(timeout time.Duration, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) acquireXrayLifecycle(ctx context.Context) bool {
+	s.xrayGateOnce.Do(func() { s.xrayGate = make(chan struct{}, 1) })
+	select {
+	case s.xrayGate <- struct{}{}:
+		if ctx.Err() != nil {
+			s.releaseXrayLifecycle()
+			return false
+		}
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *Server) releaseXrayLifecycle() {
+	<-s.xrayGate
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -125,10 +213,17 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	case routeXrayHealthcheck:
 		writeJSON(w, http.StatusOK, envelope[xray.HealthResponse]{Response: s.manager.Health()})
 	case routeXrayStop:
-		if err := s.pluginService.ResetPlugins(); err != nil {
-			slog.Warn("failed to reset plugins before stopping Xray", "error", err)
+		if !s.acquireXrayLifecycle(r.Context()) {
+			panic(http.ErrAbortHandler)
 		}
-		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: s.manager.Stop()})
+		defer s.releaseXrayLifecycle()
+		response := s.manager.Stop()
+		if response.IsStopped {
+			if err := s.pluginService.ResetPluginsContext(r.Context()); err != nil {
+				slog.Warn("failed to reset plugins after stopping Xray", "error", err)
+			}
+		}
+		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: response})
 	case routeXrayStart:
 		s.handleStart(w, r)
 
@@ -182,7 +277,7 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	case routePluginUnblockIPs:
 		s.handlePluginUnblockIPs(w, r)
 	case routePluginRecreateTables:
-		s.handlePluginRecreateTables(w)
+		s.handlePluginRecreateTables(w, r)
 	}
 }
 

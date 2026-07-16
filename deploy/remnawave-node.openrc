@@ -26,6 +26,7 @@ rc_ulimit="-n 1048576"
 respawn_delay=5
 respawn_max=5
 respawn_period=60
+retry="TERM/30/KILL/5"
 
 depend() {
 	need net

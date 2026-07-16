@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
+	"golang.org/x/net/netutil"
 )
 
 // InternalTokenHeader is the preferred auth channel (not visible in process argv).
@@ -20,7 +21,12 @@ const InternalTokenHeader = "X-Internal-Token"
 // InternalTokenEnvVar is passed to rw-core for future header-based auth.
 const InternalTokenEnvVar = "RNL_INTERNAL_REST_TOKEN"
 
-const maxWebhookBodyBytes = 8 << 10
+const (
+	maxWebhookBodyBytes       = 8 << 10
+	maxUnixConnections        = 8
+	maxConcurrentUnixHandlers = 4
+	maxUnixHeaderBytes        = 8 << 10
+)
 
 type Provider interface {
 	// CurrentConfigJSON returns the pre-serialized config; the server writes
@@ -41,6 +47,11 @@ type Server struct {
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancelServe := context.WithCancel(ctx)
+	defer cancelServe()
 	if s.Path == "" {
 		return errors.New("unix socket path is required")
 	}
@@ -63,30 +74,70 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		_ = listener.Close()
 		return err
 	}
+	defer os.Remove(s.Path)
+	listener = netutil.LimitListener(listener, maxUnixConnections)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/internal/get-config", s.handleGetConfig)
 	mux.HandleFunc("/internal/webhook", s.handleWebhook)
 	s.httpServer = &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
+		Handler:           limitUnixHandlers(maxConcurrentUnixHandlers, withUnixRequestTimeout(30*time.Second, mux)),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    maxUnixHeaderBytes,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
 
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("failed to shutdown unix config server", "error", err)
+			if closeErr := s.httpServer.Close(); closeErr != nil {
+				slog.Warn("failed to force-close unix config server", "error", closeErr)
+			}
 		}
-		_ = os.Remove(s.Path)
 	}()
 
 	err = s.httpServer.Serve(listener)
+	cancelServe()
+	<-shutdownDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+func limitUnixHandlers(maxActive int, next http.Handler) http.Handler {
+	if maxActive <= 0 {
+		maxActive = 1
+	}
+	slots := make(chan struct{}, maxActive)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+			next.ServeHTTP(w, r)
+		default:
+			r.Close = true
+			w.Header().Set("Connection", "close")
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "internal request capacity unavailable", http.StatusServiceUnavailable)
+		}
+	})
+}
+
+func withUnixRequestTimeout(timeout time.Duration, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {

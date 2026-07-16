@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
 )
@@ -169,5 +171,40 @@ func TestWebhookRejectsInvalidOrOversizedPayloadBeforeProcessor(t *testing.T) {
 		if processor.calls != 0 {
 			t.Fatalf("invalid webhook reached processor: %q", body[:min(len(body), 64)])
 		}
+	}
+}
+
+func TestUnixHandlerLimitRejectsInsteadOfQueueing(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	handler := limitUnixHandlers(1, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	firstDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+		close(firstDone)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("first unix handler did not start")
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("overload status = %d", response.Code)
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first unix handler did not finish")
 	}
 }

@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	contractspec "github.com/Luxiaba/remnawave-node-lite-go/internal/contract"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/system"
@@ -19,10 +21,19 @@ type recordingXrayController struct {
 	stopCalls  atomic.Int64
 	request    xray.StartRequest
 	events     *[]string
+	startOnce  sync.Once
+	startEvent chan struct{}
+	stopResult *xray.StopResponse
 }
 
 func (x *recordingXrayController) Start(_ context.Context, request xray.StartRequest) xray.StartResponse {
 	x.startCalls.Add(1)
+	if x.events != nil {
+		*x.events = append(*x.events, "start-xray")
+	}
+	if x.startEvent != nil {
+		x.startOnce.Do(func() { close(x.startEvent) })
+	}
 	x.request = request
 	return xray.StartResponse{
 		IsStarted:       true,
@@ -37,6 +48,9 @@ func (x *recordingXrayController) Stop() xray.StopResponse {
 	x.stopCalls.Add(1)
 	if x.events != nil {
 		*x.events = append(*x.events, "stop-xray")
+	}
+	if x.stopResult != nil {
+		return *x.stopResult
 	}
 	return xray.StopResponse{IsStopped: true}
 }
@@ -103,7 +117,7 @@ func TestXrayStartRouteProducesOfficialResponseShape(t *testing.T) {
 	}
 }
 
-func TestXrayStopResetsPluginsBeforeStoppingProcess(t *testing.T) {
+func TestXrayStopResetsPluginsAfterStoppingProcess(t *testing.T) {
 	t.Parallel()
 
 	route, _ := contractspec.FindRouteByPath("/node/xray/stop")
@@ -125,8 +139,93 @@ func TestXrayStopResetsPluginsBeforeStoppingProcess(t *testing.T) {
 	if manager.stopCalls.Load() != 1 || plugins.calls.Load() != 1 {
 		t.Fatalf("calls: stop=%d reset=%d", manager.stopCalls.Load(), plugins.calls.Load())
 	}
-	if len(events) != 2 || events[0] != "reset-plugins" || events[1] != "stop-xray" {
+	if len(events) != 2 || events[0] != "stop-xray" || events[1] != "reset-plugins" {
 		t.Fatalf("stop order = %#v", events)
+	}
+}
+
+func TestXrayStopFailurePreservesPluginRules(t *testing.T) {
+	t.Parallel()
+
+	stopped := xray.StopResponse{IsStopped: false}
+	manager := &recordingXrayController{stopResult: &stopped}
+	plugins := &recordingPluginController{}
+	server := &Server{manager: manager, pluginService: plugins}
+	req := httptest.NewRequest(http.MethodGet, "/node/xray/stop", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleNodeRoutes(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"isStopped":false`) {
+		t.Fatalf("stop response = %d %s", rec.Code, rec.Body.String())
+	}
+	if plugins.calls.Load() != 0 {
+		t.Fatalf("plugin reset calls = %d, want 0", plugins.calls.Load())
+	}
+}
+
+func TestXrayStartWaitsUntilStopFinishesPluginReset(t *testing.T) {
+	t.Parallel()
+
+	resetStarted := make(chan struct{})
+	releaseReset := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseReset) }) })
+	startCalled := make(chan struct{})
+	manager := &recordingXrayController{startEvent: startCalled}
+	plugins := &recordingPluginController{resetStart: resetStarted, resetWait: releaseReset}
+	server := &Server{manager: manager, pluginService: plugins}
+
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		server.handleNodeRoutes(
+			httptest.NewRecorder(),
+			httptest.NewRequest(http.MethodGet, "/node/xray/stop", nil),
+		)
+	}()
+	select {
+	case <-resetStarted:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not enter plugin reset")
+	}
+	assertLifecycleGateHeld(t, server, "xray stop")
+
+	route, _ := contractspec.FindRouteByPath("/node/xray/start")
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	defer cancelWait()
+	observed := make(chan struct{})
+	startRequest := httptest.NewRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest)).WithContext(
+		&observedDoneContext{Context: waitCtx, observed: observed},
+	)
+	startDone := make(chan struct{})
+	go func() {
+		defer close(startDone)
+		server.handleNodeRoutes(
+			httptest.NewRecorder(),
+			startRequest,
+		)
+	}()
+	awaitTestSignal(t, observed, "xray start lifecycle wait")
+	assertLifecycleGateHeld(t, server, "xray stop")
+	if manager.startCalls.Load() != 0 {
+		t.Fatal("xray start ran before plugin reset completed")
+	}
+	releaseOnce.Do(func() { close(releaseReset) })
+	select {
+	case <-startCalled:
+	case <-time.After(time.Second):
+		t.Fatal("xray start did not run after plugin reset")
+	}
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("xray stop did not finish")
+	}
+	select {
+	case <-startDone:
+	case <-time.After(time.Second):
+		t.Fatal("xray start did not finish")
 	}
 }
 

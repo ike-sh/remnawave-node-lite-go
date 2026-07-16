@@ -31,5 +31,9 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		},
 		XrayConfig: *request.XrayConfig,
 	}
+	if !s.acquireXrayLifecycle(r.Context()) {
+		panic(http.ErrAbortHandler)
+	}
+	defer s.releaseXrayLifecycle()
 	writeNodeResponse(w, s.manager.Start(r.Context(), command))
 }
