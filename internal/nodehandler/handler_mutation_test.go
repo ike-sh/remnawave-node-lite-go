@@ -181,3 +181,37 @@ func TestCanceledMutationDoesNotEnterProviderWhileQueued(t *testing.T) {
 		t.Fatal("first mutation did not finish")
 	}
 }
+
+func TestCanceledBatchStopsBeforeRemainingProviderCalls(t *testing.T) {
+	t.Parallel()
+
+	provider := &blockingMutationProvider{
+		stubProvider: stubProvider{inboundTags: []string{"in-1", "in-2", "in-3"}},
+		entered:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	service := nodehandler.NewService(provider, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	response := make(chan nodehandler.GenericResponse, 1)
+	go func() {
+		result, _ := service.AddUsers(ctx, batchVlessRequest())
+		response <- result
+	}()
+	select {
+	case <-provider.entered:
+	case <-time.After(time.Second):
+		t.Fatal("batch mutation did not enter provider")
+	}
+	cancel()
+	select {
+	case result := <-response:
+		if result.Success || result.Error == nil || *result.Error != context.Canceled.Error() {
+			t.Fatalf("canceled batch response = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled batch did not return")
+	}
+	if got := provider.calls.Load(); got != 1 {
+		t.Fatalf("provider calls after cancellation = %d, want 1", got)
+	}
+}
