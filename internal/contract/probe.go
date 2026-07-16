@@ -44,9 +44,11 @@ type ProbeResult struct {
 	Status          int          `json:"status"`
 	Outcome         ProbeOutcome `json:"outcome"`
 	ApplicationCode string       `json:"applicationCode,omitempty"`
+	ErrorKind       string       `json:"errorKind,omitempty"`
 	ContentType     string       `json:"contentType,omitempty"`
 	BodyBytes       int          `json:"bodyBytes,omitempty"`
 	BodySHA256      string       `json:"bodySha256,omitempty"`
+	SemanticSHA256  string       `json:"semanticSha256,omitempty"`
 	DurationMillis  int64        `json:"durationMillis"`
 	Error           string       `json:"error,omitempty"`
 }
@@ -156,6 +158,13 @@ func (p Prober) Probe(ctx context.Context, target ProbeTarget, route RouteContra
 			result.Error = err.Error()
 			return result
 		}
+		semanticHash, err := successSemanticHash(route.ID, raw)
+		if err != nil {
+			result.Outcome = ProbeInvalidResponse
+			result.Error = "project response semantics: " + err.Error()
+			return result
+		}
+		result.SemanticSHA256 = semanticHash
 		result.Outcome = ProbeSuccess
 	case OfficialErrors.ValidationStatus:
 		if err := OfficialErrors.ValidationResponse.ValidateJSON(raw); err != nil {
@@ -171,16 +180,32 @@ func (p Prober) Probe(ctx context.Context, target ProbeTarget, route RouteContra
 				result.Error = fmt.Sprintf("application error: %v; generic error: %v", applicationErr, genericErr)
 				return result
 			}
+			result.ErrorKind = "generic"
+			semanticHash, err := errorSemanticHash(result.ErrorKind, raw)
+			if err != nil {
+				result.Outcome = ProbeInvalidError
+				result.Error = "project error semantics: " + err.Error()
+				return result
+			}
+			result.SemanticSHA256 = semanticHash
 			result.Outcome = ProbeApplicationError
 			return result
 		}
 		result.Outcome = ProbeApplicationError
+		result.ErrorKind = "application"
 		var application struct {
 			ErrorCode string `json:"errorCode"`
 		}
 		if json.Unmarshal(raw, &application) == nil {
 			result.ApplicationCode = application.ErrorCode
 		}
+		semanticHash, err := errorSemanticHash(result.ErrorKind, raw)
+		if err != nil {
+			result.Outcome = ProbeInvalidError
+			result.Error = "project error semantics: " + err.Error()
+			return result
+		}
+		result.SemanticSHA256 = semanticHash
 	}
 	return result
 }
@@ -224,13 +249,15 @@ func CompareProbeResults(baseline, candidate []ProbeResult) []ProbeDifference {
 			differences = append(differences, ProbeDifference{RouteID: routeID, Problem: "candidate returned " + string(right.Outcome)})
 			continue
 		}
-		if left.Status != right.Status || left.Outcome != right.Outcome || left.ApplicationCode != right.ApplicationCode {
+		if left.Status != right.Status || left.Outcome != right.Outcome ||
+			left.ApplicationCode != right.ApplicationCode || left.ErrorKind != right.ErrorKind ||
+			left.SemanticSHA256 != right.SemanticSHA256 {
 			differences = append(differences, ProbeDifference{
 				RouteID: routeID,
 				Problem: fmt.Sprintf(
-					"semantic mismatch: baseline=%d/%s/%s candidate=%d/%s/%s",
-					left.Status, left.Outcome, left.ApplicationCode,
-					right.Status, right.Outcome, right.ApplicationCode,
+					"semantic mismatch: baseline=%d/%s/%s/%s/%s candidate=%d/%s/%s/%s/%s",
+					left.Status, left.Outcome, left.ErrorKind, left.ApplicationCode, left.SemanticSHA256,
+					right.Status, right.Outcome, right.ErrorKind, right.ApplicationCode, right.SemanticSHA256,
 				),
 			})
 		}

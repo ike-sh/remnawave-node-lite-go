@@ -149,6 +149,85 @@ func TestCompareProbeResults(t *testing.T) {
 	}
 }
 
+func TestSemanticProjectionDetectsOppositeControlBooleans(t *testing.T) {
+	t.Parallel()
+
+	leftHash, err := successSemanticHash("xray.healthcheck", []byte(`{"response":{"isAlive":true,"xrayInternalStatusCached":true,"xrayVersion":"26.6.27","nodeVersion":"2.8.0"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightHash, err := successSemanticHash("xray.healthcheck", []byte(`{"response":{"isAlive":true,"xrayInternalStatusCached":false,"xrayVersion":"26.6.27","nodeVersion":"2.8.0"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := []ProbeResult{{RouteID: "xray.healthcheck", Status: 200, Outcome: ProbeSuccess, SemanticSHA256: leftHash}}
+	candidate := []ProbeResult{{RouteID: "xray.healthcheck", Status: 200, Outcome: ProbeSuccess, SemanticSHA256: rightHash}}
+	if differences := CompareProbeResults(baseline, candidate); len(differences) != 1 {
+		t.Fatalf("opposite health state was not detected: %#v", differences)
+	}
+}
+
+func TestSemanticProjectionIgnoresTrafficButComparesIdentities(t *testing.T) {
+	t.Parallel()
+
+	left, err := successSemanticHash("stats.users", []byte(`{"response":{"users":[{"username":"alice","downlink":1,"uplink":2},{"username":"bob","downlink":3,"uplink":4}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := successSemanticHash("stats.users", []byte(`{"response":{"users":[{"username":"bob","downlink":300,"uplink":400},{"username":"alice","downlink":100,"uplink":200}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left != right {
+		t.Fatalf("dynamic traffic or ordering changed semantic hash: %s != %s", left, right)
+	}
+	different, err := successSemanticHash("stats.users", []byte(`{"response":{"users":[{"username":"alice","downlink":1,"uplink":2}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left == different {
+		t.Fatal("different user identity set produced the same semantic hash")
+	}
+}
+
+func TestCompareProbeResultsDistinguishesGenericAndApplicationErrors(t *testing.T) {
+	t.Parallel()
+	applicationHash, err := errorSemanticHash("application", []byte(`{"timestamp":"2026-07-15T12:00:00Z","path":"/node/test","message":"failed","errorCode":""}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	genericHash, err := errorSemanticHash("generic", []byte(`{"statusCode":500,"message":"failed","error":"Internal Server Error"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := []ProbeResult{{
+		RouteID: "stats.system", Status: 500, Outcome: ProbeApplicationError,
+		ErrorKind: "application", SemanticSHA256: applicationHash,
+	}}
+	candidate := []ProbeResult{{
+		RouteID: "stats.system", Status: 500, Outcome: ProbeApplicationError,
+		ErrorKind: "generic", SemanticSHA256: genericHash,
+	}}
+	if differences := CompareProbeResults(baseline, candidate); len(differences) != 1 {
+		t.Fatalf("error kind mismatch was not detected: %#v", differences)
+	}
+}
+
+func TestSemanticProjectionNormalizesEquivalentJSONNumbers(t *testing.T) {
+	t.Parallel()
+	integerHash, err := successSemanticHash("handler.inbound-users-count", []byte(`{"response":{"count":500}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exponentHash, err := successSemanticHash("handler.inbound-users-count", []byte(`{"response":{"count":5e2}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if integerHash != exponentHash {
+		t.Fatalf("equivalent JSON numbers changed semantic hash: %s != %s", integerHash, exponentHash)
+	}
+}
+
 func TestDefaultProbeRoutesAreReadOnly(t *testing.T) {
 	t.Parallel()
 
