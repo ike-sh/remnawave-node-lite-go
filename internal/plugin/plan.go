@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -23,6 +24,14 @@ type planDiagnostics struct {
 }
 
 func buildPluginPlan(request *SyncPlugin, resolver ASNResolver, firewallAvailable bool) (*pluginPlan, error) {
+	config, err := decodePluginConfig(request)
+	if err != nil {
+		return nil, err
+	}
+	return buildPluginPlanFromConfig(request, config, resolver, firewallAvailable), nil
+}
+
+func decodePluginConfig(request *SyncPlugin) (map[string]any, error) {
 	if request == nil {
 		return nil, fmt.Errorf("plugin is required")
 	}
@@ -37,14 +46,19 @@ func buildPluginPlan(request *SyncPlugin, resolver ASNResolver, firewallAvailabl
 	if err := ValidatePluginConfig(config); err != nil {
 		return nil, err
 	}
+	return config, nil
+}
 
+func buildPluginPlanFromConfig(request *SyncPlugin, config map[string]any, resolver ASNResolver, firewallAvailable bool) *pluginPlan {
 	diagnostics := planDiagnostics{}
 	shared := buildSharedIPMapWithDiagnostics(config, resolver, &diagnostics)
 	snapshot := &pluginSnapshot{
-		configHash:   hashPluginConfig(request.Config),
-		pluginUUID:   request.UUID,
-		pluginName:   request.Name,
-		whitelistIPs: make(map[string]struct{}),
+		configHash:    hashPluginConfig(request.Config),
+		sourceHash:    sha256.Sum256(request.Config),
+		pluginUUID:    request.UUID,
+		pluginName:    request.Name,
+		firewallReady: firewallAvailable,
+		whitelistIPs:  make(map[string]struct{}),
 		torrent: torrentSettings{
 			ignoredIPs:   make(map[string]struct{}),
 			ignoredUsers: make(map[string]struct{}),
@@ -63,20 +77,19 @@ func buildPluginPlan(request *SyncPlugin, resolver ASNResolver, firewallAvailabl
 	if blocker, ok := config["torrentBlocker"].(map[string]any); ok {
 		plan.torrentIncludeRuleTags, plan.torrentIncludeRuleTagsPresent = optionalStringSlice(blocker, "includeRuleTags")
 		if enabled, _ := blocker["enabled"].(bool); enabled {
+			snapshot.torrent.enabled = true
+			snapshot.torrent.blockDuration, _ = numberValue(blocker["blockDuration"])
+			snapshot.torrent.includeRuleTags = append([]string(nil), plan.torrentIncludeRuleTags...)
+			if ignore, ok := blocker["ignoreLists"].(map[string]any); ok {
+				for _, ip := range resolveIPList(toStringSlice(ignore["ip"]), shared, &plan.diagnostics) {
+					snapshot.torrent.ignoredIPs[ip] = struct{}{}
+				}
+				for _, user := range toNumberStringSlice(ignore["userId"]) {
+					snapshot.torrent.ignoredUsers[user] = struct{}{}
+				}
+			}
 			if !firewallAvailable {
 				plan.diagnostics.firewallUnavailable = true
-			} else {
-				snapshot.torrent.enabled = true
-				snapshot.torrent.blockDuration, _ = numberValue(blocker["blockDuration"])
-				snapshot.torrent.includeRuleTags = append([]string(nil), plan.torrentIncludeRuleTags...)
-				if ignore, ok := blocker["ignoreLists"].(map[string]any); ok {
-					for _, ip := range resolveIPList(toStringSlice(ignore["ip"]), shared, &plan.diagnostics) {
-						snapshot.torrent.ignoredIPs[ip] = struct{}{}
-					}
-					for _, user := range toNumberStringSlice(ignore["userId"]) {
-						snapshot.torrent.ignoredUsers[user] = struct{}{}
-					}
-				}
 			}
 		}
 	}
@@ -85,7 +98,7 @@ func buildPluginPlan(request *SyncPlugin, resolver ASNResolver, firewallAvailabl
 	if !firewallAvailable && firewallConfigRequested(config) {
 		plan.diagnostics.firewallUnavailable = true
 	}
-	return plan, nil
+	return plan
 }
 
 func buildSharedIPMap(config map[string]any, resolver ASNResolver) map[string][]string {

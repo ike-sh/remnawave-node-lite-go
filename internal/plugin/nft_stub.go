@@ -2,13 +2,15 @@
 
 package plugin
 
+import "context"
+
 type nftManager struct{}
 
 func newNFTManager() *nftManager { return &nftManager{} }
 
-func (*nftManager) Initialize() error          { return errNFTablesUnavailable }
-func (*nftManager) Available() bool            { return false }
-func (*nftManager) Apply(firewallConfig) error { return errNFTablesUnavailable }
-func (*nftManager) BlockIPs([]BlockIP) error   { return errNFTablesUnavailable }
-func (*nftManager) UnblockIPs([]string) error  { return errNFTablesUnavailable }
-func (*nftManager) Close() error               { return nil }
+func (*nftManager) Initialize(context.Context) error            { return errNFTablesUnavailable }
+func (*nftManager) Available() bool                             { return false }
+func (*nftManager) Apply(context.Context, firewallConfig) error { return errNFTablesUnavailable }
+func (*nftManager) BlockIPs(context.Context, []BlockIP) error   { return errNFTablesUnavailable }
+func (*nftManager) UnblockIPs(context.Context, []string) error  { return errNFTablesUnavailable }
+func (*nftManager) Close(context.Context) error                 { return nil }

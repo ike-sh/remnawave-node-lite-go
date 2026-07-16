@@ -31,30 +31,118 @@ type torrentSettings struct {
 	ignoredUsers    map[string]struct{}
 }
 
+type queuedWebhook struct {
+	payload xraywebhook.Payload
+}
+
 func (s *State) TorrentBlockerEnabled() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.active != nil && s.active.torrent.enabled
+	return effectiveTorrentEnabled(s.active)
 }
 
 func (s *State) TorrentBlockerIncludeRuleTags() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.active == nil || len(s.active.torrent.includeRuleTags) == 0 {
+	if !effectiveTorrentEnabled(s.active) || len(s.active.torrent.includeRuleTags) == 0 {
 		return nil
 	}
 	return append([]string(nil), s.active.torrent.includeRuleTags...)
 }
 
 func (s *Service) HandleXrayWebhook(payload xraywebhook.Payload) {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	s.webhookAdmissionMu.RLock()
+	defer s.webhookAdmissionMu.RUnlock()
+	if s.webhookStopped.Load() {
+		return
+	}
+	select {
+	case s.webhookQueue <- queuedWebhook{payload: payload}:
+	default:
+		dropped := s.webhookDropped.Add(1)
+		if dropped == 1 || dropped&(dropped-1) == 0 {
+			slog.Warn("xray webhook queue is full", "dropped", dropped, "capacity", cap(s.webhookQueue))
+		}
+	}
+}
+
+func (s *Service) runWebhookWorker() {
+	defer close(s.webhookDone)
+	for {
+		select {
+		case <-s.webhookStop:
+			return
+		default:
+		}
+		select {
+		case <-s.webhookStop:
+			return
+		case item := <-s.webhookQueue:
+			select {
+			case <-s.webhookStop:
+				return
+			case s.operationGate <- struct{}{}:
+			}
+			select {
+			case <-s.webhookStop:
+				s.releaseOperation()
+				return
+			default:
+			}
+			itemCtx, cancel := context.WithTimeout(s.webhookContext, s.effectiveCleanupTimeout())
+			s.processXrayWebhookLocked(itemCtx, item.payload)
+			cancel()
+			s.releaseOperation()
+		}
+	}
+}
+
+func (s *Service) signalWebhookStop() {
+	s.webhookStopOnce.Do(func() {
+		s.webhookAdmissionMu.Lock()
+		defer s.webhookAdmissionMu.Unlock()
+		s.webhookStopped.Store(true)
+		if s.webhookCancel != nil {
+			s.webhookCancel()
+		}
+		close(s.webhookStop)
+	})
+}
+
+func (s *Service) waitWebhookWorker(ctx context.Context) error {
+	select {
+	case <-s.webhookDone:
+		return nil
+	default:
+	}
+	select {
+	case <-s.webhookDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Service) finishWebhookShutdown(ctx context.Context) error {
+	if err := s.waitWebhookWorker(ctx); err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-s.webhookQueue:
+		default:
+			return nil
+		}
+	}
+}
+
+func (s *Service) processXrayWebhookLocked(ctx context.Context, payload xraywebhook.Payload) {
 	if s.readyLocked() != nil {
 		return
 	}
 
 	snapshot := s.state.currentSnapshot()
-	if snapshot == nil || !snapshot.torrent.enabled {
+	if !effectiveTorrentEnabled(snapshot) {
 		return
 	}
 
@@ -73,12 +161,12 @@ func (s *Service) HandleXrayWebhook(payload xraywebhook.Payload) {
 	duration := snapshot.torrent.blockDuration
 	blocked := false
 	if s.firewallAvailableLocked() {
-		if err := s.nft.BlockIPs([]BlockIP{{IP: ip, Timeout: duration}}); err != nil {
+		if err := s.nft.BlockIPs(ctx, []BlockIP{{IP: ip, Timeout: duration}}); err != nil {
 			slog.Warn("torrent blocker failed to block ip", "ip", ip, "error", err)
 		} else {
 			blocked = true
 			if s.dropper != nil {
-				s.dropper.DropIPs(context.Background(), []string{ip})
+				s.dropper.DropIPs(ctx, []string{ip})
 			}
 		}
 	}

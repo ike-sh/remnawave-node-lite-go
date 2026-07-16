@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"sync"
@@ -13,27 +14,36 @@ import (
 type fakeFirewall struct {
 	mu sync.Mutex
 
-	ready        bool
-	initialize   error
-	applyErrors  map[int]error
-	applyCalls   []firewallConfig
-	current      firewallConfig
-	applyHook    func(int)
-	blockEntered chan struct{}
-	blockCalls   [][]BlockIP
-	unblockCalls [][]string
-	closeErrors  map[int]error
-	closeCalls   int
+	ready           bool
+	initialize      error
+	initializeCalls int
+	applyErrors     map[int]error
+	commitOnError   map[int]bool
+	applyCalls      []firewallConfig
+	current         firewallConfig
+	applyHook       func(int)
+	blockEntered    chan struct{}
+	blockCalls      [][]BlockIP
+	unblockCalls    [][]string
+	closeErrors     map[int]error
+	closeCalls      int
 }
 
-func (f *fakeFirewall) Initialize() error {
+func (f *fakeFirewall) Initialize(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.initializeCalls++
 	if f.initialize != nil {
 		return f.initialize
 	}
 	f.ready = true
 	return nil
+}
+
+func (f *fakeFirewall) setInitializeError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.initialize = err
 }
 
 func (f *fakeFirewall) Available() bool {
@@ -42,27 +52,28 @@ func (f *fakeFirewall) Available() bool {
 	return f.ready
 }
 
-func (f *fakeFirewall) Apply(config firewallConfig) error {
+func (f *fakeFirewall) Apply(_ context.Context, config firewallConfig) error {
 	f.mu.Lock()
 	config = config.clone()
 	f.applyCalls = append(f.applyCalls, config)
 	call := len(f.applyCalls)
 	err := f.applyErrors[call]
+	commitOnError := f.commitOnError[call]
 	hook := f.applyHook
 	f.mu.Unlock()
 	if hook != nil {
 		hook(call)
 	}
-	if err != nil {
+	if err != nil && !commitOnError {
 		return err
 	}
 	f.mu.Lock()
 	f.current = config
 	f.mu.Unlock()
-	return nil
+	return err
 }
 
-func (f *fakeFirewall) BlockIPs(items []BlockIP) error {
+func (f *fakeFirewall) BlockIPs(_ context.Context, items []BlockIP) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.blockCalls = append(f.blockCalls, append([]BlockIP(nil), items...))
@@ -75,14 +86,14 @@ func (f *fakeFirewall) BlockIPs(items []BlockIP) error {
 	return nil
 }
 
-func (f *fakeFirewall) UnblockIPs(ips []string) error {
+func (f *fakeFirewall) UnblockIPs(_ context.Context, ips []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unblockCalls = append(f.unblockCalls, append([]string(nil), ips...))
 	return nil
 }
 
-func (f *fakeFirewall) Close() error {
+func (f *fakeFirewall) Close(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closeCalls++
@@ -100,6 +111,19 @@ func (f *fakeFirewall) failApply(call int, err error) {
 		f.applyErrors = make(map[int]error)
 	}
 	f.applyErrors[call] = err
+}
+
+func (f *fakeFirewall) failApplyAfterCommit(call int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.applyErrors == nil {
+		f.applyErrors = make(map[int]error)
+	}
+	if f.commitOnError == nil {
+		f.commitOnError = make(map[int]bool)
+	}
+	f.applyErrors[call] = err
+	f.commitOnError[call] = true
 }
 
 func (f *fakeFirewall) setApplyHook(hook func(int)) {
@@ -125,6 +149,19 @@ type mockXray struct {
 	stopErr        error
 }
 
+type doneObservedContext struct {
+	context.Context
+	doneObserved chan struct{}
+	once         sync.Once
+}
+
+// Done records that acquireMutation passed its first closing check and entered
+// the cancelable operation-gate wait.
+func (c *doneObservedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.doneObserved) })
+	return c.Context.Done()
+}
+
 func (m *mockXray) StopIfOnline() error {
 	m.stopIfOnline++
 	return m.stopErr
@@ -147,6 +184,7 @@ func newReadyService(t *testing.T, state *State, xray XrayController) (*Service,
 	if err := service.Initialize(); err != nil {
 		t.Fatalf("initialize plugin service: %v", err)
 	}
+	t.Cleanup(func() { _ = service.Close() })
 	return service, backend
 }
 
@@ -264,6 +302,64 @@ func TestSyncUnchangedConfigSkipsAllSideEffects(t *testing.T) {
 	}
 }
 
+func TestSyncValidatesBeforeEquivalentObjectHashShortcut(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, _ := newReadyService(t, state, nil)
+	valid := mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{
+			"connectionDrop": map[string]any{
+				"enabled": true, "whitelistIps": []any{"203.0.113.10"},
+			},
+		},
+	})
+	invalid := mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{
+			"connectionDrop": map[string]any{
+				"enabled": true, "whitelistIps": []any{" 203.0.113.10 "},
+			},
+		},
+	})
+	if hashPluginConfig(valid.Config) != hashPluginConfig(invalid.Config) {
+		t.Fatal("test inputs do not exercise the trim-equivalent object hash")
+	}
+	if !service.Sync(valid).Accepted {
+		t.Fatal("valid config was not accepted")
+	}
+	if response := service.Sync(invalid); response.Accepted {
+		t.Fatal("hash-equivalent invalid config bypassed validation")
+	}
+	if state.HasActivePlugin() {
+		t.Fatal("invalid config did not clear the active plugin")
+	}
+}
+
+func TestSyncSameConfigCommitsChangedPluginIdentity(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, _ := newReadyService(t, state, nil)
+	first := filterPlugin(t, "192.0.2.0/24")
+	if !service.Sync(first).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	second := *first
+	second.UUID = "00000000-0000-4000-8000-000000000002"
+	second.Name = "replacement"
+	if !service.Sync(&second).Accepted {
+		t.Fatal("identity update failed")
+	}
+	snapshot := state.currentSnapshot()
+	if snapshot == nil || snapshot.pluginUUID != second.UUID || snapshot.pluginName != second.Name {
+		t.Fatalf("plugin identity was not updated: %#v", snapshot)
+	}
+}
+
 func TestResetPluginsClearsSnapshotAndPreservesReports(t *testing.T) {
 	t.Parallel()
 
@@ -320,6 +416,109 @@ func TestUnavailableFirewallAcceptsConfigButDisablesTorrent(t *testing.T) {
 	}
 }
 
+func TestInitializeRetriesUnavailableFirewall(t *testing.T) {
+	t.Parallel()
+
+	backend := &fakeFirewall{initialize: errNFTablesUnavailable}
+	service := newServiceWithBackend(NewState(), nil, nil, backend)
+	if err := service.Initialize(); !errors.Is(err, errNFTablesUnavailable) {
+		t.Fatalf("first Initialize error = %v", err)
+	}
+	backend.setInitializeError(nil)
+	if err := service.Initialize(); err != nil {
+		t.Fatalf("retry Initialize: %v", err)
+	}
+	backend.mu.Lock()
+	calls := backend.initializeCalls
+	ready := backend.ready
+	backend.mu.Unlock()
+	if calls != 2 || !ready {
+		t.Fatalf("initialize calls=%d ready=%v, want 2/true", calls, ready)
+	}
+}
+
+func TestCanceledInitializeDoesNotPublishDegradedReadiness(t *testing.T) {
+	t.Parallel()
+
+	backend := &fakeFirewall{initialize: context.Canceled}
+	service := newServiceWithBackend(NewState(), nil, nil, backend)
+	t.Cleanup(func() { _ = service.Close() })
+	if err := service.InitializeContext(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("InitializeContext error = %v", err)
+	}
+	if service.initialized {
+		t.Fatal("canceled initialization published initialized state")
+	}
+	if service.Sync(filterPlugin(t, "192.0.2.0/24")).Accepted {
+		t.Fatal("sync was accepted after canceled initialization")
+	}
+}
+
+func TestRecreateRecoversDesiredFirewallAndTorrentState(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	backend := &fakeFirewall{initialize: errNFTablesUnavailable}
+	xray := &mockXray{}
+	service := newServiceWithBackend(state, nil, xray, backend)
+	if err := service.Initialize(); !errors.Is(err, errNFTablesUnavailable) {
+		t.Fatalf("Initialize error = %v", err)
+	}
+	if response := service.Sync(torrentAndFilterPlugin(t, "192.0.2.0/24")); !response.Accepted {
+		t.Fatal("degraded sync was not accepted")
+	}
+	if state.TorrentBlockerEnabled() {
+		t.Fatal("torrent blocker became effective before firewall recovery")
+	}
+
+	backend.setInitializeError(nil)
+	if response := service.RecreateTables(); !response.Accepted {
+		t.Fatal("firewall recovery was not accepted")
+	}
+	if !state.TorrentBlockerEnabled() || xray.stopIfOnline != 1 {
+		t.Fatalf("recovered torrent enabled=%v stop calls=%d", state.TorrentBlockerEnabled(), xray.stopIfOnline)
+	}
+	_, current := backend.snapshot()
+	if !reflect.DeepEqual(current.ingressIPs, []string{"192.0.2.0/24"}) {
+		t.Fatalf("recovered firewall = %+v", current)
+	}
+}
+
+func TestRecreateFailureRollsBackToEffectiveDegradedFirewall(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	backend := &fakeFirewall{initialize: errNFTablesUnavailable}
+	xray := &mockXray{stopErr: errors.New("stop failed")}
+	service := newServiceWithBackend(state, nil, xray, backend)
+	if err := service.Initialize(); !errors.Is(err, errNFTablesUnavailable) {
+		t.Fatalf("Initialize error = %v", err)
+	}
+	if !service.Sync(torrentAndFilterPlugin(t, "192.0.2.0/24")).Accepted {
+		t.Fatal("degraded sync was not accepted")
+	}
+
+	backend.setInitializeError(nil)
+	if response := service.RecreateTables(); response.Accepted {
+		t.Fatal("recovery with failed Xray reconciliation was accepted")
+	}
+	if state.TorrentBlockerEnabled() {
+		t.Fatal("failed recovery published effective torrent state")
+	}
+	_, current := backend.snapshot()
+	if len(current.ingressIPs) != 0 || len(current.egressIPs) != 0 || len(current.egressPorts) != 0 {
+		t.Fatalf("failed recovery left nft rules active: %+v", current)
+	}
+
+	xray.stopErr = nil
+	if response := service.RecreateTables(); !response.Accepted {
+		t.Fatal("recovery retry was not accepted")
+	}
+	if !state.TorrentBlockerEnabled() {
+		t.Fatal("recovery retry did not publish torrent state")
+	}
+}
+
 func TestFirewallApplyFailureDoesNotCommitPlan(t *testing.T) {
 	t.Parallel()
 
@@ -340,6 +539,27 @@ func TestFirewallApplyFailureDoesNotCommitPlan(t *testing.T) {
 	}
 	if state.ConfigHash() != oldHash || !state.HasActivePlugin() {
 		t.Fatal("failed firewall plan replaced committed state")
+	}
+}
+
+func TestFirewallApplyErrorRestoresPreviousEffectivePlan(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	if !service.Sync(filterPlugin(t, "10.0.0.0/8")).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	_, previous := backend.snapshot()
+	calls, _ := backend.snapshot()
+	backend.failApplyAfterCommit(len(calls)+1, errors.New("reported after commit"))
+
+	if response := service.Sync(filterPlugin(t, "192.0.2.0/24")); response.Accepted {
+		t.Fatal("apply error was accepted")
+	}
+	_, current := backend.snapshot()
+	if !reflect.DeepEqual(current, previous) {
+		t.Fatalf("firewall after failed apply = %+v, want %+v", current, previous)
 	}
 }
 
@@ -470,11 +690,209 @@ func TestPluginMutationsAreSerialized(t *testing.T) {
 	}
 }
 
+func TestQueuedPluginMutationHonorsRequestCancellation(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	applyStarted := make(chan struct{})
+	releaseApply := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseApply) }) })
+	backend.setApplyHook(func(call int) {
+		if call == 1 {
+			close(applyStarted)
+			<-releaseApply
+		}
+	})
+
+	syncDone := make(chan AcceptedResponse, 1)
+	go func() { syncDone <- service.Sync(filterPlugin(t, "192.0.2.0/24")) }()
+	select {
+	case <-applyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for plugin apply")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if response := service.BlockIPsContext(ctx, []BlockIP{{IP: "203.0.113.10", Timeout: 60}}); response.Accepted {
+		t.Fatal("canceled queued mutation was accepted")
+	}
+	backend.mu.Lock()
+	blockCalls := len(backend.blockCalls)
+	backend.mu.Unlock()
+	if blockCalls != 0 {
+		t.Fatalf("canceled mutation reached backend %d times", blockCalls)
+	}
+	releaseOnce.Do(func() { close(releaseApply) })
+	if response := <-syncDone; !response.Accepted {
+		t.Fatal("sync was not accepted")
+	}
+}
+
+func TestCloseContextDeadlineIncludesWaitingForOperationGate(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	if !service.Sync(torrentPlugin(t, true, nil)).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	service.cleanupTimeout = time.Second
+	service.operationGate <- struct{}{}
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	err := service.CloseContext(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("Close waited for operation gate for %s", elapsed)
+	}
+	if !state.HasActivePlugin() || !state.TorrentBlockerEnabled() {
+		t.Fatal("timed-out Close discarded state needed for cleanup retry")
+	}
+	<-service.operationGate
+
+	if !errors.Is(service.Initialize(), errPluginServiceClosed) {
+		t.Fatal("initialize after timed-out Close did not return service-closed error")
+	}
+	if service.Sync(filterPlugin(t, "10.0.0.0/8")).Accepted {
+		t.Fatal("sync was accepted after Close timed out")
+	}
+	if service.BlockIPs([]BlockIP{{IP: "203.0.113.10", Timeout: 60}}).Accepted {
+		t.Fatal("block was accepted after Close timed out")
+	}
+	if !errors.Is(service.ResetPlugins(), errPluginServiceClosed) {
+		t.Fatal("reset after timed-out Close did not return service-closed error")
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("retry Close: %v", err)
+	}
+	backend.mu.Lock()
+	closeCalls := backend.closeCalls
+	backend.mu.Unlock()
+	if closeCalls != 1 {
+		t.Fatalf("backend Close calls = %d, want 1", closeCalls)
+	}
+	if state.HasActivePlugin() || state.TorrentBlockerEnabled() {
+		t.Fatal("successful Close retry retained plugin state")
+	}
+}
+
+func TestQueuedMutationIsRejectedWhenCloseStarts(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	service.cleanupTimeout = 30 * time.Millisecond
+	service.operationGate <- struct{}{}
+	gateReleased := false
+	t.Cleanup(func() {
+		if !gateReleased {
+			<-service.operationGate
+		}
+	})
+
+	ctx := &doneObservedContext{
+		Context:      context.Background(),
+		doneObserved: make(chan struct{}),
+	}
+	mutationDone := make(chan AcceptedResponse, 1)
+	go func() {
+		mutationDone <- service.BlockIPsContext(ctx, []BlockIP{{IP: "203.0.113.10", Timeout: 60}})
+	}()
+	select {
+	case <-ctx.doneObserved:
+	case <-time.After(time.Second):
+		t.Fatal("queued mutation did not enter operation admission")
+	}
+
+	if err := service.Close(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close error = %v", err)
+	}
+	<-service.operationGate
+	gateReleased = true
+	select {
+	case response := <-mutationDone:
+		if response.Accepted {
+			t.Fatal("queued mutation was accepted after Close started")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued mutation did not return after operation gate was released")
+	}
+	backend.mu.Lock()
+	blockCalls := len(backend.blockCalls)
+	backend.mu.Unlock()
+	if blockCalls != 0 {
+		t.Fatalf("queued mutation reached backend %d times", blockCalls)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("retry Close: %v", err)
+	}
+}
+
+func TestCloseWaitsForAdmittedMutationAndRetryCleansItsState(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	service.cleanupTimeout = 30 * time.Millisecond
+	applyEntered := make(chan struct{})
+	releaseApply := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseApply) }) })
+	backend.setApplyHook(func(call int) {
+		if call == 1 {
+			close(applyEntered)
+			<-releaseApply
+		}
+	})
+
+	mutationDone := make(chan AcceptedResponse, 1)
+	go func() {
+		mutationDone <- service.Sync(torrentPlugin(t, true, nil))
+	}()
+	select {
+	case <-applyEntered:
+	case <-time.After(time.Second):
+		t.Fatal("admitted mutation did not reach backend")
+	}
+	if err := service.Close(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close error = %v", err)
+	}
+	releaseOnce.Do(func() { close(releaseApply) })
+	select {
+	case response := <-mutationDone:
+		if !response.Accepted {
+			t.Fatal("admitted mutation was rejected after it began")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("admitted mutation did not finish")
+	}
+	if !state.HasActivePlugin() || !state.TorrentBlockerEnabled() {
+		t.Fatal("admitted mutation did not commit before cleanup retry")
+	}
+	if service.Sync(filterPlugin(t, "10.0.0.0/8")).Accepted {
+		t.Fatal("new mutation was accepted after Close began")
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("retry Close: %v", err)
+	}
+	if state.HasActivePlugin() || state.TorrentBlockerEnabled() {
+		t.Fatal("successful Close retry retained admitted mutation state")
+	}
+}
+
 func TestCloseIsIdempotentAndRejectsLaterMutations(t *testing.T) {
 	t.Parallel()
 
 	state := NewState()
 	service, backend := newReadyService(t, state, nil)
+	if !service.Sync(torrentPlugin(t, true, nil)).Accepted {
+		t.Fatal("initial sync failed")
+	}
 	if err := service.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -486,6 +904,9 @@ func TestCloseIsIdempotentAndRejectsLaterMutations(t *testing.T) {
 	backend.mu.Unlock()
 	if closeCalls != 1 {
 		t.Fatalf("backend Close calls = %d, want 1", closeCalls)
+	}
+	if state.HasActivePlugin() || state.TorrentBlockerEnabled() {
+		t.Fatal("successful Close retained effective plugin state")
 	}
 	if service.Sync(filterPlugin(t, "10.0.0.0/8")).Accepted {
 		t.Fatal("sync after Close was accepted")
@@ -503,10 +924,16 @@ func TestCloseRetriesBackendCleanupAfterFailure(t *testing.T) {
 
 	state := NewState()
 	service, backend := newReadyService(t, state, nil)
+	if !service.Sync(torrentPlugin(t, true, nil)).Accepted {
+		t.Fatal("initial sync failed")
+	}
 	backend.closeErrors = map[int]error{1: errors.New("close failed")}
 
 	if err := service.Close(); err == nil {
 		t.Fatal("first Close unexpectedly succeeded")
+	}
+	if !state.HasActivePlugin() || !state.TorrentBlockerEnabled() {
+		t.Fatal("failed Close discarded state needed for cleanup retry")
 	}
 	if service.Sync(filterPlugin(t, "10.0.0.0/8")).Accepted {
 		t.Fatal("mutation was accepted after Close began")
@@ -519,6 +946,9 @@ func TestCloseRetriesBackendCleanupAfterFailure(t *testing.T) {
 	backend.mu.Unlock()
 	if closeCalls != 2 {
 		t.Fatalf("backend Close calls = %d, want 2", closeCalls)
+	}
+	if state.HasActivePlugin() || state.TorrentBlockerEnabled() {
+		t.Fatal("successful Close retry retained plugin state")
 	}
 }
 

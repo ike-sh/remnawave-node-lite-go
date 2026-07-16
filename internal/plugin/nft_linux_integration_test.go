@@ -3,6 +3,7 @@
 package plugin
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"strings"
@@ -30,11 +31,11 @@ func TestNFTManagerInNetworkNamespace(t *testing.T) {
 	if !manager.capable {
 		t.Fatal("network namespace child does not have CAP_NET_ADMIN")
 	}
-	if err := manager.Initialize(); err != nil {
+	if err := manager.Initialize(context.Background()); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 	defer func() {
-		if err := manager.Close(); err != nil {
+		if err := manager.Close(context.Background()); err != nil {
 			t.Errorf("cleanup Close: %v", err)
 		}
 	}()
@@ -44,7 +45,7 @@ func TestNFTManagerInNetworkNamespace(t *testing.T) {
 		egressIPs:   []string{"192.0.2.0/24", "2001:db8:1::/48"},
 		egressPorts: []int{53, 443},
 	}
-	if err := manager.Apply(first); err != nil {
+	if err := manager.Apply(context.Background(), first); err != nil {
 		t.Fatalf("Apply first plan: %v", err)
 	}
 	assertNFTContains(t, "list", "set", "ip", tableName, ingressFilterIPSet, "10.0.0.0/8")
@@ -56,7 +57,7 @@ func TestNFTManagerInNetworkNamespace(t *testing.T) {
 		egressIPs:   []string{"198.51.100.0/24"},
 		egressPorts: []int{25},
 	}
-	if err := manager.Apply(second); err != nil {
+	if err := manager.Apply(context.Background(), second); err != nil {
 		t.Fatalf("replace existing plan: %v", err)
 	}
 	assertNFTContains(t, "list", "set", "ip", tableName, ingressFilterIPSet, "172.16.0.0/12")
@@ -66,30 +67,30 @@ func TestNFTManagerInNetworkNamespace(t *testing.T) {
 		{IP: "203.0.113.10", Timeout: 60},
 		{IP: "2001:db8:ffff::10", Timeout: 0},
 	}
-	if err := manager.BlockIPs(blocks); err != nil {
+	if err := manager.BlockIPs(context.Background(), blocks); err != nil {
 		t.Fatalf("BlockIPs: %v", err)
 	}
-	if err := manager.BlockIPs([]BlockIP{{IP: "203.0.113.10", Timeout: 120}}); err != nil {
+	if err := manager.BlockIPs(context.Background(), []BlockIP{{IP: "203.0.113.10", Timeout: 120}}); err != nil {
 		t.Fatalf("retry BlockIPs: %v", err)
 	}
 	assertNFTContains(t, "list", "set", "ip", tableName, torrentBlockerSet, "203.0.113.10")
 	assertNFTContains(t, "list", "set", "ip6", tableNameV6, torrentBlockerSetV6, "2001:db8:ffff::10")
 
-	if err := manager.UnblockIPs([]string{"203.0.113.10", "2001:db8:ffff::10"}); err != nil {
+	if err := manager.UnblockIPs(context.Background(), []string{"203.0.113.10", "2001:db8:ffff::10"}); err != nil {
 		t.Fatalf("UnblockIPs: %v", err)
 	}
-	if err := manager.UnblockIPs([]string{"203.0.113.10", "2001:db8:ffff::10"}); err != nil {
+	if err := manager.UnblockIPs(context.Background(), []string{"203.0.113.10", "2001:db8:ffff::10"}); err != nil {
 		t.Fatalf("retry UnblockIPs: %v", err)
 	}
 	assertNFTNotContains(t, "list", "set", "ip", tableName, torrentBlockerSet, "203.0.113.10")
 	assertNFTNotContains(t, "list", "set", "ip6", tableNameV6, torrentBlockerSetV6, "2001:db8:ffff::10")
 
-	if err := manager.Apply(second); err != nil {
+	if err := manager.Apply(context.Background(), second); err != nil {
 		t.Fatalf("recreate committed plan: %v", err)
 	}
 	assertNFTContains(t, "list", "set", "ip", tableName, ingressFilterIPSet, "172.16.0.0/12")
 
-	if err := manager.Close(); err != nil {
+	if err := manager.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	assertNFTTableMissing(t, "ip", tableName)

@@ -3,15 +3,23 @@
 package plugin
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/executil"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
 )
 
-type nftScriptRunner func(script string) error
+const (
+	nftCommandTimeout = 15 * time.Second
+	nftOutputLimit    = 8 << 10
+)
+
+type nftScriptRunner func(ctx context.Context, script string) error
 
 type nftManager struct {
 	mu      sync.RWMutex
@@ -27,7 +35,7 @@ func newNFTManager() *nftManager {
 	}
 }
 
-func (m *nftManager) Initialize() error {
+func (m *nftManager) Initialize(ctx context.Context) error {
 	if m == nil {
 		return errNFTablesUnavailable
 	}
@@ -39,7 +47,7 @@ func (m *nftManager) Initialize() error {
 	if !m.capable || m.run == nil {
 		return errNFTablesUnavailable
 	}
-	if err := m.run(renderNFTConfig(firewallConfig{})); err != nil {
+	if err := m.run(ctx, renderNFTConfig(firewallConfig{})); err != nil {
 		return fmt.Errorf("initialize nftables: %w", err)
 	}
 	m.ready = true
@@ -55,7 +63,7 @@ func (m *nftManager) Available() bool {
 	return m.ready
 }
 
-func (m *nftManager) Apply(config firewallConfig) error {
+func (m *nftManager) Apply(ctx context.Context, config firewallConfig) error {
 	if m == nil {
 		return errNFTablesUnavailable
 	}
@@ -64,13 +72,13 @@ func (m *nftManager) Apply(config firewallConfig) error {
 	if !m.ready || m.run == nil {
 		return errNFTablesUnavailable
 	}
-	if err := m.run(renderNFTConfig(config)); err != nil {
+	if err := m.run(ctx, renderNFTConfig(config)); err != nil {
 		return fmt.Errorf("apply nftables config: %w", err)
 	}
 	return nil
 }
 
-func (m *nftManager) BlockIPs(items []BlockIP) error {
+func (m *nftManager) BlockIPs(ctx context.Context, items []BlockIP) error {
 	if m == nil {
 		return errNFTablesUnavailable
 	}
@@ -86,13 +94,13 @@ func (m *nftManager) BlockIPs(items []BlockIP) error {
 	if script == "" {
 		return nil
 	}
-	if err := m.run(script); err != nil {
+	if err := m.run(ctx, script); err != nil {
 		return fmt.Errorf("block nftables addresses: %w", err)
 	}
 	return nil
 }
 
-func (m *nftManager) UnblockIPs(ips []string) error {
+func (m *nftManager) UnblockIPs(ctx context.Context, ips []string) error {
 	if m == nil {
 		return errNFTablesUnavailable
 	}
@@ -106,14 +114,16 @@ func (m *nftManager) UnblockIPs(ips []string) error {
 		return err
 	}
 	for _, command := range commands {
-		if err := m.run(command); err != nil && !isMissingNFTElement(err) {
-			return fmt.Errorf("unblock nftables addresses: %w", err)
+		if err := m.run(ctx, command); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !isMissingNFTElement(err) {
+				return fmt.Errorf("unblock nftables addresses: %w", err)
+			}
 		}
 	}
 	return nil
 }
 
-func (m *nftManager) Close() error {
+func (m *nftManager) Close(ctx context.Context) error {
 	if m == nil {
 		return nil
 	}
@@ -122,19 +132,26 @@ func (m *nftManager) Close() error {
 	if !m.ready || m.run == nil {
 		return nil
 	}
-	if err := m.run(renderNFTDeleteTables()); err != nil {
+	if err := m.run(ctx, renderNFTDeleteTables()); err != nil {
 		return fmt.Errorf("delete nftables tables: %w", err)
 	}
 	m.ready = false
 	return nil
 }
 
-func runNFTScript(script string) error {
-	cmd := exec.Command("nft", "-f", "-")
-	cmd.Stdin = strings.NewReader(strings.TrimSpace(script))
-	output, err := cmd.CombinedOutput()
+func runNFTScript(parent context.Context, script string) error {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, nftCommandTimeout)
+	defer cancel()
+	result, err := executil.Run(ctx, strings.NewReader(strings.TrimSpace(script)), nftOutputLimit, "nft", "-f", "-")
 	if err == nil {
 		return nil
 	}
-	return &nftCommandError{err: err, output: strings.TrimSpace(string(output))}
+	output := strings.TrimSpace(string(result.DiagnosticOutput()))
+	if result.AnyTruncated() {
+		output += "..."
+	}
+	return &nftCommandError{err: err, output: output}
 }

@@ -32,12 +32,14 @@ type TorrentReport struct {
 // pluginSnapshot is immutable after publication. Readers may retain its
 // pointer after releasing State.mu because every update publishes a new value.
 type pluginSnapshot struct {
-	configHash   string
-	pluginUUID   string
-	pluginName   string
-	whitelistIPs map[string]struct{}
-	torrent      torrentSettings
-	firewall     firewallConfig
+	configHash    string
+	sourceHash    [32]byte
+	pluginUUID    string
+	pluginName    string
+	firewallReady bool
+	whitelistIPs  map[string]struct{}
+	torrent       torrentSettings
+	firewall      firewallConfig
 }
 
 type State struct {

@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,12 +24,12 @@ func (c firewallConfig) clone() firewallConfig {
 }
 
 type firewallBackend interface {
-	Initialize() error
+	Initialize(ctx context.Context) error
 	Available() bool
-	Apply(config firewallConfig) error
-	BlockIPs(items []BlockIP) error
-	UnblockIPs(ips []string) error
-	Close() error
+	Apply(ctx context.Context, config firewallConfig) error
+	BlockIPs(ctx context.Context, items []BlockIP) error
+	UnblockIPs(ctx context.Context, ips []string) error
+	Close(ctx context.Context) error
 }
 
 type nftCommandError struct {
