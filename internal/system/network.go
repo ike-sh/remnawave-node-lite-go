@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+const (
+	routeFlagUp     = 0x1
+	routeFlagReject = 0x200
+)
+
 type interfaceSample struct {
 	rxBytes   uint64
 	txBytes   uint64
@@ -169,13 +174,70 @@ func resolveDefaultInterface() string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(raw), "\n")[1:] {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == "00000000" {
-			return fields[0]
+	return parseDefaultInterface(raw)
+}
+
+func parseDefaultInterface(raw []byte) string {
+	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	var columns map[string]int
+	bestInterface := ""
+	var bestMetric uint64
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 0 {
+			continue
+		}
+		if columns == nil {
+			columns = make(map[string]int, len(fields))
+			for index, name := range fields {
+				columns[name] = index
+			}
+			if _, ok := columns["Iface"]; !ok {
+				return ""
+			}
+			continue
+		}
+
+		ifaceIndex, ifaceOK := columns["Iface"]
+		destinationIndex, destinationOK := columns["Destination"]
+		flagsIndex, flagsOK := columns["Flags"]
+		metricIndex, metricOK := columns["Metric"]
+		maskIndex, maskOK := columns["Mask"]
+		if !ifaceOK || !destinationOK || !flagsOK || !metricOK || !maskOK {
+			return ""
+		}
+		maxIndex := max(ifaceIndex, destinationIndex, flagsIndex, metricIndex, maskIndex)
+		if maxIndex >= len(fields) {
+			continue
+		}
+		iface := fields[ifaceIndex]
+		// Linux emits blackhole and other device-less routes with "*" as
+		// the interface while still marking them RTF_UP.
+		if iface == "" || iface == "*" {
+			continue
+		}
+		destination, err := strconv.ParseUint(fields[destinationIndex], 16, 32)
+		if err != nil || destination != 0 {
+			continue
+		}
+		mask, err := strconv.ParseUint(fields[maskIndex], 16, 32)
+		if err != nil || mask != 0 {
+			continue
+		}
+		flags, err := strconv.ParseUint(fields[flagsIndex], 16, 32)
+		if err != nil || flags&routeFlagUp == 0 || flags&routeFlagReject != 0 {
+			continue
+		}
+		metric, err := strconv.ParseUint(fields[metricIndex], 10, 64)
+		if err != nil {
+			continue
+		}
+		if bestInterface == "" || metric < bestMetric {
+			bestInterface = iface
+			bestMetric = metric
 		}
 	}
-	return ""
+	return bestInterface
 }
 
 func fileExists(path string) bool {

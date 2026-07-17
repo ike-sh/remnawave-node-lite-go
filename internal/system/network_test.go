@@ -88,3 +88,53 @@ func TestZeroValueNetworkMonitorStopDoesNotPanic(t *testing.T) {
 	monitor.Stop()
 	monitor.Stop()
 }
+
+func TestParseDefaultInterfaceChoosesLowestMetric(t *testing.T) {
+	t.Parallel()
+
+	routes := []byte(`Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT
+eth0 00000000 0100000A 0003 0 0 200 00000000 0 0 0
+eth1 00000000 0100000A 0003 0 0 20 00000000 0 0 0
+eth2 00000000 0100000A 0003 0 0 100 00000000 0 0 0
+`)
+	if got := parseDefaultInterface(routes); got != "eth1" {
+		t.Fatalf("default interface = %q, want eth1", got)
+	}
+}
+
+func TestParseDefaultInterfaceSkipsMalformedAndInactiveRoutes(t *testing.T) {
+	t.Parallel()
+
+	routes := []byte(`Destination Iface Metric Flags Mask Gateway
+00000000 bad-metric nope 0003 00000000 0100000A
+00000000 down0 1 0000 00000000 0100000A
+00000000 reject0 1 0201 00000000 0100000A
+00000000 host-route 2 0001 FFFFFFFF 00000000
+not-hex malformed 0 0001 00000000 00000000
+00000000 truncated
+00000000 ens3 50 0001 00000000 0100000A
+`)
+	if got := parseDefaultInterface(routes); got != "ens3" {
+		t.Fatalf("default interface = %q, want ens3", got)
+	}
+}
+
+func TestParseDefaultInterfaceSkipsBlackholePseudoInterface(t *testing.T) {
+	t.Parallel()
+
+	routes := []byte(`Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT
+* 00000000 00000000 0001 0 0 1 00000000 0 0 0
+ens3 00000000 0100000A 0003 0 0 50 00000000 0 0 0
+`)
+	if got := parseDefaultInterface(routes); got != "ens3" {
+		t.Fatalf("default interface = %q, want ens3", got)
+	}
+}
+
+func TestParseDefaultInterfaceRejectsInvalidHeader(t *testing.T) {
+	t.Parallel()
+
+	if got := parseDefaultInterface([]byte("Iface Destination Flags\neth0 00000000 0001\n")); got != "" {
+		t.Fatalf("default interface = %q, want empty for incomplete header", got)
+	}
+}
