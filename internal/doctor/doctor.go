@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/asn"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/config"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/executil"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/secret"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/version"
 )
 
@@ -133,14 +135,18 @@ func checkSystemdCapNetAdmin() result {
 }
 
 func checkSecret(cfg config.Config) []result {
-	if strings.TrimSpace(cfg.SecretKey) != "" {
-		return []result{{level: "OK", title: "Secret Key", detail: "已配置"}}
+	if _, err := secret.Parse(cfg.SecretKey); err == nil {
+		return []result{{level: "OK", title: "Secret Key", detail: "已配置且格式有效"}}
+	}
+	detail := "格式无效（无法解析 Panel 下发的 Key 或缺少必需字段）"
+	if strings.TrimSpace(cfg.SecretKey) == "" {
+		detail = "未配置（SECRET_KEY 或 SECRET_KEY_FILE 为空）"
 	}
 	return []result{{
 		level:   "ERROR",
 		title:   "Secret Key",
-		detail:  "未配置（SECRET_KEY 或 SECRET_KEY_FILE 为空）",
-		fixHint: "编辑 /etc/remnanode/secret.key 粘贴 Panel 下发的 Key，然后 systemctl restart remnawave-node",
+		detail:  detail,
+		fixHint: "编辑 /etc/remnanode/secret.key 写入 Panel 下发的完整 Key，然后重启 remnawave-node 服务",
 	}}
 }
 
@@ -214,15 +220,32 @@ func checkASNDatabase(path string) []result {
 	if path == "" {
 		path = "/usr/local/share/remnanode/asn/asn-prefixes.bin"
 	}
-	if _, err := os.Stat(path); err != nil {
+	database, err := asn.Open(path)
+	if err != nil {
 		return []result{{
 			level:   "WARN",
 			title:   "ASN 数据库",
-			detail:  path + " 不存在（插件 asList 共享列表降级为空）",
+			detail:  fmt.Sprintf("%s 无法由运行时加载：%v（插件 asList 共享列表降级为空）", path, err),
 			fixHint: "设置 ASN_DB_URL 重跑 install-xray.sh，或用 cmd/asn-builder 生成后放到该路径",
 		}}
 	}
-	return []result{{level: "OK", title: "ASN 数据库", detail: path}}
+	available := database.Available()
+	if err := database.Close(); err != nil {
+		return []result{{
+			level:  "WARN",
+			title:  "ASN 数据库",
+			detail: fmt.Sprintf("%s 无法正常关闭：%v（插件 asList 共享列表可能不可用）", path, err),
+		}}
+	}
+	if !available {
+		return []result{{
+			level:   "WARN",
+			title:   "ASN 数据库",
+			detail:  path + " 不含 ASN 条目（插件 asList 共享列表降级为空）",
+			fixHint: "设置 ASN_DB_URL 重跑 install-xray.sh，或用 cmd/asn-builder 生成后替换该文件",
+		}}
+	}
+	return []result{{level: "OK", title: "ASN 数据库", detail: path + " 已通过运行时打开检查"}}
 }
 
 func checkCommand(name, purpose string) []result {
