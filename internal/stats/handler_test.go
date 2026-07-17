@@ -85,6 +85,16 @@ func TestGetUsersStatsGRPCError(t *testing.T) {
 	assertServiceError(t, err, "A011")
 }
 
+func TestSingleTagStatsErrorsUseOfficialCodes(t *testing.T) {
+	t.Parallel()
+
+	service := stats.NewService(&mockProvider{usersErr: errors.New("stats not found")}, nil)
+	_, inboundErr := service.GetInboundStats(context.Background(), "missing", false)
+	assertServiceError(t, inboundErr, "A012")
+	_, outboundErr := service.GetOutboundStats(context.Background(), "missing", false)
+	assertServiceError(t, outboundErr, "A013")
+}
+
 func TestGetUserOnlineStatusGRPCError(t *testing.T) {
 	t.Parallel()
 

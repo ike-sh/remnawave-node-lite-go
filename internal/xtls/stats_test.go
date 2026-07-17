@@ -36,7 +36,7 @@ func TestGetUsersIPListUsesNativeBatchRPC(t *testing.T) {
 			return fmt.Errorf("method = %q", method)
 		}
 		request, ok := args.(*xrpc.GetUsersStatsRequest)
-		if !ok || request.GetIncludeTraffic() || !request.GetReset_() {
+		if !ok || request.GetIncludeTraffic() || request.GetReset_() {
 			return fmt.Errorf("unexpected request: %#v", args)
 		}
 		response := reply.(*xrpc.GetUsersStatsResponse)
@@ -95,6 +95,9 @@ func (c *fakeLegacyStatsConn) Invoke(ctx context.Context, method string, args, r
 		return nil
 	case statsGetStatsOnlineIPListMethod:
 		request := args.(*xrpc.GetStatsRequest)
+		if request.GetReset_() {
+			return errors.New("read-only users IP list unexpectedly requested reset")
+		}
 		c.lookupCalls.Add(1)
 		active := c.active.Add(1)
 		defer c.active.Add(-1)
@@ -146,6 +149,50 @@ func TestGetUsersIPListLegacyUsesFixedWorkerCount(t *testing.T) {
 	}
 	if maximum := client.maxActive.Load(); maximum < 2 || maximum > legacyIPLookupWorkers {
 		t.Fatalf("maximum concurrent lookups = %d, want 2..%d", maximum, legacyIPLookupWorkers)
+	}
+}
+
+func TestSingleTagStatsRequireARealCounter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func(*StatsAPI) (TagTraffic, error)
+	}{
+		{name: "inbound", call: func(api *StatsAPI) (TagTraffic, error) {
+			return api.GetInboundStats(context.Background(), "missing", false)
+		}},
+		{name: "outbound", call: func(api *StatsAPI) (TagTraffic, error) {
+			return api.GetOutboundStats(context.Background(), "missing", false)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			api := NewStatsAPI(&fakeInvokeConn{invoke: func(_ context.Context, _ string, _, _ any, _ ...grpc.CallOption) error {
+				return nil
+			}}, nil)
+			if _, err := test.call(api); err == nil {
+				t.Fatal("empty QueryStats response succeeded; official SDK model returns null")
+			}
+		})
+	}
+}
+
+func TestSingleTagStatsPreserveZeroValuedCounters(t *testing.T) {
+	t.Parallel()
+
+	api := NewStatsAPI(&fakeInvokeConn{invoke: func(_ context.Context, _ string, _, reply any, _ ...grpc.CallOption) error {
+		reply.(*xrpc.QueryStatsResponse).Stat = []*xrpc.Stat{{
+			Name: "inbound>>>configured>>>traffic>>>uplink", Value: 0,
+		}}
+		return nil
+	}}, nil)
+	traffic, err := api.GetInboundStats(context.Background(), "configured", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if traffic.Tag != "configured" || traffic.Uplink != 0 || traffic.Downlink != 0 {
+		t.Fatalf("traffic = %+v, want configured tag with zero counters", traffic)
 	}
 }
 

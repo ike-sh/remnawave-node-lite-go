@@ -154,7 +154,9 @@ func (s *StatsAPI) GetInboundStats(ctx context.Context, tag string, reset bool) 
 		return TagTraffic{}, err
 	}
 	traffic := parseTagTraffic(resp.Stat, "inbound")
-	traffic.Tag = tag
+	if traffic.Tag == "" {
+		return TagTraffic{}, fmt.Errorf("inbound stats not found for tag %q", tag)
+	}
 	return traffic, nil
 }
 
@@ -170,7 +172,9 @@ func (s *StatsAPI) GetOutboundStats(ctx context.Context, tag string, reset bool)
 		return TagTraffic{}, err
 	}
 	traffic := parseTagTraffic(resp.Stat, "outbound")
-	traffic.Tag = tag
+	if traffic.Tag == "" {
+		return TagTraffic{}, fmt.Errorf("outbound stats not found for tag %q", tag)
+	}
 	return traffic, nil
 }
 
@@ -244,7 +248,7 @@ func (s *StatsAPI) GetUsersIPList(ctx context.Context) ([]UserIPEntry, error) {
 
 func (s *StatsAPI) getUsersIPListNative(ctx context.Context) ([]UserIPEntry, error) {
 	response := &xrpc.GetUsersStatsResponse{}
-	err := s.invoke(ctx, getUsersStatsMethod, &xrpc.GetUsersStatsRequest{IncludeTraffic: false, Reset_: true}, response)
+	err := s.invoke(ctx, getUsersStatsMethod, &xrpc.GetUsersStatsRequest{IncludeTraffic: false, Reset_: false}, response)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +302,7 @@ func (s *StatsAPI) getUsersIPListLegacy(ctx context.Context) ([]UserIPEntry, err
 					return
 				}
 				userID := userIDs[index]
-				ips, err := s.GetUserIPList(ctx, userID, true)
+				ips, err := s.GetUserIPList(ctx, userID, false)
 				if err == nil && len(ips) != 0 {
 					results[index] = UserIPEntry{UserID: userID, IPs: ips}
 				}

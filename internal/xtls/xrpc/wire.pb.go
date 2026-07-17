@@ -173,6 +173,7 @@ type VlessAccount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Flow          string                 `protobuf:"bytes,2,opt,name=flow,proto3" json:"flow,omitempty"`
+	Encryption    string                 `protobuf:"bytes,3,opt,name=encryption,proto3" json:"encryption,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -217,6 +218,13 @@ func (x *VlessAccount) GetId() string {
 func (x *VlessAccount) GetFlow() string {
 	if x != nil {
 		return x.Flow
+	}
+	return ""
+}
+
+func (x *VlessAccount) GetEncryption() string {
+	if x != nil {
+		return x.Encryption
 	}
 	return ""
 }
@@ -1466,10 +1474,13 @@ const file_internal_xtls_xrpc_wire_proto_rawDesc = "" +
 	"\x04User\x12\x14\n" +
 	"\x05level\x18\x01 \x01(\rR\x05level\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12;\n" +
-	"\aaccount\x18\x03 \x01(\v2!.remnanode.xtls.wire.TypedMessageR\aaccount\"2\n" +
+	"\aaccount\x18\x03 \x01(\v2!.remnanode.xtls.wire.TypedMessageR\aaccount\"R\n" +
 	"\fVlessAccount\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04flow\x18\x02 \x01(\tR\x04flow\"+\n" +
+	"\x04flow\x18\x02 \x01(\tR\x04flow\x12\x1e\n" +
+	"\n" +
+	"encryption\x18\x03 \x01(\tR\n" +
+	"encryption\"+\n" +
 	"\rTrojanAccount\x12\x1a\n" +
 	"\bpassword\x18\x01 \x01(\tR\bpassword\"l\n" +
 	"\x12ShadowsocksAccount\x12\x1a\n" +

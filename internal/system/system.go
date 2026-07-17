@@ -7,10 +7,21 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 var processStartedAt = time.Now()
+
+type kernelIdentity struct {
+	Release string
+	Type    string
+	Version string
+}
+
+var currentKernelIdentity = sync.OnceValue(readKernelIdentity)
 
 type NetworkInterface struct {
 	Interface     string `json:"interface"`
@@ -48,17 +59,77 @@ type Snapshot struct {
 
 func GetInfo() Info {
 	hostname, _ := os.Hostname()
+	kernel := currentKernelIdentity()
 	return Info{
-		Arch:              runtime.GOARCH,
+		Arch:              nodeArchitecture(runtime.GOARCH),
 		CPUs:              runtime.NumCPU(),
 		CPUModel:          cpuModel(),
 		MemoryTotal:       memoryTotal(),
 		Hostname:          hostname,
-		Platform:          runtime.GOOS,
-		Release:           runtime.GOOS,
-		Type:              runtime.GOOS,
-		Version:           runtime.Version(),
+		Platform:          nodePlatform(runtime.GOOS),
+		Release:           kernel.Release,
+		Type:              kernel.Type,
+		Version:           kernel.Version,
 		NetworkInterfaces: networkInterfaces(),
+	}
+}
+
+func nodeArchitecture(goarch string) string {
+	switch goarch {
+	case "386":
+		return "ia32"
+	case "amd64":
+		return "x64"
+	case "mipsle":
+		return "mipsel"
+	case "ppc64le":
+		return "ppc64"
+	default:
+		return goarch
+	}
+}
+
+func nodePlatform(goos string) string {
+	switch goos {
+	case "windows":
+		return "win32"
+	case "illumos", "solaris":
+		return "sunos"
+	default:
+		return goos
+	}
+}
+
+func readKernelIdentity() kernelIdentity {
+	var name unix.Utsname
+	if err := unix.Uname(&name); err == nil {
+		return kernelIdentity{
+			Release: unix.ByteSliceToString(name.Release[:]),
+			Type:    unix.ByteSliceToString(name.Sysname[:]),
+			Version: unix.ByteSliceToString(name.Version[:]),
+		}
+	}
+	return kernelIdentity{Type: nodeSystemType(runtime.GOOS)}
+}
+
+func nodeSystemType(goos string) string {
+	switch goos {
+	case "aix":
+		return "AIX"
+	case "darwin":
+		return "Darwin"
+	case "freebsd":
+		return "FreeBSD"
+	case "linux", "android":
+		return "Linux"
+	case "openbsd":
+		return "OpenBSD"
+	case "illumos", "solaris":
+		return "SunOS"
+	case "windows":
+		return "Windows_NT"
+	default:
+		return goos
 	}
 }
 

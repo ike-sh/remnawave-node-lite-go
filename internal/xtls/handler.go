@@ -2,6 +2,7 @@ package xtls
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls/xrpc"
@@ -26,6 +27,8 @@ const (
 	shadowsocksAccountType     = "xray.proxy.shadowsocks.Account"
 	shadowsocks2022AccountType = "xray.proxy.shadowsocks_2022.Account"
 	hysteriaAccountType        = "xray.proxy.hysteria.account.Account"
+	socksAccountType           = "xray.proxy.socks.Account"
+	httpAccountType            = "xray.proxy.http.Account"
 )
 
 type HandlerResult struct {
@@ -36,8 +39,8 @@ type HandlerResult struct {
 
 type InboundUser struct {
 	Username string `json:"username"`
-	Email    string `json:"email,omitempty"`
-	Level    uint32 `json:"level,omitempty"`
+	Level    uint32 `json:"level"`
+	Protocol string `json:"protocol"`
 }
 
 type HandlerAPI struct {
@@ -49,7 +52,9 @@ func NewHandlerAPI(conn grpc.ClientConnInterface) *HandlerAPI {
 }
 
 func (h *HandlerAPI) AddVlessUser(ctx context.Context, tag, username, uuid, flow string, level uint32) HandlerResult {
-	return h.addAccountUser(ctx, tag, username, level, vlessAccountType, &xrpc.VlessAccount{Id: uuid, Flow: flow})
+	return h.addAccountUser(ctx, tag, username, level, vlessAccountType, &xrpc.VlessAccount{
+		Id: uuid, Flow: flow, Encryption: "none",
+	})
 }
 
 func (h *HandlerAPI) AddTrojanUser(ctx context.Context, tag, username, password string, level uint32) HandlerResult {
@@ -103,15 +108,45 @@ func (h *HandlerAPI) GetInboundUsers(ctx context.Context, tag string) ([]Inbound
 	users := make([]InboundUser, 0, len(resp.GetUsers()))
 	for _, user := range resp.GetUsers() {
 		if user == nil {
-			continue
+			return nil, HandlerResult{OK: false, Message: "invalid inbound user: missing user"}
+		}
+		account := user.GetAccount()
+		if account == nil {
+			return nil, HandlerResult{OK: false, Message: "invalid inbound user: missing account"}
+		}
+		protocol, ok := inboundUserProtocol(account.GetType())
+		if !ok {
+			return nil, HandlerResult{
+				OK:      false,
+				Message: fmt.Sprintf("unsupported inbound user account type %q", account.GetType()),
+			}
 		}
 		users = append(users, InboundUser{
 			Username: user.GetEmail(),
-			Email:    user.GetEmail(),
 			Level:    user.GetLevel(),
+			Protocol: protocol,
 		})
 	}
 	return users, HandlerResult{OK: true}
+}
+
+func inboundUserProtocol(accountType string) (string, bool) {
+	switch accountType {
+	case trojanAccountType:
+		return "trojan", true
+	case vlessAccountType:
+		return "vless", true
+	case shadowsocksAccountType:
+		return "shadowsocks", true
+	case shadowsocks2022AccountType:
+		return "shadowsocks2022", true
+	case socksAccountType:
+		return "socks", true
+	case httpAccountType:
+		return "http", true
+	default:
+		return "", false
+	}
 }
 
 func (h *HandlerAPI) GetInboundUsersCount(ctx context.Context, tag string) (int64, HandlerResult) {

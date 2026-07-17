@@ -19,7 +19,9 @@ func TestHandlerAccountWireGoldens(t *testing.T) {
 		add       func(*HandlerAPI) HandlerResult
 	}{
 		{
-			name: "vless", wantType: vlessAccountType, wantValue: "0a0269641204666c6f77",
+			// Captured from @remnawave/xtls-sdk 0.16.0's generated VLESS
+			// Account encoder for {id:"id", flow:"flow", encryption:"none"}.
+			name: "vless", wantType: vlessAccountType, wantValue: "0a0269641204666c6f771a046e6f6e65",
 			add: func(api *HandlerAPI) HandlerResult {
 				return api.AddVlessUser(context.Background(), "in", "user", "id", "flow", 3)
 			},
@@ -85,7 +87,7 @@ func TestHandlerRequestWireGoldens(t *testing.T) {
 	}{
 		{
 			name: "add-vless",
-			want: "0a02696e12600a2a787261792e6170702e70726f78796d616e2e636f6d6d616e642e416464557365724f7065726174696f6e12320a3008031204757365721a260a18787261792e70726f78792e766c6573732e4163636f756e74120a0a0269641204666c6f77",
+			want: "0a02696e12660a2a787261792e6170702e70726f78796d616e2e636f6d6d616e642e416464557365724f7065726174696f6e12380a3608031204757365721a2c0a18787261792e70726f78792e766c6573732e4163636f756e7412100a0269641204666c6f771a046e6f6e65",
 			call: func(api *HandlerAPI) HandlerResult {
 				return api.AddVlessUser(context.Background(), "in", "user", "id", "flow", 3)
 			},
