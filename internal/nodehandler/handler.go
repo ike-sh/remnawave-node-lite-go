@@ -3,6 +3,7 @@ package nodehandler
 import (
 	"context"
 	"encoding/base64"
+	"log/slog"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/connections"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xtls"
@@ -26,6 +27,10 @@ type Provider interface {
 type ConnectionDropper interface {
 	DropIPs(ctx context.Context, ips []string) bool
 	DropUsers(ctx context.Context, provider connections.IPListProvider, userIDs []string) bool
+}
+
+type connectionDropperAvailability interface {
+	Available() bool
 }
 
 type Service struct {
@@ -177,16 +182,26 @@ func (s *Service) RemoveUser(ctx context.Context, request RemoveUserRequest) (re
 		return GenericResponse{Success: true, Error: nil}, nil
 	}
 
-	userIPs := collectUserIPs(ctx, s.provider, request.Username)
 	var results resultAccumulator
+	dropPlan, lookupResult := s.prepareUserIPDrop(ctx, request.Username)
+	results.Add(lookupResult)
+	if !lookupResult.OK {
+		return results.Response(), nil
+	}
+	removeOK := true
 	for _, tag := range tags {
 		if results.StopForContext(ctx) {
 			return results.Response(), nil
 		}
 		result := s.provider.HandlerRemoveUser(ctx, tag, request.Username)
-		results.Add(s.commitRemoved(result, tag, request.VlessUUID))
+		result = s.commitRemoved(result, tag, request.VlessUUID)
+		results.Add(result)
+		removeOK = removeOK && result.OK
 	}
-	s.dropIPs(ctx, userIPs)
+	if !removeOK {
+		return results.Response(), nil
+	}
+	results.Add(s.applyUserIPDrops(ctx, []userIPDropPlan{dropPlan}))
 	return results.Response(), nil
 }
 
@@ -248,20 +263,32 @@ func (s *Service) RemoveUsers(ctx context.Context, request RemoveUsersRequest) (
 	}
 
 	var results resultAccumulator
+	dropPlans := make([]userIPDropPlan, 0, len(request.Users))
 	for _, user := range request.Users {
 		if results.StopForContext(ctx) {
 			return results.Response(), nil
 		}
-		userIPs := collectUserIPs(ctx, s.provider, user.UserID)
+		dropPlan, lookupResult := s.prepareUserIPDrop(ctx, user.UserID)
+		results.Add(lookupResult)
+		if !lookupResult.OK {
+			continue
+		}
+		removeOK := true
 		for _, tag := range tags {
 			if results.StopForContext(ctx) {
 				return results.Response(), nil
 			}
 			result := s.provider.HandlerRemoveUser(ctx, tag, user.UserID)
-			results.Add(s.commitRemoved(result, tag, user.HashUUID))
+			result = s.commitRemoved(result, tag, user.HashUUID)
+			results.Add(result)
+			removeOK = removeOK && result.OK
 		}
-		s.dropIPs(ctx, userIPs)
+		if !removeOK {
+			continue
+		}
+		dropPlans = append(dropPlans, dropPlan)
 	}
+	results.Add(s.applyUserIPDrops(ctx, dropPlans))
 	return results.Response(), nil
 }
 
@@ -345,27 +372,50 @@ func (s *Service) addBatchUser(ctx context.Context, inbound BatchInbound, user B
 	}
 }
 
-func collectUserIPs(ctx context.Context, provider Provider, username string) []string {
-	if provider == nil {
-		return nil
-	}
-	entries, err := provider.GetUserIPList(ctx, username, true)
-	if err != nil || len(entries) == 0 {
-		return nil
-	}
-	ips := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IP != "" {
-			ips = append(ips, entry.IP)
-		}
-	}
-	return ips
+type userIPDropPlan struct {
+	ips []string
 }
 
-func (s *Service) dropIPs(ctx context.Context, ips []string) {
-	if s.dropper != nil && len(ips) != 0 {
-		s.dropper.DropIPs(ctx, ips)
+func (s *Service) prepareUserIPDrop(ctx context.Context, userID string) (userIPDropPlan, xtls.HandlerResult) {
+	if !s.connectionDropAvailable() || s.provider == nil {
+		return userIPDropPlan{}, xtls.HandlerResult{OK: true}
 	}
+	// Removing a user must not clear retry evidence on reset-capable cores.
+	entries, err := s.provider.GetUserIPList(ctx, userID, false)
+	if err != nil {
+		slog.Warn("failed to read user IP stats before removing user", "userId", userID, "error", err)
+		return userIPDropPlan{}, xtls.HandlerResult{OK: false, Message: "failed to read user IP stats"}
+	}
+	plan := userIPDropPlan{}
+	plan.ips = make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IP != "" {
+			plan.ips = append(plan.ips, entry.IP)
+		}
+	}
+	return plan, xtls.HandlerResult{OK: true}
+}
+
+func (s *Service) applyUserIPDrops(ctx context.Context, plans []userIPDropPlan) xtls.HandlerResult {
+	allIPs := make([]string, 0)
+	for _, plan := range plans {
+		allIPs = append(allIPs, plan.ips...)
+	}
+	if len(allIPs) == 0 {
+		return xtls.HandlerResult{OK: true}
+	}
+	if !s.dropper.DropIPs(ctx, allIPs) {
+		return xtls.HandlerResult{OK: false, Message: "failed to drop user connections"}
+	}
+	return xtls.HandlerResult{OK: true}
+}
+
+func (s *Service) connectionDropAvailable() bool {
+	if s.dropper == nil {
+		return false
+	}
+	availability, ok := s.dropper.(connectionDropperAvailability)
+	return !ok || availability.Available()
 }
 
 func requireAllResults(results []xtls.HandlerResult) GenericResponse {

@@ -5,11 +5,17 @@ package netadmin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
+	"strconv"
+	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -17,11 +23,30 @@ const (
 	socketKillNetNSChildEnv  = "REMNANODE_SOCKET_KILL_NETNS_CHILD"
 )
 
+var errIPv4DumpBlockedForMappedTest = errors.New("IPv4 dump blocked after mapped IPv6 coverage")
+
+type blockIPv4DumpTransport struct {
+	sockDiagTransport
+}
+
+func (t blockIPv4DumpTransport) send(ctx context.Context, message []byte) error {
+	header, err := decodeNetlinkHeader(message)
+	if err != nil {
+		return err
+	}
+	if header.message == unix.SOCK_DIAG_BY_FAMILY &&
+		len(message) >= unix.NLMSG_HDRLEN+inetDiagRequestPayloadLen &&
+		message[unix.NLMSG_HDRLEN] == unix.AF_INET {
+		return errIPv4DumpBlockedForMappedTest
+	}
+	return t.sockDiagTransport.send(ctx, message)
+}
+
 func TestKillSocketsInNetworkNamespace(t *testing.T) {
 	if os.Getenv(socketKillIntegrationEnv) != "1" {
 		t.Skip("set REMNANODE_SOCKET_KILL_INTEGRATION=1 to run the isolated socket-kill test")
 	}
-	for _, executable := range []string{"ip", "ss"} {
+	for _, executable := range []string{"ip"} {
 		if _, err := exec.LookPath(executable); err != nil {
 			t.Fatalf("%s executable is required: %v", executable, err)
 		}
@@ -51,6 +76,40 @@ func TestKillSocketsInNetworkNamespace(t *testing.T) {
 			runSocketKillCase(t, test.network, test.listenAddress, test.localAddress)
 		})
 	}
+	t.Run("dual-stack-ipv4-mapped", func(t *testing.T) {
+		const (
+			localAddress = "198.51.100.2"
+			prefix       = localAddress + "/32"
+		)
+		runIP(t, "address", "add", prefix, "dev", "lo")
+		t.Cleanup(func() {
+			runIP(t, "address", "delete", prefix, "dev", "lo")
+		})
+
+		listenConfig := net.ListenConfig{Control: func(_, _ string, raw syscall.RawConn) error {
+			var socketErr error
+			if err := raw.Control(func(fd uintptr) {
+				socketErr = unix.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_V6ONLY, 0)
+			}); err != nil {
+				return err
+			}
+			return socketErr
+		}}
+		listener, err := listenConfig.Listen(context.Background(), "tcp6", "[::]:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer listener.Close()
+		port := listener.Addr().(*net.TCPAddr).Port
+		runSocketKillWithListener(
+			t,
+			listener,
+			"tcp4",
+			net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+			localAddress,
+			unix.AF_INET6,
+		)
+	})
 }
 
 func runSocketKillCase(t *testing.T, network, listenAddress, localAddress string) {
@@ -61,6 +120,18 @@ func runSocketKillCase(t *testing.T, network, listenAddress, localAddress string
 		t.Fatal(err)
 	}
 	defer listener.Close()
+	runSocketKillWithListener(t, listener, network, listener.Addr().String(), localAddress, 0)
+}
+
+func runSocketKillWithListener(
+	t *testing.T,
+	listener net.Listener,
+	dialNetwork string,
+	dialAddress string,
+	localAddress string,
+	expectedServerDomain int,
+) {
+	t.Helper()
 
 	accepted := make(chan net.Conn, 1)
 	acceptErr := make(chan error, 1)
@@ -77,7 +148,7 @@ func runSocketKillCase(t *testing.T, network, listenAddress, localAddress string
 		Timeout:   time.Second,
 		LocalAddr: &net.TCPAddr{IP: net.ParseIP(localAddress)},
 	}
-	client, err := dialer.Dial(network, listener.Addr().String())
+	client, err := dialer.Dial(dialNetwork, dialAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,10 +163,31 @@ func runSocketKillCase(t *testing.T, network, listenAddress, localAddress string
 	case <-time.After(time.Second):
 		t.Fatal("timed out accepting test connection")
 	}
+	if expectedServerDomain != 0 {
+		domain, err := connectionSocketDomain(server)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if domain != expectedServerDomain {
+			t.Fatalf("accepted socket domain = %d, want %d", domain, expectedServerDomain)
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := KillSocketsByIP(ctx, localAddress); err != nil {
+	if expectedServerDomain == unix.AF_INET6 {
+		factory := func() (sockDiagTransport, error) {
+			transport, err := openSockDiagTransport()
+			if err != nil {
+				return nil, err
+			}
+			return blockIPv4DumpTransport{sockDiagTransport: transport}, nil
+		}
+		err := killSocketsByAddr(ctx, netip.MustParseAddr(localAddress), factory)
+		if !errors.Is(err, errIPv4DumpBlockedForMappedTest) {
+			t.Fatalf("mapped-only socket kill error = %v, want IPv4 dump sentinel", err)
+		}
+	} else if err := KillSocketsByIP(ctx, localAddress); err != nil {
 		t.Fatalf("KillSocketsByIP: %v", err)
 	}
 
@@ -111,6 +203,30 @@ func runSocketKillCase(t *testing.T, network, listenAddress, localAddress string
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		t.Fatalf("connection was not destroyed before deadline: %v", err)
 	}
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer retryCancel()
+	if err := KillSocketsByIP(retryCtx, localAddress); err != nil {
+		t.Fatalf("idempotent KillSocketsByIP retry: %v", err)
+	}
+}
+
+func connectionSocketDomain(connection net.Conn) (int, error) {
+	syscallConnection, ok := connection.(syscall.Conn)
+	if !ok {
+		return 0, fmt.Errorf("connection %T does not expose syscall.Conn", connection)
+	}
+	raw, err := syscallConnection.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var domain int
+	var socketErr error
+	if err := raw.Control(func(fd uintptr) {
+		domain, socketErr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_DOMAIN)
+	}); err != nil {
+		return 0, err
+	}
+	return domain, socketErr
 }
 
 func runSocketKillIntegrationChild(t *testing.T) {

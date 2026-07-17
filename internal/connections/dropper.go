@@ -2,10 +2,12 @@ package connections
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
@@ -19,27 +21,33 @@ type IPListProvider interface {
 type Dropper struct {
 	available     bool
 	isWhitelisted func(ip string) bool
+	localIPsMu    sync.RWMutex
 	localIPs      map[netip.Addr]struct{}
-	killSockets   func(context.Context, string) error
-	socketTimeout time.Duration
+	localIPsReady bool
+	localIPSource func() (map[netip.Addr]struct{}, error)
+	killSockets   func(context.Context, []netip.Addr) error
 	batchTimeout  time.Duration
 }
 
-const (
-	socketKillTimeout      = 3 * time.Second
-	socketKillBatchTimeout = 15 * time.Second
-)
+const socketKillBatchTimeout = 15 * time.Second
 
 func NewDropper(isWhitelisted func(ip string) bool) *Dropper {
 	if isWhitelisted == nil {
 		isWhitelisted = func(string) bool { return false }
 	}
+	localIPs, err := discoverLocalIPs()
+	localIPsReady := err == nil
+	if err != nil {
+		slog.Warn("failed to enumerate local addresses for connection-drop protection", "error", err)
+		localIPs = make(map[netip.Addr]struct{})
+	}
 	return &Dropper{
 		available:     netadmin.HasCapNetAdmin(),
 		isWhitelisted: isWhitelisted,
-		localIPs:      discoverLocalIPs(),
-		killSockets:   netadmin.KillSocketsByIP,
-		socketTimeout: socketKillTimeout,
+		localIPs:      localIPs,
+		localIPsReady: localIPsReady,
+		localIPSource: discoverLocalIPs,
+		killSockets:   netadmin.KillSocketsByIPs,
 		batchTimeout:  socketKillBatchTimeout,
 	}
 }
@@ -55,19 +63,26 @@ func (d *Dropper) DropIPs(ctx context.Context, ips []string) bool {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if ctx.Err() != nil {
+		return false
+	}
+	localIPs, localIPsReady := d.refreshLocalIPs()
+	if !localIPsReady {
+		return false
+	}
 	batchTimeout := d.batchTimeout
 	if batchTimeout <= 0 {
 		batchTimeout = socketKillBatchTimeout
 	}
 	ctx, cancelBatch := context.WithTimeout(ctx, batchTimeout)
 	defer cancelBatch()
-	socketTimeout := d.socketTimeout
-	if socketTimeout <= 0 {
-		socketTimeout = socketKillTimeout
-	}
 
 	ok := true
+	invalidCount := 0
+	scopedCount := 0
+	protectedCount := 0
 	seen := make(map[netip.Addr]struct{}, len(ips))
+	targets := make([]netip.Addr, 0, len(ips))
 	for _, raw := range ips {
 		if ctx.Err() != nil {
 			return false
@@ -75,7 +90,12 @@ func (d *Dropper) DropIPs(ctx context.Context, ips []string) bool {
 		ip := strings.TrimSpace(raw)
 		addr, err := netip.ParseAddr(ip)
 		if err != nil {
-			slog.Warn("refusing to drop connections for invalid IP", "ip", raw)
+			invalidCount++
+			ok = false
+			continue
+		}
+		if addr.Zone() != "" {
+			scopedCount++
 			ok = false
 			continue
 		}
@@ -84,8 +104,8 @@ func (d *Dropper) DropIPs(ctx context.Context, ips []string) bool {
 		if d.isWhitelisted(raw) || d.isWhitelisted(canonical) {
 			continue
 		}
-		if d.isProtected(addr) {
-			slog.Warn("refusing to drop connections for protected IP", "ip", canonical)
+		if isProtectedAddress(addr, localIPs) {
+			protectedCount++
 			ok = false
 			continue
 		}
@@ -93,18 +113,25 @@ func (d *Dropper) DropIPs(ctx context.Context, ips []string) bool {
 			continue
 		}
 		seen[addr] = struct{}{}
-		if !d.available || d.killSockets == nil {
-			ok = false
-			continue
-		}
-
-		killCtx, cancel := context.WithTimeout(ctx, socketTimeout)
-		err = d.killSockets(killCtx, canonical)
-		cancel()
-		if err != nil {
-			slog.Warn("failed to drop connections", "ip", canonical, "error", err)
-			ok = false
-		}
+		targets = append(targets, addr)
+	}
+	if invalidCount != 0 || scopedCount != 0 || protectedCount != 0 {
+		slog.Warn(
+			"refused unsafe connection-drop targets",
+			"invalidCount", invalidCount,
+			"scopedCount", scopedCount,
+			"protectedCount", protectedCount,
+		)
+	}
+	if len(targets) == 0 {
+		return ok
+	}
+	if !d.available || d.killSockets == nil {
+		return false
+	}
+	if err := d.killSockets(ctx, targets); err != nil {
+		slog.Warn("failed to drop connections", "targetCount", len(targets), "error", err)
+		return false
 	}
 	return ok
 }
@@ -128,6 +155,7 @@ func (d *Dropper) DropUsers(ctx context.Context, provider IPListProvider, userID
 
 	ok := true
 	seen := make(map[string]struct{}, len(userIDs))
+	allIPs := make([]string, 0)
 	for _, userID := range userIDs {
 		if _, duplicate := seen[userID]; duplicate {
 			continue
@@ -136,7 +164,9 @@ func (d *Dropper) DropUsers(ctx context.Context, provider IPListProvider, userID
 		if err := ctx.Err(); err != nil {
 			return false
 		}
-		entries, err := provider.GetUserIPList(ctx, userID, true)
+		// The pinned core removes online IPs with connection refcounts and ignores
+		// reset. Keep this read non-destructive for reset-capable compatible cores.
+		entries, err := provider.GetUserIPList(ctx, userID, false)
 		if err != nil {
 			slog.Warn("failed to get user IPs before dropping connections", "userId", userID, "error", err)
 			ok = false
@@ -145,20 +175,22 @@ func (d *Dropper) DropUsers(ctx context.Context, provider IPListProvider, userID
 		if len(entries) == 0 {
 			continue
 		}
-		ips := make([]string, 0, len(entries))
 		for _, entry := range entries {
 			if entry.IP != "" {
-				ips = append(ips, entry.IP)
+				allIPs = append(allIPs, entry.IP)
 			}
 		}
-		if !d.DropIPs(ctx, ips) {
-			ok = false
-		}
+	}
+	if len(allIPs) == 0 {
+		return ok
+	}
+	if !d.DropIPs(ctx, allIPs) {
+		return false
 	}
 	return ok
 }
 
-func (d *Dropper) isProtected(addr netip.Addr) bool {
+func isProtectedAddress(addr netip.Addr, localIPs map[netip.Addr]struct{}) bool {
 	if !addr.IsValid() || addr.IsUnspecified() || addr.IsLoopback() ||
 		addr.IsMulticast() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() {
 		return true
@@ -166,16 +198,37 @@ func (d *Dropper) isProtected(addr netip.Addr) bool {
 	if addr.Is4() && addr == netip.MustParseAddr("255.255.255.255") {
 		return true
 	}
-	_, local := d.localIPs[addr]
+	_, local := localIPs[addr]
 	return local
 }
 
-func discoverLocalIPs() map[netip.Addr]struct{} {
+func (d *Dropper) refreshLocalIPs() (map[netip.Addr]struct{}, bool) {
+	if d == nil {
+		return nil, false
+	}
+	if d.localIPSource == nil {
+		d.localIPsMu.RLock()
+		defer d.localIPsMu.RUnlock()
+		return d.localIPs, d.localIPsReady
+	}
+	d.localIPsMu.Lock()
+	defer d.localIPsMu.Unlock()
+	localIPs, err := d.localIPSource()
+	if err != nil {
+		d.localIPsReady = false
+		slog.Warn("failed to refresh local addresses for connection-drop protection", "error", err)
+		return nil, false
+	}
+	d.localIPs = localIPs
+	d.localIPsReady = true
+	return localIPs, true
+}
+
+func discoverLocalIPs() (map[netip.Addr]struct{}, error) {
 	result := make(map[netip.Addr]struct{})
 	addresses, err := net.InterfaceAddrs()
 	if err != nil {
-		slog.Warn("failed to enumerate local addresses for connection-drop protection", "error", err)
-		return result
+		return nil, fmt.Errorf("enumerate network interface addresses: %w", err)
 	}
 	for _, address := range addresses {
 		host := address.String()
@@ -190,5 +243,5 @@ func discoverLocalIPs() map[netip.Addr]struct{} {
 			result[addr.Unmap()] = struct{}{}
 		}
 	}
-	return result
+	return result, nil
 }
