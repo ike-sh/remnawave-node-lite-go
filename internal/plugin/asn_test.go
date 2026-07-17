@@ -1,17 +1,24 @@
 package plugin
 
 import (
+	"context"
 	"reflect"
 	"testing"
 )
 
 type stubASNResolver struct{}
 
+type oversizedASNResolver struct{}
+
 func (stubASNResolver) PrefixesByASN(asn uint32) (ipv4, ipv6 []string) {
 	if asn == 13335 {
 		return []string{"1.1.1.0/24"}, []string{"2606:4700::/32"}
 	}
 	return nil, nil
+}
+
+func (oversizedASNResolver) PrefixesByASN(uint32) (ipv4, ipv6 []string) {
+	return make([]string, maxResolvedIPItems+1), nil
 }
 
 func TestParseASN(t *testing.T) {
@@ -45,7 +52,10 @@ func TestBuildSharedIPMapResolvesASList(t *testing.T) {
 			map[string]any{"name": "ext:ips", "type": "ipList", "items": []any{"9.9.9.9"}},
 		},
 	}
-	shared := buildSharedIPMap(cfg, stubASNResolver{})
+	shared, err := buildSharedIPMapWithDiagnosticsContext(context.Background(), cfg, stubASNResolver{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if got := shared["ext:cf"]; !reflect.DeepEqual(got, []string{"1.1.1.0/24", "2606:4700::/32"}) {
 		t.Errorf("ext:cf = %v", got)
@@ -62,9 +72,29 @@ func TestBuildSharedIPMapASListWithoutResolver(t *testing.T) {
 			map[string]any{"name": "ext:cf", "type": "asList", "items": []any{float64(13335)}},
 		},
 	}
-	shared := buildSharedIPMap(cfg, nil)
+	shared, err := buildSharedIPMapWithDiagnosticsContext(context.Background(), cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(shared["ext:cf"]) != 0 {
 		t.Errorf("expected empty resolution without resolver, got %v", shared["ext:cf"])
+	}
+}
+
+func TestBuildPluginPlanRejectsOversizedASNExpansion(t *testing.T) {
+	t.Parallel()
+
+	request := mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{
+			"sharedLists": []any{
+				map[string]any{"name": "ext:huge", "type": "asList", "items": []any{float64(64500)}},
+			},
+		},
+	})
+	if _, err := buildPluginPlan(request, oversizedASNResolver{}, true); err == nil {
+		t.Fatal("oversized ASN expansion was accepted")
 	}
 }
 

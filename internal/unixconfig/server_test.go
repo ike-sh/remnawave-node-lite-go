@@ -1,11 +1,13 @@
 package unixconfig
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,11 +21,13 @@ type staticProvider struct {
 type recordingWebhook struct {
 	calls   int
 	payload xraywebhook.Payload
+	accept  bool
 }
 
-func (w *recordingWebhook) HandleXrayWebhook(payload xraywebhook.Payload) {
+func (w *recordingWebhook) HandleXrayWebhookContext(_ context.Context, payload xraywebhook.Payload) bool {
 	w.calls++
 	w.payload = payload
+	return w.accept
 }
 
 func (p staticProvider) CurrentConfigJSON() []byte {
@@ -130,7 +134,7 @@ func TestGetConfigReturnsCurrentConfig(t *testing.T) {
 }
 
 func TestWebhookAcceptsOneBoundedOfficialPayload(t *testing.T) {
-	processor := &recordingWebhook{}
+	processor := &recordingWebhook{accept: true}
 	server := &Server{Token: "good", Provider: staticProvider{}, Webhook: processor}
 	request := httptest.NewRequest(http.MethodPost, "/internal/webhook", strings.NewReader(`{
 		"email":"user-1","level":0,"protocol":"vless","network":"tcp",
@@ -157,7 +161,7 @@ func TestWebhookRejectsInvalidOrOversizedPayloadBeforeProcessor(t *testing.T) {
 		`{} {}`,
 		strings.Repeat(" ", maxWebhookBodyBytes) + `{}`,
 	} {
-		processor := &recordingWebhook{}
+		processor := &recordingWebhook{accept: true}
 		server := &Server{Token: "good", Provider: staticProvider{}, Webhook: processor}
 		request := httptest.NewRequest(http.MethodPost, "/internal/webhook", strings.NewReader(body))
 		request.Header.Set(InternalTokenHeader, "good")
@@ -174,17 +178,174 @@ func TestWebhookRejectsInvalidOrOversizedPayloadBeforeProcessor(t *testing.T) {
 	}
 }
 
-func TestUnixHandlerLimitRejectsInsteadOfQueueing(t *testing.T) {
+func TestWebhookReturnsRetryableOverloadWhenProcessorRejects(t *testing.T) {
 	t.Parallel()
-	entered := make(chan struct{})
+
+	processor := &recordingWebhook{accept: false}
+	server := &Server{Token: "good", Provider: staticProvider{}, Webhook: processor}
+	request := httptest.NewRequest(http.MethodPost, "/internal/webhook", strings.NewReader(`{
+		"email":"user-1","level":0,"protocol":"vless","network":"tcp",
+		"source":"tcp:203.0.113.10:443","destination":"198.51.100.1:443",
+		"routeTarget":null,"originalTarget":null,"inboundTag":"in-1",
+		"inboundName":null,"inboundLocal":null,"outboundTag":"direct","ts":123
+	}`))
+	request.Header.Set(InternalTokenHeader, "good")
+	response := httptest.NewRecorder()
+
+	server.handleWebhook(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	if response.Header().Get("Retry-After") != "1" || processor.calls != 1 {
+		t.Fatalf("headers=%v calls=%d", response.Header(), processor.calls)
+	}
+}
+
+func TestUnixHandlerLimitWaitsForCapacity(t *testing.T) {
+	t.Parallel()
+	entered := make(chan int, 2)
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	var calls atomic.Int64
 	handler := limitUnixHandlers(1, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		close(entered)
-		<-release
+		call := int(calls.Add(1))
+		entered <- call
+		if call == 1 {
+			<-release
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
+	firstDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+		close(firstDone)
+	}()
+	if got := <-entered; got != 1 {
+		t.Fatalf("first unix handler call = %d", got)
+	}
+
+	response := httptest.NewRecorder()
+	secondDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+		t.Fatal("second unix request completed while the handler slot was occupied")
+	case <-time.After(20 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case got := <-entered:
+		if got != 2 {
+			t.Fatalf("second unix handler call = %d", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second unix handler did not start")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second unix handler did not finish")
+	}
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("second unix response = %d", response.Code)
+	}
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first unix handler did not finish")
+	}
+}
+
+func TestUnixHandlerLimitReservesCapacityForConfig(t *testing.T) {
+	t.Parallel()
+
+	webhookEntered := make(chan struct{}, 1)
+	configEntered := make(chan struct{}, 1)
+	releaseWebhook := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseWebhook) }) })
+	handler := limitUnixHandlers(2, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/webhook" {
+			webhookEntered <- struct{}{}
+			<-releaseWebhook
+			return
+		}
+		configEntered <- struct{}{}
+	}))
+
+	firstDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/internal/webhook", nil))
+		close(firstDone)
+	}()
+	select {
+	case <-webhookEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first webhook did not enter")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/internal/webhook", nil))
+		close(secondDone)
+	}()
+	select {
+	case <-webhookEntered:
+		t.Fatal("second webhook consumed the config reserve")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	configDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/internal/get-config", nil))
+		close(configDone)
+	}()
+	select {
+	case <-configEntered:
+	case <-time.After(time.Second):
+		t.Fatal("config request could not use its reserved handler slot")
+	}
+	select {
+	case <-configDone:
+	case <-time.After(time.Second):
+		t.Fatal("config request did not finish")
+	}
+
+	releaseOnce.Do(func() { close(releaseWebhook) })
+	select {
+	case <-webhookEntered:
+	case <-time.After(time.Second):
+		t.Fatal("queued webhook did not enter after capacity was released")
+	}
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first webhook did not finish")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second webhook did not finish")
+	}
+}
+
+func TestUnixRequestTimeoutCoversHandlerAdmission(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	handler := withUnixRequestTimeout(20*time.Millisecond, limitUnixHandlers(1, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		entered <- struct{}{}
+		<-release
+	})))
+
 	firstDone := make(chan struct{})
 	go func() {
 		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
@@ -196,11 +357,26 @@ func TestUnixHandlerLimitRejectsInsteadOfQueueing(t *testing.T) {
 		t.Fatal("first unix handler did not start")
 	}
 
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
-	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("overload status = %d", response.Code)
+	secondResponse := httptest.NewRecorder()
+	secondDone := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(secondResponse, httptest.NewRequest(http.MethodGet, "/", nil))
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("request timeout did not cancel handler admission")
 	}
+	if secondResponse.Code != http.StatusServiceUnavailable || secondResponse.Header().Get("Retry-After") != "1" {
+		t.Fatalf("timed-out admission response = %d headers=%v", secondResponse.Code, secondResponse.Header())
+	}
+	select {
+	case <-entered:
+		t.Fatal("timed-out unix request reached the downstream handler")
+	default:
+	}
+
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case <-firstDone:

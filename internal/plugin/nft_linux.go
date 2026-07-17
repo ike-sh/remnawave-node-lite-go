@@ -24,7 +24,8 @@ type nftScriptRunner func(ctx context.Context, script string) error
 type nftManager struct {
 	mu      sync.RWMutex
 	capable bool
-	ready   bool
+	owned   bool
+	healthy bool
 	run     nftScriptRunner
 }
 
@@ -41,16 +42,22 @@ func (m *nftManager) Initialize(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.ready {
+	if m.healthy {
 		return nil
 	}
 	if !m.capable || m.run == nil {
 		return errNFTablesUnavailable
 	}
-	if err := m.run(ctx, renderNFTConfig(firewallConfig{})); err != nil {
+	script := renderNFTConfig(firewallConfig{})
+	if err := validateNFTScript(script); err != nil {
 		return fmt.Errorf("initialize nftables: %w", err)
 	}
-	m.ready = true
+	m.owned = true
+	if err := m.run(ctx, script); err != nil {
+		m.healthy = false
+		return fmt.Errorf("initialize nftables: %w", err)
+	}
+	m.healthy = true
 	return nil
 }
 
@@ -60,7 +67,7 @@ func (m *nftManager) Available() bool {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.ready
+	return m.healthy
 }
 
 func (m *nftManager) Apply(ctx context.Context, config firewallConfig) error {
@@ -69,12 +76,40 @@ func (m *nftManager) Apply(ctx context.Context, config firewallConfig) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.ready || m.run == nil {
+	if !m.owned || !m.capable || m.run == nil {
 		return errNFTablesUnavailable
 	}
-	if err := m.run(ctx, renderNFTConfig(config)); err != nil {
+	script := renderNFTStaticUpdate(config)
+	if err := validateNFTScript(script); err != nil {
 		return fmt.Errorf("apply nftables config: %w", err)
 	}
+	if err := m.run(ctx, script); err != nil {
+		m.healthy = false
+		return fmt.Errorf("apply nftables config: %w", err)
+	}
+	m.healthy = true
+	return nil
+}
+
+func (m *nftManager) Reset(ctx context.Context, config firewallConfig) error {
+	if m == nil {
+		return errNFTablesUnavailable
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.capable || m.run == nil {
+		return errNFTablesUnavailable
+	}
+	script := renderNFTConfig(config)
+	if err := validateNFTScript(script); err != nil {
+		return fmt.Errorf("reset nftables config: %w", err)
+	}
+	m.owned = true
+	if err := m.run(ctx, script); err != nil {
+		m.healthy = false
+		return fmt.Errorf("reset nftables config: %w", err)
+	}
+	m.healthy = true
 	return nil
 }
 
@@ -84,7 +119,7 @@ func (m *nftManager) BlockIPs(ctx context.Context, items []BlockIP) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.ready || m.run == nil {
+	if !m.healthy || !m.owned || m.run == nil {
 		return errNFTablesUnavailable
 	}
 	script, err := renderNFTBlock(items)
@@ -95,6 +130,9 @@ func (m *nftManager) BlockIPs(ctx context.Context, items []BlockIP) error {
 		return nil
 	}
 	if err := m.run(ctx, script); err != nil {
+		if isAmbiguousNFTNotFound(err) {
+			m.healthy = false
+		}
 		return fmt.Errorf("block nftables addresses: %w", err)
 	}
 	return nil
@@ -106,18 +144,33 @@ func (m *nftManager) UnblockIPs(ctx context.Context, ips []string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.ready || m.run == nil {
+	if !m.healthy || !m.owned || m.run == nil {
 		return errNFTablesUnavailable
 	}
 	commands, err := renderNFTUnblock(ips)
 	if err != nil {
 		return err
 	}
+	var ambiguousNotFound error
 	for _, command := range commands {
 		if err := m.run(ctx, command); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !isMissingNFTElement(err) {
 				return fmt.Errorf("unblock nftables addresses: %w", err)
 			}
+			if isAmbiguousNFTNotFound(err) && ambiguousNotFound == nil {
+				ambiguousNotFound = err
+			}
+		}
+	}
+	if ambiguousNotFound != nil {
+		if err := m.run(ctx, renderNFTStructureProbe()); err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				m.healthy = false
+			}
+			return errors.Join(
+				fmt.Errorf("unblock nftables addresses: %w", ambiguousNotFound),
+				fmt.Errorf("verify nftables structure: %w", err),
+			)
 		}
 	}
 	return nil
@@ -129,17 +182,22 @@ func (m *nftManager) Close(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.ready || m.run == nil {
+	if !m.owned || m.run == nil {
 		return nil
 	}
 	if err := m.run(ctx, renderNFTDeleteTables()); err != nil {
+		m.healthy = false
 		return fmt.Errorf("delete nftables tables: %w", err)
 	}
-	m.ready = false
+	m.owned = false
+	m.healthy = false
 	return nil
 }
 
 func runNFTScript(parent context.Context, script string) error {
+	if err := validateNFTScript(script); err != nil {
+		return err
+	}
 	if parent == nil {
 		parent = context.Background()
 	}

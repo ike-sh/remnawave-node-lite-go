@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -10,10 +11,8 @@ import (
 )
 
 type pluginPlan struct {
-	snapshot                      *pluginSnapshot
-	torrentIncludeRuleTags        []string
-	torrentIncludeRuleTagsPresent bool
-	diagnostics                   planDiagnostics
+	snapshot    *pluginSnapshot
+	diagnostics planDiagnostics
 }
 
 type planDiagnostics struct {
@@ -24,66 +23,90 @@ type planDiagnostics struct {
 }
 
 func buildPluginPlan(request *SyncPlugin, resolver ASNResolver, firewallAvailable bool) (*pluginPlan, error) {
-	config, err := decodePluginConfig(request)
+	return buildPluginPlanContext(context.Background(), request, resolver, firewallAvailable)
+}
+
+func buildPluginPlanContext(ctx context.Context, request *SyncPlugin, resolver ASNResolver, firewallAvailable bool) (*pluginPlan, error) {
+	config, configHash, err := decodePluginConfigContext(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	return buildPluginPlanFromConfig(request, config, resolver, firewallAvailable), nil
+	return buildPluginPlanFromConfigContext(ctx, request, config, configHash, resolver, firewallAvailable)
 }
 
-func decodePluginConfig(request *SyncPlugin) (map[string]any, error) {
+func decodePluginConfigContext(ctx context.Context, request *SyncPlugin) (map[string]any, string, error) {
 	if request == nil {
-		return nil, fmt.Errorf("plugin is required")
+		return nil, "", fmt.Errorf("plugin is required")
+	}
+	if len(request.Config) > maxPluginConfigBytes {
+		return nil, "", fmt.Errorf("plugin config is %d bytes; maximum is %d", len(request.Config), maxPluginConfigBytes)
+	}
+	configHash, err := hashPluginConfigContext(ctx, request.Config)
+	if err != nil {
+		return nil, "", err
 	}
 
 	var config map[string]any
-	if err := json.Unmarshal(request.Config, &config); err != nil || config == nil {
+	if err = json.Unmarshal(request.Config, &config); err != nil || config == nil {
 		if err == nil {
 			err = fmt.Errorf("config must be an object")
 		}
-		return nil, fmt.Errorf("decode plugin config: %w", err)
+		return nil, "", fmt.Errorf("decode plugin config: %w", err)
 	}
 	if err := ValidatePluginConfig(config); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return config, nil
+	return config, configHash, nil
 }
 
-func buildPluginPlanFromConfig(request *SyncPlugin, config map[string]any, resolver ASNResolver, firewallAvailable bool) *pluginPlan {
+func buildPluginPlanFromConfigContext(
+	ctx context.Context,
+	request *SyncPlugin,
+	config map[string]any,
+	configHash string,
+	resolver ASNResolver,
+	firewallAvailable bool,
+) (*pluginPlan, error) {
 	diagnostics := planDiagnostics{}
-	shared := buildSharedIPMapWithDiagnostics(config, resolver, &diagnostics)
+	shared, err := buildSharedIPMapWithDiagnosticsContext(ctx, config, resolver, &diagnostics)
+	if err != nil {
+		return nil, err
+	}
 	snapshot := &pluginSnapshot{
-		configHash:    hashPluginConfig(request.Config),
+		configHash:    configHash,
 		sourceHash:    sha256.Sum256(request.Config),
 		pluginUUID:    request.UUID,
 		pluginName:    request.Name,
 		firewallReady: firewallAvailable,
-		whitelistIPs:  make(map[string]struct{}),
 		torrent: torrentSettings{
-			ignoredIPs:   make(map[string]struct{}),
 			ignoredUsers: make(map[string]struct{}),
 		},
 	}
+	resolvedBudget := expansionBudget{remaining: maxResolvedIPItems}
 
 	if connectionDrop, ok := config["connectionDrop"].(map[string]any); ok {
 		if enabled, _ := connectionDrop["enabled"].(bool); enabled {
-			for _, ip := range resolveIPList(toStringSlice(connectionDrop["whitelistIps"]), shared, &diagnostics) {
-				snapshot.whitelistIPs[ip] = struct{}{}
+			resolved, resolveErr := resolveIPListContext(ctx, toStringSlice(connectionDrop["whitelistIps"]), shared, &diagnostics, &resolvedBudget)
+			if resolveErr != nil {
+				return nil, resolveErr
 			}
+			snapshot.whitelistIPs = newIPMatcher(resolved)
 		}
 	}
 
 	plan := &pluginPlan{snapshot: snapshot, diagnostics: diagnostics}
 	if blocker, ok := config["torrentBlocker"].(map[string]any); ok {
-		plan.torrentIncludeRuleTags, plan.torrentIncludeRuleTagsPresent = optionalStringSlice(blocker, "includeRuleTags")
+		includeRuleTags := toStringSlice(blocker["includeRuleTags"])
 		if enabled, _ := blocker["enabled"].(bool); enabled {
 			snapshot.torrent.enabled = true
 			snapshot.torrent.blockDuration, _ = numberValue(blocker["blockDuration"])
-			snapshot.torrent.includeRuleTags = append([]string(nil), plan.torrentIncludeRuleTags...)
+			snapshot.torrent.includeRuleTags = append([]string(nil), includeRuleTags...)
 			if ignore, ok := blocker["ignoreLists"].(map[string]any); ok {
-				for _, ip := range resolveIPList(toStringSlice(ignore["ip"]), shared, &plan.diagnostics) {
-					snapshot.torrent.ignoredIPs[ip] = struct{}{}
+				resolved, resolveErr := resolveIPListContext(ctx, toStringSlice(ignore["ip"]), shared, &plan.diagnostics, &resolvedBudget)
+				if resolveErr != nil {
+					return nil, resolveErr
 				}
+				snapshot.torrent.ignoredIPs = newIPMatcher(resolved)
 				for _, user := range toNumberStringSlice(ignore["userId"]) {
 					snapshot.torrent.ignoredUsers[user] = struct{}{}
 				}
@@ -94,24 +117,27 @@ func buildPluginPlanFromConfig(request *SyncPlugin, config map[string]any, resol
 		}
 	}
 
-	snapshot.firewall = buildFirewallConfig(config, shared, &plan.diagnostics)
+	snapshot.firewall, err = buildFirewallConfigContext(ctx, config, shared, &plan.diagnostics, &resolvedBudget)
+	if err != nil {
+		return nil, err
+	}
 	if !firewallAvailable && firewallConfigRequested(config) {
 		plan.diagnostics.firewallUnavailable = true
 	}
-	return plan
+	return plan, nil
 }
 
-func buildSharedIPMap(config map[string]any, resolver ASNResolver) map[string][]string {
-	return buildSharedIPMapWithDiagnostics(config, resolver, nil)
-}
-
-func buildSharedIPMapWithDiagnostics(config map[string]any, resolver ASNResolver, diagnostics *planDiagnostics) map[string][]string {
+func buildSharedIPMapWithDiagnosticsContext(ctx context.Context, config map[string]any, resolver ASNResolver, diagnostics *planDiagnostics) (map[string][]string, error) {
 	shared := make(map[string][]string)
 	lists, ok := config["sharedLists"].([]any)
 	if !ok {
-		return shared
+		return shared, nil
 	}
+	budget := expansionBudget{remaining: maxResolvedIPItems}
 	for _, item := range lists {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
 		entry, ok := item.(map[string]any)
 		if !ok {
 			continue
@@ -119,24 +145,41 @@ func buildSharedIPMapWithDiagnostics(config map[string]any, resolver ASNResolver
 		name, _ := entry["name"].(string)
 		switch entryType, _ := entry["type"].(string); entryType {
 		case "ipList":
-			shared[name] = toStringSlice(entry["items"])
+			values := toStringSlice(entry["items"])
+			if err := budget.consume(len(values)); err != nil {
+				return nil, fmt.Errorf("expand shared list %s: %w", quotedForError(name), err)
+			}
+			shared[name] = values
 		case "asList":
-			shared[name] = resolveASListWithDiagnostics(entry["items"], resolver, diagnostics)
+			resolved, err := resolveASListWithDiagnosticsContext(ctx, entry["items"], resolver, diagnostics, &budget)
+			if err != nil {
+				return nil, fmt.Errorf("expand shared list %s: %w", quotedForError(name), err)
+			}
+			shared[name] = resolved
 		}
 	}
-	return shared
+	return shared, nil
 }
 
-func resolveASListWithDiagnostics(rawItems any, resolver ASNResolver, diagnostics *planDiagnostics) []string {
+func resolveASListWithDiagnosticsContext(
+	ctx context.Context,
+	rawItems any,
+	resolver ASNResolver,
+	diagnostics *planDiagnostics,
+	budget *expansionBudget,
+) ([]string, error) {
 	asns := toASNSlice(rawItems)
 	if resolver == nil {
 		if diagnostics != nil && len(asns) != 0 {
 			diagnostics.asnUnavailable = true
 		}
-		return nil
+		return nil, nil
 	}
 	out := make([]string, 0, len(asns))
 	for _, asn := range asns {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
 		v4, v6 := resolver.PrefixesByASN(asn)
 		if len(v4) == 0 && len(v6) == 0 {
 			if diagnostics != nil {
@@ -144,15 +187,45 @@ func resolveASListWithDiagnostics(rawItems any, resolver ASNResolver, diagnostic
 			}
 			continue
 		}
+		if err := budget.consume(len(v4) + len(v6)); err != nil {
+			return nil, err
+		}
+		if err := validateASNPrefixes(v4); err != nil {
+			return nil, err
+		}
+		if err := validateASNPrefixes(v6); err != nil {
+			return nil, err
+		}
 		out = append(out, v4...)
 		out = append(out, v6...)
 	}
-	return out
+	return out, nil
 }
 
-func resolveIPList(items []string, shared map[string][]string, diagnostics *planDiagnostics) []string {
+func validateASNPrefixes(prefixes []string) error {
+	for _, prefix := range prefixes {
+		if err := validateStringLength("resolved ASN prefix", prefix); err != nil {
+			return err
+		}
+		if !isSharedListItem(prefix) {
+			return fmt.Errorf("ASN resolver returned invalid prefix %s", quotedForError(prefix))
+		}
+	}
+	return nil
+}
+
+func resolveIPListContext(
+	ctx context.Context,
+	items []string,
+	shared map[string][]string,
+	diagnostics *planDiagnostics,
+	budget *expansionBudget,
+) ([]string, error) {
 	out := make([]string, 0, len(items))
 	for _, item := range items {
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
 		if strings.HasPrefix(item, "ext:") {
 			resolved, ok := shared[item]
 			if !ok {
@@ -161,28 +234,60 @@ func resolveIPList(items []string, shared map[string][]string, diagnostics *plan
 				}
 				continue
 			}
+			if err := budget.consume(len(resolved)); err != nil {
+				return nil, fmt.Errorf("resolve %s: %w", quotedForError(item), err)
+			}
 			out = append(out, resolved...)
 			continue
 		}
+		if err := budget.consume(1); err != nil {
+			return nil, err
+		}
 		out = append(out, item)
 	}
-	return out
+	return out, nil
 }
 
-func buildFirewallConfig(config map[string]any, shared map[string][]string, diagnostics *planDiagnostics) firewallConfig {
+func buildFirewallConfigContext(
+	ctx context.Context,
+	config map[string]any,
+	shared map[string][]string,
+	diagnostics *planDiagnostics,
+	budget *expansionBudget,
+) (firewallConfig, error) {
 	var firewall firewallConfig
 	if ingress, ok := config["ingressFilter"].(map[string]any); ok {
 		if enabled, _ := ingress["enabled"].(bool); enabled {
-			firewall.ingressIPs = resolveIPList(toStringSlice(ingress["blockedIps"]), shared, diagnostics)
+			resolved, err := resolveIPListContext(ctx, toStringSlice(ingress["blockedIps"]), shared, diagnostics, budget)
+			if err != nil {
+				return firewallConfig{}, err
+			}
+			firewall.ingressIPs = resolved
 		}
 	}
 	if egress, ok := config["egressFilter"].(map[string]any); ok {
 		if enabled, _ := egress["enabled"].(bool); enabled {
-			firewall.egressIPs = resolveIPList(toStringSlice(egress["blockedIps"]), shared, diagnostics)
+			resolved, err := resolveIPListContext(ctx, toStringSlice(egress["blockedIps"]), shared, diagnostics, budget)
+			if err != nil {
+				return firewallConfig{}, err
+			}
+			firewall.egressIPs = resolved
 			firewall.egressPorts = toIntSlice(egress["blockedPorts"])
 		}
 	}
-	return firewall
+	return firewall, nil
+}
+
+type expansionBudget struct {
+	remaining int
+}
+
+func (b *expansionBudget) consume(count int) error {
+	if count < 0 || count > b.remaining {
+		return fmt.Errorf("resolved IP budget exceeded (%d)", maxResolvedIPItems)
+	}
+	b.remaining -= count
+	return nil
 }
 
 func firewallConfigRequested(config map[string]any) bool {
@@ -196,14 +301,6 @@ func firewallConfigRequested(config map[string]any) bool {
 		}
 	}
 	return false
-}
-
-func optionalStringSlice(object map[string]any, key string) ([]string, bool) {
-	raw, present := object[key]
-	if !present {
-		return nil, false
-	}
-	return toStringSlice(raw), true
 }
 
 func toStringSlice(value any) []string {

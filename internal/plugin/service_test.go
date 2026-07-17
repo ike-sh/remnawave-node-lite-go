@@ -2,9 +2,12 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +18,7 @@ type fakeFirewall struct {
 	mu sync.Mutex
 
 	ready           bool
+	owned           bool
 	initialize      error
 	initializeCalls int
 	applyErrors     map[int]error
@@ -24,7 +28,10 @@ type fakeFirewall struct {
 	applyHook       func(int)
 	blockEntered    chan struct{}
 	blockCalls      [][]BlockIP
+	dynamicBlocks   map[string]struct{}
 	unblockCalls    [][]string
+	blockErr        error
+	unblockErr      error
 	closeErrors     map[int]error
 	closeCalls      int
 }
@@ -36,6 +43,7 @@ func (f *fakeFirewall) Initialize(context.Context) error {
 	if f.initialize != nil {
 		return f.initialize
 	}
+	f.owned = true
 	f.ready = true
 	return nil
 }
@@ -53,7 +61,18 @@ func (f *fakeFirewall) Available() bool {
 }
 
 func (f *fakeFirewall) Apply(_ context.Context, config firewallConfig) error {
+	return f.apply(config, false)
+}
+
+func (f *fakeFirewall) Reset(_ context.Context, config firewallConfig) error {
+	return f.apply(config, true)
+}
+
+func (f *fakeFirewall) apply(config firewallConfig, reset bool) error {
 	f.mu.Lock()
+	if reset {
+		f.owned = true
+	}
 	config = config.clone()
 	f.applyCalls = append(f.applyCalls, config)
 	call := len(f.applyCalls)
@@ -65,10 +84,18 @@ func (f *fakeFirewall) Apply(_ context.Context, config firewallConfig) error {
 		hook(call)
 	}
 	if err != nil && !commitOnError {
+		f.mu.Lock()
+		f.ready = false
+		f.mu.Unlock()
 		return err
 	}
 	f.mu.Lock()
 	f.current = config
+	if reset {
+		f.dynamicBlocks = make(map[string]struct{})
+	}
+	f.owned = true
+	f.ready = err == nil
 	f.mu.Unlock()
 	return err
 }
@@ -77,6 +104,15 @@ func (f *fakeFirewall) BlockIPs(_ context.Context, items []BlockIP) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.blockCalls = append(f.blockCalls, append([]BlockIP(nil), items...))
+	if f.blockErr != nil {
+		return f.blockErr
+	}
+	if f.dynamicBlocks == nil {
+		f.dynamicBlocks = make(map[string]struct{})
+	}
+	for _, item := range items {
+		f.dynamicBlocks[item.IP] = struct{}{}
+	}
 	if f.blockEntered != nil {
 		select {
 		case f.blockEntered <- struct{}{}:
@@ -86,20 +122,32 @@ func (f *fakeFirewall) BlockIPs(_ context.Context, items []BlockIP) error {
 	return nil
 }
 
+func (f *fakeFirewall) hasDynamicBlock(ip string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.dynamicBlocks[ip]
+	return ok
+}
+
 func (f *fakeFirewall) UnblockIPs(_ context.Context, ips []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unblockCalls = append(f.unblockCalls, append([]string(nil), ips...))
-	return nil
+	return f.unblockErr
 }
 
 func (f *fakeFirewall) Close(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if !f.owned {
+		return nil
+	}
 	f.closeCalls++
 	if err := f.closeErrors[f.closeCalls]; err != nil {
+		f.ready = false
 		return err
 	}
+	f.owned = false
 	f.ready = false
 	return nil
 }
@@ -143,16 +191,35 @@ func (f *fakeFirewall) snapshot() (calls []firewallConfig, current firewallConfi
 }
 
 type mockXray struct {
-	removeOutbound int
-	stopIfOnline   int
-	removeErr      error
-	stopErr        error
+	stopIfOnline int
+	stopErr      error
+	events       *[]string
 }
 
 type doneObservedContext struct {
 	context.Context
 	doneObserved chan struct{}
 	once         sync.Once
+}
+
+type blockingASNResolver struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+type countingASNResolver struct {
+	calls atomic.Int32
+}
+
+func (r *countingASNResolver) PrefixesByASN(uint32) (ipv4, ipv6 []string) {
+	r.calls.Add(1)
+	return []string{"192.0.2.0/24"}, nil
+}
+
+func (r blockingASNResolver) PrefixesByASN(uint32) (ipv4, ipv6 []string) {
+	close(r.entered)
+	<-r.release
+	return []string{"192.0.2.0/24"}, nil
 }
 
 // Done records that acquireMutation passed its first closing check and entered
@@ -164,16 +231,13 @@ func (c *doneObservedContext) Done() <-chan struct{} {
 
 func (m *mockXray) StopIfOnline() error {
 	m.stopIfOnline++
+	if m.events != nil {
+		*m.events = append(*m.events, "stop")
+	}
 	return m.stopErr
 }
 
-func (m *mockXray) RemoveTorrentBlockerOutbound() error {
-	m.removeOutbound++
-	return m.removeErr
-}
-
 func (m *mockXray) resetCalls() {
-	m.removeOutbound = 0
 	m.stopIfOnline = 0
 }
 
@@ -188,7 +252,7 @@ func newReadyService(t *testing.T, state *State, xray XrayController) (*Service,
 	return service, backend
 }
 
-func TestSyncDisableUsesRemoveOutboundWhenIncludeTagsAbsent(t *testing.T) {
+func TestSyncDisableStopsXrayWhenIncludeTagsAbsent(t *testing.T) {
 	t.Parallel()
 
 	state := NewState()
@@ -204,8 +268,8 @@ func TestSyncDisableUsesRemoveOutboundWhenIncludeTagsAbsent(t *testing.T) {
 	if !response.Accepted {
 		t.Fatal("sync was not accepted")
 	}
-	if xray.removeOutbound != 1 || xray.stopIfOnline != 0 {
-		t.Fatalf("xray calls: remove=%d stop=%d", xray.removeOutbound, xray.stopIfOnline)
+	if xray.stopIfOnline != 1 {
+		t.Fatalf("xray stop calls = %d, want 1", xray.stopIfOnline)
 	}
 }
 
@@ -223,8 +287,8 @@ func TestSyncDisableWithIncludeTagsRestartsXray(t *testing.T) {
 	if !response.Accepted {
 		t.Fatal("sync was not accepted")
 	}
-	if xray.stopIfOnline != 1 || xray.removeOutbound != 0 {
-		t.Fatalf("xray calls: stop=%d remove=%d", xray.stopIfOnline, xray.removeOutbound)
+	if xray.stopIfOnline != 1 {
+		t.Fatalf("xray stop calls = %d, want 1", xray.stopIfOnline)
 	}
 }
 
@@ -297,8 +361,45 @@ func TestSyncUnchangedConfigSkipsAllSideEffects(t *testing.T) {
 	if !response.Accepted {
 		t.Fatal("unchanged config was not accepted")
 	}
-	if xray.stopIfOnline != 0 || xray.removeOutbound != 0 || len(after) != len(before) {
-		t.Fatalf("unchanged sync caused effects: stop=%d remove=%d apply=%d->%d", xray.stopIfOnline, xray.removeOutbound, len(before), len(after))
+	if xray.stopIfOnline != 0 || len(after) != len(before) {
+		t.Fatalf("unchanged sync caused effects: stop=%d apply=%d->%d", xray.stopIfOnline, len(before), len(after))
+	}
+}
+
+func TestSyncExactSourceFastPathSkipsASNResolution(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	resolver := &countingASNResolver{}
+	state.SetASNResolver(resolver)
+	service, _ := newReadyService(t, state, nil)
+	request := mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{
+			"sharedLists": []any{
+				map[string]any{"name": "ext:test", "type": "asList", "items": []any{float64(64500)}},
+			},
+			"ingressFilter": map[string]any{"enabled": true, "blockedIps": []any{"ext:test"}},
+		},
+	})
+	if !service.Sync(request).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	firstCalls := resolver.calls.Load()
+	if firstCalls == 0 {
+		t.Fatal("initial sync did not resolve ASN")
+	}
+	second := *request
+	second.Name = "renamed"
+	if !service.Sync(&second).Accepted {
+		t.Fatal("identical source sync failed")
+	}
+	if got := resolver.calls.Load(); got != firstCalls {
+		t.Fatalf("exact-source sync repeated ASN lookups: %d -> %d", firstCalls, got)
+	}
+	if state.currentSnapshot().pluginName != second.Name {
+		t.Fatal("fast path did not publish changed identity")
 	}
 }
 
@@ -325,7 +426,12 @@ func TestSyncValidatesBeforeEquivalentObjectHashShortcut(t *testing.T) {
 			},
 		},
 	})
-	if hashPluginConfig(valid.Config) != hashPluginConfig(invalid.Config) {
+	validHash, validErr := hashPluginConfigContext(context.Background(), valid.Config)
+	invalidHash, invalidErr := hashPluginConfigContext(context.Background(), invalid.Config)
+	if validErr != nil || invalidErr != nil {
+		t.Fatalf("hash inputs: valid=%v invalid=%v", validErr, invalidErr)
+	}
+	if validHash != invalidHash {
 		t.Fatal("test inputs do not exercise the trim-equivalent object hash")
 	}
 	if !service.Sync(valid).Accepted {
@@ -360,6 +466,257 @@ func TestSyncSameConfigCommitsChangedPluginIdentity(t *testing.T) {
 	}
 }
 
+func TestSyncSemanticEquivalentConfigPreservesDynamicFirewallState(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	first := &SyncPlugin{
+		UUID:   "00000000-0000-4000-8000-000000000001",
+		Name:   "first",
+		Config: json.RawMessage(`{"ingressFilter":{"enabled":true,"blockedIps":["192.0.2.1","192.0.2.0/24"]}}`),
+	}
+	if !service.Sync(first).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	if !service.BlockIPs([]BlockIP{{IP: "203.0.113.10", Timeout: 60}}).Accepted {
+		t.Fatal("dynamic block failed")
+	}
+	before, _ := backend.snapshot()
+	second := &SyncPlugin{
+		UUID:   "00000000-0000-4000-8000-000000000002",
+		Name:   "replacement",
+		Config: json.RawMessage(`{"ingressFilter":{"blockedIps":["192.0.2.0/24"],"enabled":true}}`),
+	}
+	if !service.Sync(second).Accepted {
+		t.Fatal("semantic equivalent sync failed")
+	}
+	after, _ := backend.snapshot()
+	if len(after) != len(before) {
+		t.Fatalf("semantic equivalent sync rebuilt firewall: %d -> %d applies", len(before), len(after))
+	}
+	if !backend.hasDynamicBlock("203.0.113.10") {
+		t.Fatal("semantic equivalent sync discarded the dynamic block")
+	}
+	snapshot := state.currentSnapshot()
+	if snapshot.pluginUUID != second.UUID || snapshot.pluginName != second.Name {
+		t.Fatalf("metadata was not published: %#v", snapshot)
+	}
+}
+
+func TestStaticFilterChangePreservesDynamicTorrentBlock(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	if !service.Sync(torrentAndFilterPlugin(t, "192.0.2.0/24")).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	if !service.BlockIPs([]BlockIP{{IP: "203.0.113.10", Timeout: 60}}).Accepted {
+		t.Fatal("dynamic block failed")
+	}
+	before, _ := backend.snapshot()
+	if !service.Sync(torrentAndFilterPlugin(t, "198.51.100.0/24")).Accepted {
+		t.Fatal("static filter update failed")
+	}
+	after, _ := backend.snapshot()
+	if len(after) != len(before)+1 {
+		t.Fatalf("static update calls = %d -> %d", len(before), len(after))
+	}
+	if !backend.hasDynamicBlock("203.0.113.10") {
+		t.Fatal("static filter update discarded dynamic torrent block")
+	}
+}
+
+func TestInvalidConfigWithoutSnapshotStillStopsCoreAndResetsFirewall(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	xray := &mockXray{}
+	service, backend := newReadyService(t, state, xray)
+	request := mustSyncPlugin(t, map[string]any{
+		"uuid":   "00000000-0000-4000-8000-000000000001",
+		"name":   "invalid",
+		"config": map[string]any{"sharedLists": "invalid"},
+	})
+	if service.Sync(request).Accepted {
+		t.Fatal("invalid config was accepted")
+	}
+	calls, _ := backend.snapshot()
+	if xray.stopIfOnline != 1 || len(calls) != 1 {
+		t.Fatalf("invalid cleanup: stop=%d firewall resets=%d", xray.stopIfOnline, len(calls))
+	}
+}
+
+func TestDisableResetFailurePublishesDegradedStateAndRecovers(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	xray := &mockXray{}
+	service, backend := newReadyService(t, state, xray)
+	if !service.Sync(torrentPlugin(t, true, nil)).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	if !service.BlockIPs([]BlockIP{{IP: "203.0.113.10", Timeout: 60}}).Accepted {
+		t.Fatal("dynamic block failed")
+	}
+	before, _ := backend.snapshot()
+	backend.failApply(len(before)+1, errors.New("reset failed"))
+	if service.Sync(torrentPlugin(t, false, nil)).Accepted {
+		t.Fatal("failed reset was accepted")
+	}
+	after, _ := backend.snapshot()
+	if len(after) != len(before)+1 {
+		t.Fatalf("failed reset triggered another destructive reset: %d -> %d calls", len(before), len(after))
+	}
+	if !backend.hasDynamicBlock("203.0.113.10") {
+		t.Fatal("failed reset discarded a dynamic block")
+	}
+	if !state.HasActivePlugin() || state.TorrentBlockerEnabled() {
+		t.Fatal("failed reset did not publish the desired disabled state as degraded")
+	}
+	if service.firewallAvailableLocked() {
+		t.Fatal("failed reset left the firewall backend available")
+	}
+	if !service.RecreateTables().Accepted {
+		t.Fatal("degraded firewall recovery failed")
+	}
+	if !service.firewallAvailableLocked() || state.TorrentBlockerEnabled() {
+		t.Fatal("recovery did not publish a healthy disabled snapshot")
+	}
+}
+
+func TestClearResetFailureRetainsRecoverableSnapshot(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, &mockXray{})
+	if !service.Sync(torrentPlugin(t, true, nil)).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	calls, _ := backend.snapshot()
+	backend.failApply(len(calls)+1, errors.New("reset failed"))
+	if service.Sync(nil).Accepted {
+		t.Fatal("failed clear reset was accepted")
+	}
+	if !state.HasActivePlugin() || state.TorrentBlockerEnabled() {
+		t.Fatal("failed clear did not retain a degraded cleanup snapshot")
+	}
+	if !service.RecreateTables().Accepted || !state.TorrentBlockerEnabled() {
+		t.Fatal("failed clear snapshot could not be recovered")
+	}
+	if !service.Sync(nil).Accepted || state.HasActivePlugin() {
+		t.Fatal("clear did not succeed after recovery")
+	}
+}
+
+func TestSuccessfulResetCommitsSnapshotWhenContextCancelsAtCommitPoint(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, &mockXray{})
+	if !service.Sync(torrentPlugin(t, true, nil)).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	calls, _ := backend.snapshot()
+	ctx, cancel := context.WithCancel(context.Background())
+	backend.setApplyHook(func(call int) {
+		if call == len(calls)+1 {
+			cancel()
+		}
+	})
+	if response := service.SyncContext(ctx, nil); !response.Accepted {
+		t.Fatal("committed reset was reported as rejected")
+	}
+	if state.HasActivePlugin() || state.TorrentBlockerEnabled() {
+		t.Fatal("successful reset retained the old snapshot after cancellation")
+	}
+}
+
+func TestClearStopsXrayBeforeRemovingFirewall(t *testing.T) {
+	t.Parallel()
+
+	events := make([]string, 0, 2)
+	xray := &mockXray{events: &events}
+	state := NewState()
+	service, backend := newReadyService(t, state, xray)
+	if !service.Sync(torrentPlugin(t, true, nil)).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	events = events[:0]
+	backend.setApplyHook(func(int) { events = append(events, "apply") })
+	if !service.Sync(nil).Accepted {
+		t.Fatal("clear failed")
+	}
+	if got := strings.Join(events, ","); got != "stop,apply" {
+		t.Fatalf("clear order = %q, want stop,apply", got)
+	}
+}
+
+func TestClearStopFailureKeepsFirewallAndSnapshot(t *testing.T) {
+	t.Parallel()
+
+	xray := &mockXray{}
+	state := NewState()
+	service, backend := newReadyService(t, state, xray)
+	if !service.Sync(torrentPlugin(t, true, nil)).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	xray.stopErr = errors.New("stop failed")
+	before, _ := backend.snapshot()
+	if service.Sync(nil).Accepted {
+		t.Fatal("clear with failed stop was accepted")
+	}
+	after, _ := backend.snapshot()
+	if len(after) != len(before) || !state.HasActivePlugin() {
+		t.Fatalf("failed stop changed firewall/state: applies %d -> %d active=%v", len(before), len(after), state.HasActivePlugin())
+	}
+}
+
+func TestCanceledPlanDoesNotClearActivePlugin(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	xray := &mockXray{}
+	service, backend := newReadyService(t, state, xray)
+	if !service.Sync(torrentPlugin(t, true, nil)).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	oldHash := state.ConfigHash()
+	before, _ := backend.snapshot()
+	xray.resetCalls()
+
+	resolver := blockingASNResolver{entered: make(chan struct{}), release: make(chan struct{})}
+	state.SetASNResolver(resolver)
+	request := mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "replacement",
+		"config": map[string]any{
+			"sharedLists": []any{
+				map[string]any{"name": "ext:test", "type": "asList", "items": []any{float64(64500)}},
+			},
+			"ingressFilter": map[string]any{"enabled": true, "blockedIps": []any{"ext:test"}},
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan AcceptedResponse, 1)
+	go func() { done <- service.SyncContext(ctx, request) }()
+	select {
+	case <-resolver.entered:
+	case <-time.After(time.Second):
+		t.Fatal("plan did not enter ASN resolution")
+	}
+	cancel()
+	close(resolver.release)
+	if response := <-done; response.Accepted {
+		t.Fatal("canceled plan was accepted")
+	}
+	after, _ := backend.snapshot()
+	if xray.stopIfOnline != 0 || len(after) != len(before) || state.ConfigHash() != oldHash {
+		t.Fatalf("canceled plan changed state: stop=%d applies=%d->%d hash=%q", xray.stopIfOnline, len(before), len(after), state.ConfigHash())
+	}
+}
+
 func TestResetPluginsClearsSnapshotAndPreservesReports(t *testing.T) {
 	t.Parallel()
 
@@ -376,6 +733,62 @@ func TestResetPluginsClearsSnapshotAndPreservesReports(t *testing.T) {
 	}
 	if state.ReportsCount() != 1 {
 		t.Fatalf("reports count = %d, want 1", state.ReportsCount())
+	}
+}
+
+func TestResetPluginsUsesResetWhileFirewallIsUnhealthy(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	if !service.Sync(filterPlugin(t, "192.0.2.0/24")).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	backend.mu.Lock()
+	backend.ready = false
+	before := len(backend.applyCalls)
+	backend.mu.Unlock()
+
+	if err := service.ResetPlugins(); err != nil {
+		t.Fatal(err)
+	}
+	backend.mu.Lock()
+	after := len(backend.applyCalls)
+	ready := backend.ready
+	backend.mu.Unlock()
+	if after != before+1 || !ready {
+		t.Fatalf("unhealthy reset calls=%d->%d ready=%v", before, after, ready)
+	}
+	if state.HasActivePlugin() {
+		t.Fatal("successful unhealthy reset retained plugin state")
+	}
+}
+
+func TestResetPluginsFailureRetainsDegradedSnapshotForRetry(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	if !service.Sync(filterPlugin(t, "192.0.2.0/24")).Accepted {
+		t.Fatal("initial sync failed")
+	}
+	backend.mu.Lock()
+	backend.ready = false
+	nextCall := len(backend.applyCalls) + 1
+	backend.mu.Unlock()
+	backend.failApply(nextCall, errors.New("reset failed"))
+
+	if err := service.ResetPlugins(); err == nil {
+		t.Fatal("failed reset returned nil")
+	}
+	if !state.HasActivePlugin() || state.currentSnapshot().firewallReady {
+		t.Fatal("failed reset did not retain a recoverable degraded snapshot")
+	}
+	if err := service.ResetPlugins(); err != nil {
+		t.Fatalf("retry reset: %v", err)
+	}
+	if state.HasActivePlugin() {
+		t.Fatal("successful reset retry retained plugin state")
 	}
 }
 
@@ -451,6 +864,26 @@ func TestCanceledInitializeDoesNotPublishDegradedReadiness(t *testing.T) {
 	}
 	if service.Sync(filterPlugin(t, "192.0.2.0/24")).Accepted {
 		t.Fatal("sync was accepted after canceled initialization")
+	}
+}
+
+func TestCloseCleansOwnedFirewallAfterCanceledInitialize(t *testing.T) {
+	t.Parallel()
+
+	backend := &fakeFirewall{initialize: context.Canceled, owned: true}
+	service := newServiceWithBackend(NewState(), nil, nil, backend)
+	if err := service.InitializeContext(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("InitializeContext error = %v", err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	backend.mu.Lock()
+	closeCalls := backend.closeCalls
+	owned := backend.owned
+	backend.mu.Unlock()
+	if closeCalls != 1 || owned {
+		t.Fatalf("close calls=%d owned=%v, want one cleanup", closeCalls, owned)
 	}
 }
 
@@ -591,7 +1024,7 @@ func TestXrayFailureRollsBackFirewallAndKeepsSnapshot(t *testing.T) {
 	}
 }
 
-func TestRemoveOutboundFailureRollsBackFirewallAndKeepsTorrentEnabled(t *testing.T) {
+func TestDisableStopFailureKeepsFirewallAndTorrentEnabled(t *testing.T) {
 	t.Parallel()
 
 	state := NewState()
@@ -603,15 +1036,15 @@ func TestRemoveOutboundFailureRollsBackFirewallAndKeepsTorrentEnabled(t *testing
 	oldHash := state.ConfigHash()
 	_, oldFirewall := backend.snapshot()
 	xray.resetCalls()
-	xray.removeErr = errors.New("remove failed")
+	xray.stopErr = errors.New("stop failed")
 
 	response := service.Sync(torrentPlugin(t, false, nil))
 
 	if response.Accepted {
-		t.Fatal("sync with failed outbound removal was accepted")
+		t.Fatal("sync with failed Xray stop was accepted")
 	}
 	if state.ConfigHash() != oldHash || !state.TorrentBlockerEnabled() {
-		t.Fatal("failed outbound removal replaced committed state")
+		t.Fatal("failed Xray stop replaced committed state")
 	}
 	_, current := backend.snapshot()
 	if !reflect.DeepEqual(current, oldFirewall) {
@@ -635,6 +1068,54 @@ func TestRecreateTablesReplaysCommittedFirewallPlan(t *testing.T) {
 	_, recreated := backend.snapshot()
 	if !reflect.DeepEqual(recreated, committed) {
 		t.Fatalf("recreated plan = %+v, want %+v", recreated, committed)
+	}
+}
+
+func TestRecreateStopsXrayBeforeResetWhenTorrentStateIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	events := make([]string, 0, 2)
+	state := NewState()
+	xray := &mockXray{events: &events}
+	service, backend := newReadyService(t, state, xray)
+	if !service.Sync(torrentPlugin(t, true, []any{"rule-a"})).Accepted {
+		t.Fatal("initial torrent sync failed")
+	}
+	events = events[:0]
+	backend.setApplyHook(func(int) { events = append(events, "reset") })
+
+	if response := service.RecreateTables(); !response.Accepted {
+		t.Fatal("recreate was not accepted")
+	}
+	if got := strings.Join(events, ","); got != "stop,reset" {
+		t.Fatalf("recreate order = %q, want stop,reset", got)
+	}
+}
+
+func TestRecreateStopFailureDoesNotResetUnchangedTorrentFirewall(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	xray := &mockXray{}
+	service, backend := newReadyService(t, state, xray)
+	if !service.Sync(torrentPlugin(t, true, []any{"rule-a"})).Accepted {
+		t.Fatal("initial torrent sync failed")
+	}
+	if !service.BlockIPs([]BlockIP{{IP: "203.0.113.10", Timeout: 60}}).Accepted {
+		t.Fatal("dynamic block failed")
+	}
+	before, _ := backend.snapshot()
+	xray.stopErr = errors.New("stop failed")
+
+	if response := service.RecreateTables(); response.Accepted {
+		t.Fatal("recreate with failed Xray stop was accepted")
+	}
+	after, _ := backend.snapshot()
+	if len(after) != len(before) || !backend.hasDynamicBlock("203.0.113.10") {
+		t.Fatalf("failed stop reached destructive reset: applies=%d->%d dynamic=%v", len(before), len(after), backend.hasDynamicBlock("203.0.113.10"))
+	}
+	if !state.TorrentBlockerEnabled() {
+		t.Fatal("failed recreate changed the committed torrent snapshot")
 	}
 }
 

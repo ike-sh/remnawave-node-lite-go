@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"math"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -23,7 +26,6 @@ var (
 
 type XrayController interface {
 	StopIfOnline() error
-	RemoveTorrentBlockerOutbound() error
 }
 
 type Service struct {
@@ -50,7 +52,6 @@ type Service struct {
 	webhookStopOnce    sync.Once
 	webhookAdmissionMu sync.RWMutex
 	webhookStopped     atomic.Bool
-	webhookDropped     atomic.Uint64
 	cleanupTimeout     time.Duration
 }
 
@@ -127,7 +128,9 @@ type CollectReportsResponse struct {
 }
 
 type BlockIP struct {
-	IP      string
+	IP string
+	// Timeout zero is the explicit block API's bounded-set permanent mode.
+	// Automatic torrent blocking requires a positive duration during config validation.
 	Timeout float64
 }
 
@@ -148,31 +151,58 @@ func (s *Service) SyncContext(ctx context.Context, request *SyncPlugin) Accepted
 		return s.clearPluginLocked(ctx)
 	}
 
-	config, err := decodePluginConfig(request)
+	previous := s.state.currentSnapshot()
+	firewallReady := s.firewallAvailableLocked()
+	if len(request.Config) <= maxPluginConfigBytes {
+		sourceHash := sha256.Sum256(request.Config)
+		if previous != nil && previous.sourceHash == sourceHash && previous.firewallReady == firewallReady {
+			if err := contextError(ctx); err != nil {
+				return AcceptedResponse{Accepted: false}
+			}
+			next := *previous
+			next.pluginUUID = request.UUID
+			next.pluginName = request.Name
+			s.state.commitSnapshot(&next)
+			return AcceptedResponse{Accepted: true}
+		}
+	}
+	plan, err := buildPluginPlanContext(ctx, request, s.state.asnResolver(), firewallReady)
 	if err != nil {
+		if contextError(ctx) != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return AcceptedResponse{Accepted: false}
+		}
 		slog.Warn("plugin config validation failed", "error", err)
-		if cleanupErr := s.applySnapshotLocked(ctx, nil, s.stopXrayLocked); cleanupErr != nil {
+		cleanupErr := s.applySnapshotReconcileFirstLocked(ctx, nil, s.stopXrayLocked)
+		if cleanupErr != nil {
 			slog.Warn("failed to clean up invalid plugin config", "error", cleanupErr)
 		}
 		return AcceptedResponse{Accepted: false}
 	}
+	if err := contextError(ctx); err != nil {
+		return AcceptedResponse{Accepted: false}
+	}
 
-	previous := s.state.currentSnapshot()
-	firewallReady := s.firewallAvailableLocked()
-	sourceHash := sha256.Sum256(request.Config)
-	if previous != nil && previous.configHash != "" && previous.sourceHash == sourceHash &&
-		previous.pluginUUID == request.UUID && previous.pluginName == request.Name &&
-		previous.firewallReady == firewallReady {
+	if pluginSnapshotsBehaviorEqual(previous, plan.snapshot) {
+		// Metadata and object-hash changes do not justify rebuilding nftables.
+		// Publishing the newly built immutable snapshot preserves identity and
+		// config-provider behavior while retaining dynamic torrent blocks.
+		s.state.commitSnapshot(plan.snapshot)
 		return AcceptedResponse{Accepted: true}
 	}
 
-	plan := buildPluginPlanFromConfig(request, config, s.state.asnResolver(), firewallReady)
 	plan.logDiagnostics()
 
-	if err := s.applySnapshotLocked(ctx, plan.snapshot, func(previous, next *pluginSnapshot) error {
-		return s.reconcileTorrentLocked(previous, next, plan)
-	}); err != nil {
-		slog.Warn("plugin sync failed", "error", err)
+	reconcile := func(previous, next *pluginSnapshot) error {
+		return s.reconcileTorrentLocked(previous, next)
+	}
+	var applyErr error
+	if effectiveTorrentEnabled(previous) && !effectiveTorrentEnabled(plan.snapshot) {
+		applyErr = s.applySnapshotReconcileFirstLocked(ctx, plan.snapshot, reconcile)
+	} else {
+		applyErr = s.applySnapshotLocked(ctx, plan.snapshot, reconcile)
+	}
+	if applyErr != nil {
+		slog.Warn("plugin sync failed", "error", applyErr)
 		return AcceptedResponse{Accepted: false}
 	}
 	return AcceptedResponse{Accepted: true}
@@ -183,7 +213,7 @@ func (s *Service) clearPluginLocked(ctx context.Context) AcceptedResponse {
 		return AcceptedResponse{Accepted: false}
 	}
 	slog.Info("plugin sync received empty payload, cleaning up active plugin")
-	if err := s.applySnapshotLocked(ctx, nil, s.stopXrayLocked); err != nil {
+	if err := s.applySnapshotReconcileFirstLocked(ctx, nil, s.stopXrayLocked); err != nil {
 		slog.Warn("plugin cleanup failed", "error", err)
 		return AcceptedResponse{Accepted: false}
 	}
@@ -208,14 +238,64 @@ func (s *Service) ResetPluginsContext(ctx context.Context) error {
 }
 
 func (s *Service) applySnapshotLocked(ctx context.Context, next *pluginSnapshot, reconcile func(previous, next *pluginSnapshot) error) error {
+	return s.applySnapshotWithOrderLocked(ctx, next, reconcile, false, false)
+}
+
+func (s *Service) applySnapshotReconcileFirstLocked(ctx context.Context, next *pluginSnapshot, reconcile func(previous, next *pluginSnapshot) error) error {
+	return s.applySnapshotWithOrderLocked(ctx, next, reconcile, true, false)
+}
+
+func (s *Service) applySnapshotResetReconcileFirstLocked(ctx context.Context, next *pluginSnapshot, reconcile func(previous, next *pluginSnapshot) error) error {
+	return s.applySnapshotWithOrderLocked(ctx, next, reconcile, true, true)
+}
+
+func (s *Service) applySnapshotWithOrderLocked(
+	ctx context.Context,
+	next *pluginSnapshot,
+	reconcile func(previous, next *pluginSnapshot) error,
+	reconcileFirst bool,
+	forceReset bool,
+) error {
 	previous := s.state.currentSnapshot()
 	previousFirewall := snapshotFirewall(previous)
 	nextFirewall := snapshotFirewall(next)
 
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if reconcileFirst && reconcile != nil {
+		if err := reconcile(previous, next); err != nil {
+			return fmt.Errorf("reconcile plugin Xray state: %w", err)
+		}
+	}
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+
+	resetFirewall := forceReset || next == nil || (effectiveTorrentEnabled(previous) && !effectiveTorrentEnabled(next))
+	mutateFirewall := resetFirewall || previous == nil ||
+		previous.firewallReady != snapshotFirewallReady(next) ||
+		!firewallConfigsEqual(previousFirewall, nextFirewall)
+	canMutateFirewall := s.firewallAvailableLocked()
+	if resetFirewall && s.nft != nil {
+		// A full Reset is the recovery primitive and may create tables from an
+		// unowned or unhealthy backend state.
+		canMutateFirewall = true
+	}
 	firewallApplied := false
-	if s.firewallAvailableLocked() {
-		if err := s.nft.Apply(ctx, nextFirewall); err != nil {
-			rollbackErr := s.restoreFirewallLocked(previousFirewall)
+	if mutateFirewall && canMutateFirewall {
+		if err := s.applyFirewallLocked(ctx, nextFirewall, resetFirewall); err != nil {
+			var rollbackErr error
+			if !resetFirewall {
+				rollbackErr = s.restoreFirewallLocked(previousFirewall)
+			}
+			if !s.firewallAvailableLocked() {
+				degraded := previous
+				if resetFirewall && next != nil {
+					degraded = next
+				}
+				s.publishDegradedSnapshotLocked(degraded)
+			}
 			return errors.Join(
 				fmt.Errorf("apply plugin firewall plan: %w", err),
 				wrapFirewallRollbackError(rollbackErr),
@@ -224,18 +304,31 @@ func (s *Service) applySnapshotLocked(ctx context.Context, next *pluginSnapshot,
 		firewallApplied = true
 	}
 	if err := contextError(ctx); err != nil {
-		if firewallApplied {
+		if firewallApplied && resetFirewall {
+			// Reset is irreversible because dynamic elements are gone. Publish
+			// the matching snapshot even if the caller disconnected just after
+			// the nft transaction completed.
+			s.state.commitSnapshot(next)
+			return nil
+		}
+		if firewallApplied && !resetFirewall {
 			rollbackErr := s.restoreFirewallLocked(previousFirewall)
+			if !s.firewallAvailableLocked() {
+				s.publishDegradedSnapshotLocked(previous)
+			}
 			return errors.Join(err, rollbackErr)
 		}
 		return err
 	}
 
-	if reconcile != nil {
+	if !reconcileFirst && reconcile != nil {
 		if err := reconcile(previous, next); err != nil {
-			if firewallApplied {
+			if firewallApplied && !resetFirewall {
 				rollbackErr := s.restoreFirewallLocked(previousFirewall)
 				if rollbackErr != nil {
+					if !s.firewallAvailableLocked() {
+						s.publishDegradedSnapshotLocked(previous)
+					}
 					return errors.Join(
 						fmt.Errorf("reconcile plugin Xray state: %w", err),
 						fmt.Errorf("restore previous firewall plan: %w", rollbackErr),
@@ -248,6 +341,13 @@ func (s *Service) applySnapshotLocked(ctx context.Context, next *pluginSnapshot,
 
 	s.state.commitSnapshot(next)
 	return nil
+}
+
+func (s *Service) applyFirewallLocked(ctx context.Context, config firewallConfig, reset bool) error {
+	if reset {
+		return s.nft.Reset(ctx, config)
+	}
+	return s.nft.Apply(ctx, config)
 }
 
 func (s *Service) restoreFirewallLocked(config firewallConfig) error {
@@ -270,7 +370,21 @@ func snapshotFirewall(snapshot *pluginSnapshot) firewallConfig {
 	return snapshot.firewall.clone()
 }
 
-func (s *Service) reconcileTorrentLocked(previous, next *pluginSnapshot, plan *pluginPlan) error {
+func snapshotFirewallReady(snapshot *pluginSnapshot) bool {
+	return snapshot != nil && snapshot.firewallReady
+}
+
+func (s *Service) publishDegradedSnapshotLocked(desired *pluginSnapshot) {
+	if desired == nil {
+		s.state.commitSnapshot(nil)
+		return
+	}
+	next := *desired
+	next.firewallReady = false
+	s.state.commitSnapshot(&next)
+}
+
+func (s *Service) reconcileTorrentLocked(previous, next *pluginSnapshot) error {
 	if s.xray == nil {
 		return nil
 	}
@@ -285,9 +399,6 @@ func (s *Service) reconcileTorrentLocked(previous, next *pluginSnapshot, plan *p
 		nextTags = next.torrent.includeRuleTags
 	}
 
-	if wasEnabled && !nowEnabled && !plan.torrentIncludeRuleTagsPresent {
-		return s.xray.RemoveTorrentBlockerOutbound()
-	}
 	needsRestart := (wasEnabled && !nowEnabled) ||
 		(!wasEnabled && nowEnabled) ||
 		(wasEnabled && nowEnabled && hashIncludeRuleTags(previousTags) != hashIncludeRuleTags(nextTags))
@@ -320,6 +431,10 @@ func (s *Service) BlockIPs(items []BlockIP) AcceptedResponse {
 }
 
 func (s *Service) BlockIPsContext(ctx context.Context, items []BlockIP) AcceptedResponse {
+	if err := validateBlockMutation(items); err != nil {
+		slog.Warn("invalid nftables block request", "error", err)
+		return AcceptedResponse{Accepted: false}
+	}
 	if err := s.acquireMutation(ctx); err != nil {
 		return AcceptedResponse{Accepted: false}
 	}
@@ -328,6 +443,9 @@ func (s *Service) BlockIPsContext(ctx context.Context, items []BlockIP) Accepted
 		return AcceptedResponse{Accepted: false}
 	}
 	if err := s.nft.BlockIPs(ctx, items); err != nil {
+		if !s.firewallAvailableLocked() {
+			s.publishDegradedSnapshotLocked(s.state.currentSnapshot())
+		}
 		slog.Warn("nftables block request failed", "error", err)
 		return AcceptedResponse{Accepted: false}
 	}
@@ -346,6 +464,10 @@ func (s *Service) UnblockIPs(ips []string) AcceptedResponse {
 }
 
 func (s *Service) UnblockIPsContext(ctx context.Context, ips []string) AcceptedResponse {
+	if err := validateUnblockMutation(ips); err != nil {
+		slog.Warn("invalid nftables unblock request", "error", err)
+		return AcceptedResponse{Accepted: false}
+	}
 	if err := s.acquireMutation(ctx); err != nil {
 		return AcceptedResponse{Accepted: false}
 	}
@@ -354,6 +476,9 @@ func (s *Service) UnblockIPsContext(ctx context.Context, ips []string) AcceptedR
 		return AcceptedResponse{Accepted: false}
 	}
 	if err := s.nft.UnblockIPs(ctx, ips); err != nil {
+		if !s.firewallAvailableLocked() {
+			s.publishDegradedSnapshotLocked(s.state.currentSnapshot())
+		}
 		slog.Warn("nftables unblock request failed", "error", err)
 		return AcceptedResponse{Accepted: false}
 	}
@@ -372,13 +497,6 @@ func (s *Service) RecreateTablesContext(ctx context.Context) AcceptedResponse {
 	if s.readyLocked() != nil || s.nft == nil {
 		return AcceptedResponse{Accepted: false}
 	}
-	if !s.nft.Available() {
-		if err := s.nft.Initialize(ctx); err != nil {
-			slog.Warn("nftables recovery initialization failed", "error", err)
-			return AcceptedResponse{Accepted: false}
-		}
-	}
-
 	previous := s.state.currentSnapshot()
 	next := previous
 	if previous != nil && !previous.firewallReady {
@@ -386,9 +504,7 @@ func (s *Service) RecreateTablesContext(ctx context.Context) AcceptedResponse {
 		copy.firewallReady = true
 		next = &copy
 	}
-	if err := s.applySnapshotLocked(ctx, next, func(previous, next *pluginSnapshot) error {
-		return s.reconcileTorrentLocked(previous, next, &pluginPlan{})
-	}); err != nil {
+	if err := s.applySnapshotResetReconcileFirstLocked(ctx, next, s.stopXrayLocked); err != nil {
 		slog.Warn("nftables recreate request failed", "error", err)
 		return AcceptedResponse{Accepted: false}
 	}
@@ -428,7 +544,7 @@ func (s *Service) CloseContext(parent context.Context) error {
 		return s.finishWebhookShutdown(cleanupCtx)
 	}
 	s.closed = true
-	if !s.initialized || s.nft == nil {
+	if s.nft == nil {
 		s.state.commitSnapshot(nil)
 		s.closeDone = true
 		s.releaseOperation()
@@ -526,11 +642,70 @@ func (p *pluginPlan) logDiagnostics() {
 		slog.Warn("ASN database unavailable; asList entries resolved empty")
 	}
 	if values := p.diagnostics.missingASNValues(); len(values) != 0 {
-		slog.Warn("ASN prefixes not found", "asns", values)
+		visible := values[:min(len(values), maxLoggedDiagnosticValues)]
+		slog.Warn("ASN prefixes not found", "asns", visible, "omitted", len(values)-len(visible))
 	}
 	if values := p.diagnostics.missingSharedListValues(); len(values) != 0 {
-		slog.Warn("plugin shared lists not found", "lists", values)
+		visible := values[:min(len(values), maxLoggedDiagnosticValues)]
+		slog.Warn("plugin shared lists not found", "lists", visible, "omitted", len(values)-len(visible))
 	}
+}
+
+func pluginSnapshotsBehaviorEqual(left, right *pluginSnapshot) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.firewallReady == right.firewallReady &&
+		left.whitelistIPs.equal(right.whitelistIPs) &&
+		torrentSettingsEqual(left.torrent, right.torrent) &&
+		firewallConfigsEqual(left.firewall, right.firewall)
+}
+
+func torrentSettingsEqual(left, right torrentSettings) bool {
+	return left.enabled == right.enabled &&
+		left.blockDuration == right.blockDuration &&
+		hashIncludeRuleTags(left.includeRuleTags) == hashIncludeRuleTags(right.includeRuleTags) &&
+		left.ignoredIPs.equal(right.ignoredIPs) &&
+		maps.Equal(left.ignoredUsers, right.ignoredUsers)
+}
+
+func firewallConfigsEqual(left, right firewallConfig) bool {
+	leftV4Ingress, leftV6Ingress := normalizeFilterPrefixes(left.ingressIPs)
+	rightV4Ingress, rightV6Ingress := normalizeFilterPrefixes(right.ingressIPs)
+	leftV4Egress, leftV6Egress := normalizeFilterPrefixes(left.egressIPs)
+	rightV4Egress, rightV6Egress := normalizeFilterPrefixes(right.egressIPs)
+	return slices.Equal(leftV4Ingress, rightV4Ingress) &&
+		slices.Equal(leftV6Ingress, rightV6Ingress) &&
+		slices.Equal(leftV4Egress, rightV4Egress) &&
+		slices.Equal(leftV6Egress, rightV6Egress) &&
+		slices.Equal(normalizedPorts(left.egressPorts), normalizedPorts(right.egressPorts))
+}
+
+func validateBlockMutation(items []BlockIP) error {
+	if err := validateArrayLength("ips", len(items), maxNFTBlockBatch); err != nil {
+		return err
+	}
+	for i, item := range items {
+		if err := validateStringLength(fmt.Sprintf("ips[%d].ip", i), item.IP); err != nil {
+			return err
+		}
+		if math.IsNaN(item.Timeout) || math.IsInf(item.Timeout, 0) || item.Timeout < 0 || item.Timeout > maxTorrentBlockDurationSec {
+			return fmt.Errorf("ips[%d].timeout must be between 0 and %d seconds", i, maxTorrentBlockDurationSec)
+		}
+	}
+	return nil
+}
+
+func validateUnblockMutation(ips []string) error {
+	if err := validateArrayLength("ips", len(ips), maxNFTUnblockBatch); err != nil {
+		return err
+	}
+	for i, ip := range ips {
+		if err := validateStringLength(fmt.Sprintf("ips[%d]", i), ip); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func hashIncludeRuleTags(tags []string) string {

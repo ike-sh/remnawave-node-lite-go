@@ -37,7 +37,7 @@ type pluginSnapshot struct {
 	pluginUUID    string
 	pluginName    string
 	firewallReady bool
-	whitelistIPs  map[string]struct{}
+	whitelistIPs  ipMatcher
 	torrent       torrentSettings
 	firewall      firewallConfig
 }
@@ -88,8 +88,7 @@ func (s *State) IsWhitelisted(ip string) bool {
 	if s.active == nil {
 		return false
 	}
-	_, ok := s.active.whitelistIPs[ip]
-	return ok
+	return s.active.whitelistIPs.contains(ip)
 }
 
 func (s *State) HasActivePlugin() bool {

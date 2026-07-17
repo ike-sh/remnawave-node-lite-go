@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
-	"net"
+	"net/netip"
 	"regexp"
 	"time"
 
@@ -13,21 +13,11 @@ import (
 
 var sourceIPPattern = regexp.MustCompile(`^(?:(?:tcp|udp):)?(?:\[(.+?)\]|(.+?))(?::(\d+))?$`)
 
-var defaultIgnoredIPs = map[string]struct{}{
-	"::":              {},
-	"::1":             {},
-	"0.0.0.0":         {},
-	"0.0.0.0/0":       {},
-	"127.0.0.0/8":     {},
-	"127.0.0.1":       {},
-	"255.255.255.255": {},
-}
-
 type torrentSettings struct {
 	enabled         bool
 	blockDuration   float64
 	includeRuleTags []string
-	ignoredIPs      map[string]struct{}
+	ignoredIPs      ipMatcher
 	ignoredUsers    map[string]struct{}
 }
 
@@ -50,19 +40,29 @@ func (s *State) TorrentBlockerIncludeRuleTags() []string {
 	return append([]string(nil), s.active.torrent.includeRuleTags...)
 }
 
-func (s *Service) HandleXrayWebhook(payload xraywebhook.Payload) {
+func (s *Service) HandleXrayWebhook(payload xraywebhook.Payload) bool {
+	return s.HandleXrayWebhookContext(context.Background(), payload)
+}
+
+func (s *Service) HandleXrayWebhookContext(ctx context.Context, payload xraywebhook.Payload) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.webhookAdmissionMu.RLock()
 	defer s.webhookAdmissionMu.RUnlock()
-	if s.webhookStopped.Load() {
-		return
+	if s.webhookStopped.Load() || ctx.Err() != nil {
+		return false
 	}
 	select {
 	case s.webhookQueue <- queuedWebhook{payload: payload}:
-	default:
-		dropped := s.webhookDropped.Add(1)
-		if dropped == 1 || dropped&(dropped-1) == 0 {
-			slog.Warn("xray webhook queue is full", "dropped", dropped, "capacity", cap(s.webhookQueue))
-		}
+		// Shutdown can close the stop channel while this admission is already
+		// waiting. If queue capacity and stop become ready together, the send may
+		// win the select; do not report that raced item as accepted.
+		return !s.webhookStopped.Load()
+	case <-s.webhookStop:
+		return false
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -99,13 +99,17 @@ func (s *Service) runWebhookWorker() {
 
 func (s *Service) signalWebhookStop() {
 	s.webhookStopOnce.Do(func() {
-		s.webhookAdmissionMu.Lock()
-		defer s.webhookAdmissionMu.Unlock()
 		s.webhookStopped.Store(true)
 		if s.webhookCancel != nil {
 			s.webhookCancel()
 		}
 		close(s.webhookStop)
+
+		// Close the stop channel before waiting for in-flight admissions. A
+		// producer may hold RLock while waiting for bounded queue capacity; the
+		// closed channel wakes it so shutdown cannot deadlock behind that lock.
+		s.webhookAdmissionMu.Lock()
+		s.webhookAdmissionMu.Unlock()
 	})
 }
 
@@ -162,6 +166,9 @@ func (s *Service) processXrayWebhookLocked(ctx context.Context, payload xraywebh
 	blocked := false
 	if s.firewallAvailableLocked() {
 		if err := s.nft.BlockIPs(ctx, []BlockIP{{IP: ip, Timeout: duration}}); err != nil {
+			if !s.firewallAvailableLocked() {
+				s.publishDegradedSnapshotLocked(snapshot)
+			}
 			slog.Warn("torrent blocker failed to block ip", "ip", ip, "error", err)
 		} else {
 			blocked = true
@@ -193,11 +200,17 @@ func (s *Service) processXrayWebhookLocked(ctx context.Context, payload xraywebh
 }
 
 func torrentIPIgnored(settings torrentSettings, ip string) bool {
-	if _, ok := defaultIgnoredIPs[ip]; ok {
+	address, err := netip.ParseAddr(ip)
+	if err != nil || address.Zone() != "" {
 		return true
 	}
-	_, ok := settings.ignoredIPs[ip]
-	return ok
+	address = address.Unmap()
+	if address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() ||
+		address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() ||
+		(address.Is4() && address == netip.MustParseAddr("255.255.255.255")) {
+		return true
+	}
+	return settings.ignoredIPs.contains(address.String())
 }
 
 func torrentUserIgnored(settings torrentSettings, userID string) bool {
@@ -231,8 +244,9 @@ func extractWebhookIP(source string) string {
 			candidate = match[2]
 		}
 	}
-	if net.ParseIP(candidate) == nil {
+	address, err := netip.ParseAddr(candidate)
+	if err != nil || address.Zone() != "" {
 		return ""
 	}
-	return candidate
+	return address.Unmap().String()
 }

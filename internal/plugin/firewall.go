@@ -26,7 +26,10 @@ func (c firewallConfig) clone() firewallConfig {
 type firewallBackend interface {
 	Initialize(ctx context.Context) error
 	Available() bool
+	// Apply replaces static filter elements without disturbing timed torrent blocks.
 	Apply(ctx context.Context, config firewallConfig) error
+	// Reset recreates the owned tables and intentionally clears dynamic elements.
+	Reset(ctx context.Context, config firewallConfig) error
 	BlockIPs(ctx context.Context, items []BlockIP) error
 	UnblockIPs(ctx context.Context, ips []string) error
 	Close(ctx context.Context) error
@@ -53,4 +56,11 @@ func isMissingNFTElement(err error) bool {
 	return strings.Contains(message, "no such file or directory") ||
 		strings.Contains(message, "no such element") ||
 		strings.Contains(message, "element does not exist")
+}
+
+func isAmbiguousNFTNotFound(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such file or directory") &&
+		!strings.Contains(message, "no such element") &&
+		!strings.Contains(message, "element does not exist")
 }

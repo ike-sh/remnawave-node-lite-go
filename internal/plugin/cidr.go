@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 
 	"go4.org/netipx"
@@ -22,7 +23,7 @@ func normalizeFilterPrefixes(items []string) (v4, v6 []string) {
 			continue
 		}
 		if prefix, err := netip.ParsePrefix(item); err == nil {
-			prefix = prefix.Masked()
+			prefix = normalizeIPPrefix(prefix)
 			if prefix.Addr().Is4() {
 				b4.AddPrefix(prefix)
 			} else {
@@ -40,6 +41,53 @@ func normalizeFilterPrefixes(items []string) (v4, v6 []string) {
 		}
 	}
 	return prefixStrings(&b4), prefixStrings(&b6)
+}
+
+func normalizeIPPrefix(prefix netip.Prefix) netip.Prefix {
+	prefix = prefix.Masked()
+	if prefix.Addr().Is4In6() && prefix.Bits() >= 96 {
+		return netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96).Masked()
+	}
+	return prefix
+}
+
+type ipMatcher struct {
+	prefixes []string
+	set      *netipx.IPSet
+}
+
+func newIPMatcher(items []string) ipMatcher {
+	v4, v6 := normalizeFilterPrefixes(items)
+	prefixes := make([]string, 0, len(v4)+len(v6))
+	prefixes = append(prefixes, v4...)
+	prefixes = append(prefixes, v6...)
+	var builder netipx.IPSetBuilder
+	for _, value := range prefixes {
+		prefix, err := netip.ParsePrefix(value)
+		if err == nil {
+			builder.AddPrefix(prefix)
+		}
+	}
+	set, _ := builder.IPSet()
+	return ipMatcher{prefixes: prefixes, set: set}
+}
+
+func (m ipMatcher) contains(raw string) bool {
+	if m.set == nil {
+		return false
+	}
+	address, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil || address.Zone() != "" {
+		return false
+	}
+	if m.set.Contains(address) {
+		return true
+	}
+	return address.Is4In6() && m.set.Contains(address.Unmap())
+}
+
+func (m ipMatcher) equal(other ipMatcher) bool {
+	return slices.Equal(m.prefixes, other.prefixes)
 }
 
 func prefixStrings(b *netipx.IPSetBuilder) []string {

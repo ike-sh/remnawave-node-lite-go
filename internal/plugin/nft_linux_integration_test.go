@@ -75,8 +75,16 @@ func TestNFTManagerInNetworkNamespace(t *testing.T) {
 	}
 	assertNFTContains(t, "list", "set", "ip", tableName, torrentBlockerSet, "203.0.113.10")
 	assertNFTContains(t, "list", "set", "ip6", tableNameV6, torrentBlockerSetV6, "2001:db8:ffff::10")
+	third := firewallConfig{ingressIPs: []string{"10.10.0.0/16"}, egressPorts: []int{8443}}
+	if err := manager.Apply(context.Background(), third); err != nil {
+		t.Fatalf("static update with dynamic blocks: %v", err)
+	}
+	assertNFTContains(t, "list", "set", "ip", tableName, torrentBlockerSet, "203.0.113.10")
+	assertNFTContains(t, "list", "set", "ip6", tableNameV6, torrentBlockerSetV6, "2001:db8:ffff::10")
+	assertNFTContains(t, "list", "set", "ip", tableName, ingressFilterIPSet, "10.10.0.0/16")
 
-	if err := manager.UnblockIPs(context.Background(), []string{"203.0.113.10", "2001:db8:ffff::10"}); err != nil {
+	// The missing IPv4 address must not roll back removal of the present one.
+	if err := manager.UnblockIPs(context.Background(), []string{"203.0.113.11", "203.0.113.10", "2001:db8:ffff::10"}); err != nil {
 		t.Fatalf("UnblockIPs: %v", err)
 	}
 	if err := manager.UnblockIPs(context.Background(), []string{"203.0.113.10", "2001:db8:ffff::10"}); err != nil {
@@ -85,7 +93,7 @@ func TestNFTManagerInNetworkNamespace(t *testing.T) {
 	assertNFTNotContains(t, "list", "set", "ip", tableName, torrentBlockerSet, "203.0.113.10")
 	assertNFTNotContains(t, "list", "set", "ip6", tableNameV6, torrentBlockerSetV6, "2001:db8:ffff::10")
 
-	if err := manager.Apply(context.Background(), second); err != nil {
+	if err := manager.Reset(context.Background(), second); err != nil {
 		t.Fatalf("recreate committed plan: %v", err)
 	}
 	assertNFTContains(t, "list", "set", "ip", tableName, ingressFilterIPSet, "172.16.0.0/12")

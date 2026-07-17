@@ -35,7 +35,7 @@ type Provider interface {
 }
 
 type WebhookProcessor interface {
-	HandleXrayWebhook(payload xraywebhook.Payload)
+	HandleXrayWebhookContext(ctx context.Context, payload xraywebhook.Payload) bool
 }
 
 type Server struct {
@@ -81,7 +81,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/internal/get-config", s.handleGetConfig)
 	mux.HandleFunc("/internal/webhook", s.handleWebhook)
 	s.httpServer = &http.Server{
-		Handler:           limitUnixHandlers(maxConcurrentUnixHandlers, withUnixRequestTimeout(30*time.Second, mux)),
+		Handler:           withUnixRequestTimeout(30*time.Second, limitUnixHandlers(maxConcurrentUnixHandlers, mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -117,19 +117,47 @@ func limitUnixHandlers(maxActive int, next http.Handler) http.Handler {
 	if maxActive <= 0 {
 		maxActive = 1
 	}
-	slots := make(chan struct{}, maxActive)
+	totalSlots := make(chan struct{}, maxActive)
+	webhookCapacity := maxActive
+	if webhookCapacity > 1 {
+		webhookCapacity--
+	}
+	webhookSlots := make(chan struct{}, webhookCapacity)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case slots <- struct{}{}:
-			defer func() { <-slots }()
-			next.ServeHTTP(w, r)
-		default:
-			r.Close = true
-			w.Header().Set("Connection", "close")
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, "internal request capacity unavailable", http.StatusServiceUnavailable)
+		if r.URL.Path == "/internal/webhook" {
+			if !acquireUnixHandlerSlot(r.Context(), webhookSlots) {
+				writeUnixCapacityError(w, r)
+				return
+			}
+			defer func() { <-webhookSlots }()
 		}
+		if !acquireUnixHandlerSlot(r.Context(), totalSlots) {
+			writeUnixCapacityError(w, r)
+			return
+		}
+		defer func() { <-totalSlots }()
+		next.ServeHTTP(w, r)
 	})
+}
+
+func acquireUnixHandlerSlot(ctx context.Context, slots chan struct{}) bool {
+	select {
+	case slots <- struct{}{}:
+		if ctx.Err() != nil {
+			<-slots
+			return false
+		}
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func writeUnixCapacityError(w http.ResponseWriter, r *http.Request) {
+	r.Close = true
+	w.Header().Set("Connection", "close")
+	w.Header().Set("Retry-After", "1")
+	http.Error(w, "internal request capacity unavailable", http.StatusServiceUnavailable)
 }
 
 func withUnixRequestTimeout(timeout time.Duration, next http.Handler) http.Handler {
@@ -158,7 +186,13 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Warn("invalid xray webhook JSON", "error", err)
 		} else {
-			s.Webhook.HandleXrayWebhook(payload)
+			if !s.Webhook.HandleXrayWebhookContext(r.Context(), payload) {
+				r.Close = true
+				w.Header().Set("Connection", "close")
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "webhook capacity unavailable", http.StatusServiceUnavailable)
+				return
+			}
 		}
 	} else {
 		_, _ = io.Copy(io.Discard, limitedBody)

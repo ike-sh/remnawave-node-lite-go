@@ -1,6 +1,10 @@
 package plugin
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func validTorrentBlocker(enabled bool) map[string]any {
 	return map[string]any{
@@ -31,16 +35,74 @@ func TestValidatePluginConfigAcceptsMinimalConfig(t *testing.T) {
 	}
 }
 
-func TestValidatePluginConfigAcceptsOfficialIntegerAndExtEdges(t *testing.T) {
+func TestValidatePluginConfigAcceptsBoundedDurationAndExtEdges(t *testing.T) {
 	t.Parallel()
 
-	for _, duration := range []any{float64(0), float64(-1), float64(1e100)} {
+	for _, duration := range []any{float64(1), float64(maxTorrentBlockDurationSec)} {
 		cfg := validTorrentBlocker(true)
 		cfg["blockDuration"] = duration
 		cfg["ignoreLists"] = map[string]any{"ip": []any{"ext:"}}
 		if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err != nil {
 			t.Errorf("blockDuration=%v rejected: %v", duration, err)
 		}
+	}
+}
+
+func TestValidatePluginConfigRejectsUnsafeBlockDuration(t *testing.T) {
+	t.Parallel()
+
+	for _, duration := range []any{float64(-1), float64(0), float64(maxTorrentBlockDurationSec + 1), float64(1e100)} {
+		cfg := validTorrentBlocker(true)
+		cfg["blockDuration"] = duration
+		if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err == nil {
+			t.Errorf("blockDuration=%v was accepted", duration)
+		}
+	}
+}
+
+func TestValidatePluginConfigRejectsOversizedCollections(t *testing.T) {
+	t.Parallel()
+
+	lists := make([]any, maxSharedLists+1)
+	for i := range lists {
+		lists[i] = map[string]any{"name": "ext:x", "type": "ipList", "items": []any{}}
+	}
+	if err := ValidatePluginConfig(map[string]any{"sharedLists": lists}); err == nil {
+		t.Fatal("oversized sharedLists was accepted")
+	}
+
+	items := make([]any, maxFilterItems+1)
+	for i := range items {
+		items[i] = "192.0.2.1"
+	}
+	if err := ValidatePluginConfig(map[string]any{
+		"ingressFilter": map[string]any{"enabled": true, "blockedIps": items},
+	}); err == nil {
+		t.Fatal("oversized filter was accepted")
+	}
+}
+
+func TestValidatePluginConfigTruncatesInvalidValueInError(t *testing.T) {
+	t.Parallel()
+
+	value := "bad" + strings.Repeat("x", maxPluginStringBytes*2)
+	err := ValidatePluginConfig(map[string]any{
+		"ingressFilter": map[string]any{"enabled": true, "blockedIps": []any{value}},
+	})
+	if err == nil {
+		t.Fatal("invalid value was accepted")
+	}
+	if len(err.Error()) > maxLogValueBytes*2 {
+		t.Fatalf("validation error retained oversized input: %d bytes", len(err.Error()))
+	}
+}
+
+func TestQuotedErrorValueHasHardRenderedByteLimit(t *testing.T) {
+	t.Parallel()
+
+	got := quotedForError(strings.Repeat("\x00", maxPluginStringBytes))
+	if len(got) > maxLogValueBytes {
+		t.Fatalf("quoted error value = %d bytes, maximum is %d", len(got), maxLogValueBytes)
 	}
 }
 
@@ -161,7 +223,10 @@ func TestBuildSharedIPMapUsesExtPrefix(t *testing.T) {
 			},
 		},
 	}
-	m := buildSharedIPMap(cfg, nil)
+	m, err := buildSharedIPMapWithDiagnosticsContext(context.Background(), cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := m["ext:mylist"]; !ok {
 		t.Fatalf("expected ext:mylist key, got %#v", m)
 	}

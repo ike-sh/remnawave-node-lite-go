@@ -19,10 +19,10 @@ add table ip6 %s
 delete table ip %s
 delete table ip6 %s
 table ip %s {
-	set %s { type ipv4_addr; flags timeout; }
-	set %s { type ipv4_addr; flags interval; }
-	set %s { type ipv4_addr; flags interval; }
-	set %s { type inet_service; }
+	set %s { type ipv4_addr; flags timeout; size %d; }
+	set %s { type ipv4_addr; flags interval; size %d; }
+	set %s { type ipv4_addr; flags interval; size %d; }
+	set %s { type inet_service; size %d; }
 
 	chain input {
 		type filter hook input priority -10; policy accept;
@@ -45,10 +45,10 @@ table ip %s {
 }
 
 table ip6 %s {
-	set %s { type ipv6_addr; flags timeout; }
-	set %s { type ipv6_addr; flags interval; }
-	set %s { type ipv6_addr; flags interval; }
-	set %s { type inet_service; }
+	set %s { type ipv6_addr; flags timeout; size %d; }
+	set %s { type ipv6_addr; flags interval; size %d; }
+	set %s { type ipv6_addr; flags interval; size %d; }
+	set %s { type inet_service; size %d; }
 
 	chain input {
 		type filter hook input priority -10; policy accept;
@@ -72,12 +72,18 @@ table ip6 %s {
 `, tableName, tableNameV6,
 		tableName, tableNameV6,
 		tableName,
-		torrentBlockerSet, ingressFilterIPSet, egressFilterIPSet, egressFilterPortSet,
+		torrentBlockerSet, maxDynamicNFTElements,
+		ingressFilterIPSet, maxResolvedIPItems,
+		egressFilterIPSet, maxResolvedIPItems,
+		egressFilterPortSet, maxFilterItems,
 		ingressFilterIPSet, torrentBlockerSet,
 		ingressFilterIPSet, torrentBlockerSet,
 		egressFilterIPSet, egressFilterPortSet, egressFilterPortSet,
 		tableNameV6,
-		torrentBlockerSetV6, ingressFilterIPSetV6, egressFilterIPSetV6, egressFilterPortSetV6,
+		torrentBlockerSetV6, maxDynamicNFTElements,
+		ingressFilterIPSetV6, maxResolvedIPItems,
+		egressFilterIPSetV6, maxResolvedIPItems,
+		egressFilterPortSetV6, maxFilterItems,
 		ingressFilterIPSetV6, torrentBlockerSetV6,
 		ingressFilterIPSetV6, torrentBlockerSetV6,
 		egressFilterIPSetV6, egressFilterPortSetV6, egressFilterPortSetV6)
@@ -107,7 +113,59 @@ delete table ip6 %s
 `, tableName, tableNameV6, tableName, tableNameV6)
 }
 
+func renderNFTStructureProbe() string {
+	return strings.Join([]string{
+		fmt.Sprintf("list set ip %s %s", tableName, torrentBlockerSet),
+		fmt.Sprintf("list set ip %s %s", tableName, ingressFilterIPSet),
+		fmt.Sprintf("list set ip %s %s", tableName, egressFilterIPSet),
+		fmt.Sprintf("list set ip %s %s", tableName, egressFilterPortSet),
+		fmt.Sprintf("list chain ip %s input", tableName),
+		fmt.Sprintf("list chain ip %s forward", tableName),
+		fmt.Sprintf("list chain ip %s output", tableName),
+		fmt.Sprintf("list set ip6 %s %s", tableNameV6, torrentBlockerSetV6),
+		fmt.Sprintf("list set ip6 %s %s", tableNameV6, ingressFilterIPSetV6),
+		fmt.Sprintf("list set ip6 %s %s", tableNameV6, egressFilterIPSetV6),
+		fmt.Sprintf("list set ip6 %s %s", tableNameV6, egressFilterPortSetV6),
+		fmt.Sprintf("list chain ip6 %s input", tableNameV6),
+		fmt.Sprintf("list chain ip6 %s forward", tableNameV6),
+		fmt.Sprintf("list chain ip6 %s output", tableNameV6),
+	}, "\n")
+}
+
+// renderNFTStaticUpdate atomically replaces only the static filter sets. The
+// torrent sets are deliberately absent so their timed elements survive a
+// plugin config update and a static-plan rollback.
+func renderNFTStaticUpdate(config firewallConfig) string {
+	ingressV4, ingressV6 := normalizeFilterPrefixes(config.ingressIPs)
+	egressV4, egressV6 := normalizeFilterPrefixes(config.egressIPs)
+	ports := normalizedPorts(config.egressPorts)
+	commands := []string{
+		fmt.Sprintf("flush set ip %s %s", tableName, ingressFilterIPSet),
+		fmt.Sprintf("flush set ip6 %s %s", tableNameV6, ingressFilterIPSetV6),
+		fmt.Sprintf("flush set ip %s %s", tableName, egressFilterIPSet),
+		fmt.Sprintf("flush set ip6 %s %s", tableNameV6, egressFilterIPSetV6),
+		fmt.Sprintf("flush set ip %s %s", tableName, egressFilterPortSet),
+		fmt.Sprintf("flush set ip6 %s %s", tableNameV6, egressFilterPortSetV6),
+	}
+	appendElementCommand(&commands, "ip", tableName, ingressFilterIPSet, ingressV4)
+	appendElementCommand(&commands, "ip6", tableNameV6, ingressFilterIPSetV6, ingressV6)
+	appendElementCommand(&commands, "ip", tableName, egressFilterIPSet, egressV4)
+	appendElementCommand(&commands, "ip6", tableNameV6, egressFilterIPSetV6, egressV6)
+	if len(ports) != 0 {
+		items := make([]string, len(ports))
+		for i, port := range ports {
+			items[i] = strconv.Itoa(port)
+		}
+		appendElementCommand(&commands, "ip", tableName, egressFilterPortSet, items)
+		appendElementCommand(&commands, "ip6", tableNameV6, egressFilterPortSetV6, items)
+	}
+	return strings.Join(commands, "\n")
+}
+
 func renderNFTBlock(items []BlockIP) (string, error) {
+	if err := validateBlockMutation(items); err != nil {
+		return "", err
+	}
 	type timedAddress struct {
 		address string
 		timeout float64
@@ -117,7 +175,7 @@ func renderNFTBlock(items []BlockIP) (string, error) {
 	for _, item := range items {
 		addr, err := netip.ParseAddr(strings.TrimSpace(item.IP))
 		if err != nil {
-			return "", fmt.Errorf("invalid ip %q", item.IP)
+			return "", fmt.Errorf("invalid ip %s", quotedForError(item.IP))
 		}
 		addr = addr.Unmap()
 		entry := timedAddress{address: addr.String(), timeout: item.Timeout}
@@ -148,19 +206,26 @@ func renderNFTBlock(items []BlockIP) (string, error) {
 	}
 	appendTimedElements("ip", tableName, torrentBlockerSet, v4)
 	appendTimedElements("ip6", tableNameV6, torrentBlockerSetV6, v6)
-	return strings.Join(commands, "\n"), nil
+	script := strings.Join(commands, "\n")
+	if len(script) > maxNFTScriptBytes {
+		return "", fmt.Errorf("nft block script is %d bytes; maximum is %d", len(script), maxNFTScriptBytes)
+	}
+	return script, nil
 }
 
-// renderNFTUnblock returns one command per set. The runner can ignore a
-// missing-element error for one set while still removing the address from the
-// other set, matching official removal from torrent and ingress filters.
+// renderNFTUnblock returns one command per address and set. The runner can
+// ignore a missing-element error without rolling back deletion of another
+// address, matching official removal from torrent and ingress filters.
 func renderNFTUnblock(ips []string) ([]string, error) {
+	if err := validateUnblockMutation(ips); err != nil {
+		return nil, err
+	}
 	v4 := make(map[string]struct{})
 	v6 := make(map[string]struct{})
 	for _, raw := range ips {
 		addr, err := netip.ParseAddr(strings.TrimSpace(raw))
 		if err != nil {
-			return nil, fmt.Errorf("invalid ip %q", raw)
+			return nil, fmt.Errorf("invalid ip %s", quotedForError(raw))
 		}
 		addr = addr.Unmap()
 		if addr.Is4() {
@@ -170,21 +235,28 @@ func renderNFTUnblock(ips []string) ([]string, error) {
 		}
 	}
 
-	commands := make([]string, 0, 4)
+	commands := make([]string, 0, 2*(len(v4)+len(v6)))
 	appendDelete := func(family, table, set string, addresses map[string]struct{}) {
 		items := make([]string, 0, len(addresses))
 		for address := range addresses {
 			items = append(items, address)
 		}
 		sort.Strings(items)
-		if len(items) != 0 {
-			commands = append(commands, fmt.Sprintf("delete element %s %s %s { %s }", family, table, set, strings.Join(items, ", ")))
+		for _, item := range items {
+			// A separate transaction per element prevents one absent address from
+			// rolling back deletion of another address that is actually present.
+			commands = append(commands, fmt.Sprintf("delete element %s %s %s { %s }", family, table, set, item))
 		}
 	}
 	appendDelete("ip", tableName, torrentBlockerSet, v4)
 	appendDelete("ip", tableName, ingressFilterIPSet, v4)
 	appendDelete("ip6", tableNameV6, torrentBlockerSetV6, v6)
 	appendDelete("ip6", tableNameV6, ingressFilterIPSetV6, v6)
+	for _, command := range commands {
+		if len(command) > maxNFTScriptBytes {
+			return nil, fmt.Errorf("nft unblock command is %d bytes; maximum is %d", len(command), maxNFTScriptBytes)
+		}
+	}
 	return commands, nil
 }
 
@@ -208,4 +280,11 @@ func normalizedPorts(ports []int) []int {
 	}
 	sort.Ints(out)
 	return out
+}
+
+func validateNFTScript(script string) error {
+	if len(script) > maxNFTScriptBytes {
+		return fmt.Errorf("nft script is %d bytes; maximum is %d", len(script), maxNFTScriptBytes)
+	}
+	return nil
 }

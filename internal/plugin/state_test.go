@@ -74,6 +74,42 @@ func TestSyncResolvesSharedWhitelist(t *testing.T) {
 	}
 }
 
+func TestSyncWhitelistCanonicalizesIPv6AndMatchesCIDRs(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, _ := newReadyService(t, state, nil)
+	response := service.Sync(mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{
+			"sharedLists": []any{
+				map[string]any{
+					"type":  "ipList",
+					"name":  "ext:trusted-cidr",
+					"items": []any{"192.0.2.0/24"},
+				},
+			},
+			"connectionDrop": map[string]any{
+				"enabled": true,
+				"whitelistIps": []any{
+					"2001:0db8:0000:0000:0000:0000:0000:0001",
+					"ext:trusted-cidr",
+				},
+			},
+		},
+	}))
+	if !response.Accepted {
+		t.Fatal("sync was not accepted")
+	}
+	if !state.IsWhitelisted("2001:db8::1") || !state.IsWhitelisted("192.0.2.99") {
+		t.Fatal("canonical IPv6 or CIDR whitelist did not match")
+	}
+	if state.IsWhitelisted("2001:db8::2") || state.IsWhitelisted("198.51.100.1") {
+		t.Fatal("whitelist matched an address outside its prefixes")
+	}
+}
+
 func TestNewSyncPluginFromEnvelopeRoundTrip(t *testing.T) {
 	t.Parallel()
 	raw := map[string]any{
