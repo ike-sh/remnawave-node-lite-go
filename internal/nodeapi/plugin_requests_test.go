@@ -39,6 +39,16 @@ func TestPluginSyncDistinguishesNullFromMissing(t *testing.T) {
 	}
 }
 
+func TestPluginSyncDoesNotApplyControlArrayLimitToOpaqueConfig(t *testing.T) {
+	const entriesCount = 20_000
+	body := `{"plugin":{"config":{"entries":[` + strings.Repeat(`{},`, entriesCount-1) +
+		`{}]},"uuid":"00000000-0000-4000-8000-000000000001","name":"p"}}`
+	var request nodeapi.PluginSyncRequest
+	if validation := nodeapi.DecodeJSON(strings.NewReader(body), &request); validation != nil {
+		t.Fatalf("opaque plugin config rejected: %+v", validation)
+	}
+}
+
 func TestPluginRequestsRejectContractViolations(t *testing.T) {
 	t.Parallel()
 

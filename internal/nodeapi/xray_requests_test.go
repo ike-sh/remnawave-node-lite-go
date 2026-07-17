@@ -1,6 +1,7 @@
 package nodeapi_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -36,6 +37,46 @@ func TestXrayStartDefaultsForceRestartAndAcceptsNumber(t *testing.T) {
 	inbound := (*request.Internals.Hashes.Inbounds)[0]
 	if inbound.UsersCount == nil || *inbound.UsersCount != 1.5 {
 		t.Fatalf("usersCount = %v, want 1.5", inbound.UsersCount)
+	}
+}
+
+func TestXrayStartDoesNotApplyControlArrayLimitToOpaqueConfig(t *testing.T) {
+	const clientsCount = 50_000
+	var body strings.Builder
+	body.Grow(6 << 20)
+	body.WriteString(`{"internals":{"hashes":{"emptyConfig":"h","inbounds":[]}},"xrayConfig":{"inbounds":[{"settings":{"clients":[`)
+	for index := range clientsCount {
+		if index != 0 {
+			body.WriteByte(',')
+		}
+		_, _ = fmt.Fprintf(
+			&body,
+			`{"id":"00000000-0000-4000-8000-%012d","email":"user-%05d","flow":"xtls-rprx-vision"}`,
+			index,
+			index,
+		)
+	}
+	body.WriteString(`]}}]}}`)
+	if body.Len() > 16<<20 {
+		t.Fatalf("realistic 50k-client fixture = %d bytes, exceeds the low-memory body limit", body.Len())
+	}
+	var request nodeapi.XrayStartRequest
+	if validation := nodeapi.DecodeJSON(strings.NewReader(body.String()), &request); validation != nil {
+		t.Fatalf("50k-client Xray config rejected: %+v", validation)
+	}
+	inbounds, ok := (*request.XrayConfig)["inbounds"].([]any)
+	if !ok || len(inbounds) != 1 {
+		t.Fatalf("xrayConfig inbounds = %#v", (*request.XrayConfig)["inbounds"])
+	}
+	settings := inbounds[0].(map[string]any)["settings"].(map[string]any)
+	clients, ok := settings["clients"].([]any)
+	if !ok || len(clients) != clientsCount {
+		t.Fatalf("client count = %d, want %d", len(clients), clientsCount)
+	}
+	first := clients[0].(map[string]any)
+	last := clients[clientsCount-1].(map[string]any)
+	if first["email"] != "user-00000" || last["email"] != "user-49999" {
+		t.Fatalf("decoded client endpoints = %q ... %q", first["email"], last["email"])
 	}
 }
 

@@ -52,7 +52,7 @@ func TestHandleNodeRoutesUsersStatsError(t *testing.T) {
 	server := &Server{
 		statsService: stats.NewService(failingUsersStatsProvider{}, nil),
 	}
-	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-users-stats", strings.NewReader(`{"reset":false}`))
+	req := newJSONRequest(http.MethodPost, "/node/stats/get-users-stats", strings.NewReader(`{"reset":false}`))
 	rec := httptest.NewRecorder()
 
 	server.handleNodeRoutes(rec, req)
@@ -148,7 +148,7 @@ func TestStatsValidationPrecedesProviderCalls(t *testing.T) {
 			t.Parallel()
 			var calls atomic.Int64
 			server := &Server{statsService: stats.NewService(countingStatsProvider{calls: &calls}, nil)}
-			req := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			req := newJSONRequest(http.MethodPost, test.path, strings.NewReader(test.body))
 			rec := httptest.NewRecorder()
 
 			server.handleNodeRoutes(rec, req)
@@ -179,7 +179,7 @@ func TestStatsRequestAllowsUnknownFieldsAndEmptyStrings(t *testing.T) {
 
 	var calls atomic.Int64
 	server := &Server{statsService: stats.NewService(countingStatsProvider{calls: &calls}, nil)}
-	req := httptest.NewRequest(
+	req := newJSONRequest(
 		http.MethodPost,
 		"/node/stats/get-user-online-status",
 		strings.NewReader(`{"username":"","ignored":true}`),
@@ -193,6 +193,59 @@ func TestStatsRequestAllowsUnknownFieldsAndEmptyStrings(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("provider calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestDTOParsingRequiresOfficialJSONContentType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		contentType string
+		unknownSize bool
+		wantStatus  int
+		wantCalls   int64
+	}{
+		{name: "missing", wantStatus: http.StatusBadRequest},
+		{name: "plain text", contentType: "text/plain", wantStatus: http.StatusBadRequest},
+		{name: "json suffix", contentType: "application/problem+json", wantStatus: http.StatusBadRequest},
+		{name: "unsupported charset", contentType: "application/json; charset=latin1", wantStatus: http.StatusUnsupportedMediaType},
+		{name: "JSON with UTF-8", contentType: "application/json; charset=UTF-8", wantStatus: http.StatusOK, wantCalls: 1},
+		{name: "streamed JSON", contentType: "application/json", unknownSize: true, wantStatus: http.StatusOK, wantCalls: 1},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var calls atomic.Int64
+			server := &Server{statsService: stats.NewService(countingStatsProvider{calls: &calls}, nil)}
+			request := httptest.NewRequest(
+				http.MethodPost,
+				"/node/stats/get-users-stats",
+				strings.NewReader(`{"reset":false}`),
+			)
+			if test.contentType != "" {
+				request.Header.Set("Content-Type", test.contentType)
+			}
+			if test.unknownSize {
+				request.ContentLength = -1
+			}
+			response := httptest.NewRecorder()
+
+			server.handleNodeRoutes(response, request)
+
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, test.wantStatus, response.Body.String())
+			}
+			if got := calls.Load(); got != test.wantCalls {
+				t.Fatalf("provider calls = %d, want %d", got, test.wantCalls)
+			}
+			if test.wantStatus == http.StatusUnsupportedMediaType {
+				if err := contractspec.OfficialErrors.GenericHTTPResponse.ValidateJSON(response.Body.Bytes()); err != nil {
+					t.Fatalf("generic HTTP error violates official schema: %v\n%s", err, response.Body.Bytes())
+				}
+			}
+		})
 	}
 }
 
@@ -222,7 +275,7 @@ func TestStatsRoutesProduceOfficialResponseShapes(t *testing.T) {
 			}
 			var calls atomic.Int64
 			server := &Server{statsService: stats.NewService(countingStatsProvider{calls: &calls}, nil)}
-			req := httptest.NewRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest))
+			req := newJSONRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest))
 			rec := httptest.NewRecorder()
 
 			server.handleNodeRoutes(rec, req)

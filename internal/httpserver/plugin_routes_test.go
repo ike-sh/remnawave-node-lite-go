@@ -12,6 +12,7 @@ import (
 
 	contractspec "github.com/Luxiaba/remnawave-node-lite-go/internal/contract"
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/plugin"
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/stats"
 )
 
 type recordingPluginController struct {
@@ -123,7 +124,7 @@ func TestPluginValidationPrecedesServiceCalls(t *testing.T) {
 			t.Parallel()
 			controller := &recordingPluginController{}
 			server := &Server{pluginService: controller}
-			req := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			req := newJSONRequest(http.MethodPost, test.path, strings.NewReader(test.body))
 			rec := httptest.NewRecorder()
 
 			server.handleNodeRoutes(rec, req)
@@ -133,6 +134,82 @@ func TestPluginValidationPrecedesServiceCalls(t *testing.T) {
 			}
 			if controller.calls.Load() != 0 {
 				t.Fatalf("plugin service calls = %d, want 0", controller.calls.Load())
+			}
+		})
+	}
+}
+
+func TestRoutesWithoutDTORejectMalformedJSONBeforeSideEffects(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		path   string
+		method string
+		server func(*atomic.Int64) *Server
+		calls  func(*Server, *atomic.Int64) int64
+	}{
+		{
+			name: "xray stop", path: "/node/xray/stop", method: http.MethodGet,
+			server: func(*atomic.Int64) *Server {
+				return &Server{manager: &recordingXrayController{}, pluginService: &recordingPluginController{}}
+			},
+			calls: func(server *Server, _ *atomic.Int64) int64 {
+				return server.manager.(*recordingXrayController).stopCalls.Load()
+			},
+		},
+		{
+			name: "xray health", path: "/node/xray/healthcheck", method: http.MethodGet,
+			server: func(*atomic.Int64) *Server { return &Server{manager: &recordingXrayController{}} },
+			calls: func(server *Server, _ *atomic.Int64) int64 {
+				return server.manager.(*recordingXrayController).healthCalls.Load()
+			},
+		},
+		{
+			name: "system stats", path: "/node/stats/get-system-stats", method: http.MethodGet,
+			server: func(calls *atomic.Int64) *Server {
+				return &Server{statsService: stats.NewService(countingStatsProvider{calls: calls}, nil)}
+			},
+			calls: func(_ *Server, calls *atomic.Int64) int64 { return calls.Load() },
+		},
+		{
+			name: "users IP list", path: "/node/stats/get-users-ip-list", method: http.MethodGet,
+			server: func(calls *atomic.Int64) *Server {
+				return &Server{statsService: stats.NewService(countingStatsProvider{calls: calls}, nil)}
+			},
+			calls: func(_ *Server, calls *atomic.Int64) int64 { return calls.Load() },
+		},
+		{
+			name: "collect reports", path: "/node/plugin/torrent-blocker/collect", method: http.MethodPost,
+			server: func(*atomic.Int64) *Server { return &Server{pluginService: &recordingPluginController{}} },
+			calls: func(server *Server, _ *atomic.Int64) int64 {
+				return server.pluginService.(*recordingPluginController).calls.Load()
+			},
+		},
+		{
+			name: "recreate tables", path: "/node/plugin/nftables/recreate-tables", method: http.MethodPost,
+			server: func(*atomic.Int64) *Server { return &Server{pluginService: &recordingPluginController{}} },
+			calls: func(server *Server, _ *atomic.Int64) int64 {
+				return server.pluginService.(*recordingPluginController).calls.Load()
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var providerCalls atomic.Int64
+			server := test.server(&providerCalls)
+			request := newJSONRequest(test.method, test.path, strings.NewReader(`{"broken":`))
+			response := httptest.NewRecorder()
+
+			server.handleNodeRoutes(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
+			}
+			if got := test.calls(server, &providerCalls); got != 0 {
+				t.Fatalf("side-effect calls = %d, want 0", got)
 			}
 		})
 	}
@@ -155,7 +232,7 @@ func TestPluginRoutesProduceOfficialResponseShapes(t *testing.T) {
 			route, _ := contractspec.FindRouteByPath(path)
 			controller := &recordingPluginController{}
 			server := &Server{pluginService: controller}
-			req := httptest.NewRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest))
+			req := newJSONRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest))
 			rec := httptest.NewRecorder()
 
 			server.handleNodeRoutes(rec, req)
@@ -237,7 +314,7 @@ func TestPluginLifecycleOperationsSerializeWithXrayLifecycle(t *testing.T) {
 			server := &Server{manager: manager, pluginService: plugins}
 
 			pluginRoute, _ := contractspec.FindRouteByPath(test.pluginPath)
-			pluginResult := serveNodeRouteAsync(server, httptest.NewRequest(
+			pluginResult := serveNodeRouteAsync(server, newJSONRequest(
 				pluginRoute.Method,
 				pluginRoute.Path,
 				bytes.NewReader(pluginRoute.ValidRequest),
@@ -249,7 +326,7 @@ func TestPluginLifecycleOperationsSerializeWithXrayLifecycle(t *testing.T) {
 			defer cancelWait()
 			observed := make(chan struct{})
 			xrayRoute, _ := contractspec.FindRouteByPath(test.xrayPath)
-			xrayRequest := httptest.NewRequest(
+			xrayRequest := newJSONRequest(
 				xrayRoute.Method,
 				xrayRoute.Path,
 				bytes.NewReader(xrayRoute.ValidRequest),
@@ -303,7 +380,7 @@ func TestLifecycleGateCancellationDoesNotReachWaitingController(t *testing.T) {
 		server := &Server{manager: manager, pluginService: plugins}
 
 		syncRoute, _ := contractspec.FindRouteByPath("/node/plugin/sync")
-		syncResult := serveNodeRouteAsync(server, httptest.NewRequest(
+		syncResult := serveNodeRouteAsync(server, newJSONRequest(
 			syncRoute.Method,
 			syncRoute.Path,
 			bytes.NewReader(syncRoute.ValidRequest),
@@ -392,7 +469,7 @@ func TestPluginTransportPreservesConfigJSONAndFractionalTimeout(t *testing.T) {
 	controller := &recordingPluginController{}
 	server := &Server{pluginService: controller}
 	syncBody := `{"plugin":{"config":{"z":1,"a":2},"uuid":"00000000-0000-4000-8000-000000000001","name":"p"}}`
-	syncRequest := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", strings.NewReader(syncBody))
+	syncRequest := newJSONRequest(http.MethodPost, "/node/plugin/sync", strings.NewReader(syncBody))
 	syncRecorder := httptest.NewRecorder()
 	server.handleNodeRoutes(syncRecorder, syncRequest)
 
@@ -404,7 +481,7 @@ func TestPluginTransportPreservesConfigJSONAndFractionalTimeout(t *testing.T) {
 	}
 
 	blockBody := `{"ips":[{"ip":"2001:db8::1","timeout":1.5}]}`
-	blockRequest := httptest.NewRequest(http.MethodPost, "/node/plugin/nftables/block-ips", strings.NewReader(blockBody))
+	blockRequest := newJSONRequest(http.MethodPost, "/node/plugin/nftables/block-ips", strings.NewReader(blockBody))
 	blockRecorder := httptest.NewRecorder()
 	server.handleNodeRoutes(blockRecorder, blockRequest)
 	if len(controller.blockItems) != 1 || controller.blockItems[0].Timeout != 1.5 {

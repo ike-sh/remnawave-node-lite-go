@@ -1,7 +1,10 @@
 package bodylimit
 
 import (
+	"compress/gzip"
+	"compress/zlib"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,24 +12,22 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 )
 
 const (
-	defaultMaxBytes          = 256 << 20
-	lowMemoryMaxBytes        = 16 << 20
-	maxCompressedZstdBytes   = 64 << 20
-	maxZstdWindowBytes       = 32 << 20
-	maxConcurrentZstdDecodes = 2
-	maxConfiguredMB          = 1024
-	zstdSlotWait             = 5 * time.Second
+	defaultMaxBytes        = 256 << 20
+	lowMemoryMaxBytes      = 16 << 20
+	maxCompressedBodyBytes = 64 << 20
+	maxZstdWindowBytes     = 32 << 20
+	maxConcurrentDecoders  = 2
+	maxConfiguredMB        = 1024
 )
 
 var maxBytes atomic.Int64
-var zstdDecoderSlots = make(chan struct{}, maxConcurrentZstdDecodes)
-var errDecompressedBodyTooLarge = errors.New("http: decompressed request body too large")
+var decoderSlots = make(chan struct{}, maxConcurrentDecoders)
 
 func init() {
 	maxBytes.Store(defaultMaxBytes)
@@ -52,29 +53,30 @@ func MaxBytesLimit() int64 {
 	return maxBytes.Load()
 }
 
-type zstdReadCloser struct {
-	decoder *zstd.Decoder
-	orig    io.ReadCloser
-	limit   int64
-	read    int64
-	release func()
+type decodedReadCloser struct {
+	reader       io.Reader
+	closeDecoder func() error
+	original     io.ReadCloser
+	limit        int64
+	read         int64
+	release      func()
 
 	closeOnce sync.Once
 	closeErr  error
 }
 
-func (z *zstdReadCloser) Read(p []byte) (int, error) {
+func (d *decodedReadCloser) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if z.limit >= 0 {
-		remaining := z.limit - z.read
+	if d.limit >= 0 {
+		remaining := d.limit - d.read
 		if remaining == 0 {
 			var extra [1]byte
 			for {
-				n, err := z.decoder.Read(extra[:])
+				n, err := d.reader.Read(extra[:])
 				if n != 0 {
-					return 0, errDecompressedBodyTooLarge
+					return 0, &http.MaxBytesError{Limit: d.limit}
 				}
 				if err != nil {
 					return 0, err
@@ -85,89 +87,143 @@ func (z *zstdReadCloser) Read(p []byte) (int, error) {
 			p = p[:remaining]
 		}
 	}
-	n, err := z.decoder.Read(p)
-	z.read += int64(n)
+	n, err := d.reader.Read(p)
+	d.read += int64(n)
 	return n, err
 }
 
-func (z *zstdReadCloser) Close() error {
-	z.closeOnce.Do(func() {
-		z.decoder.Close()
-		if z.orig != nil {
-			z.closeErr = z.orig.Close()
+func (d *decodedReadCloser) Close() error {
+	d.closeOnce.Do(func() {
+		if d.closeDecoder != nil {
+			d.closeErr = d.closeDecoder()
 		}
-		if z.release != nil {
-			z.release()
+		if d.original != nil {
+			if err := d.original.Close(); d.closeErr == nil {
+				d.closeErr = err
+			}
+		}
+		if d.release != nil {
+			d.release()
 		}
 	})
-	return z.closeErr
+	return d.closeErr
 }
 
-func acquireZstdDecoder(ctx context.Context) (func(), bool) {
-	timer := time.NewTimer(zstdSlotWait)
-	defer timer.Stop()
+func acquireDecoder(ctx context.Context) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	select {
-	case zstdDecoderSlots <- struct{}{}:
+	case decoderSlots <- struct{}{}:
 		var once sync.Once
 		return func() {
-			once.Do(func() { <-zstdDecoderSlots })
-		}, true
+			once.Do(func() { <-decoderSlots })
+		}, nil
 	case <-ctx.Done():
-		return nil, false
-	case <-timer.C:
-		return nil, false
+		return nil, ctx.Err()
 	}
 }
 
-func newZstdDecoder(reader io.Reader, bodyLimit int64) (*zstd.Decoder, error) {
-	windowLimit := bodyLimit
-	if windowLimit < zstd.MinWindowSize {
-		windowLimit = zstd.MinWindowSize
-	}
-	if windowLimit > maxZstdWindowBytes {
-		windowLimit = maxZstdWindowBytes
-	}
+func newZstdDecoder(reader io.Reader) (*zstd.Decoder, error) {
 	return zstd.NewReader(
 		reader,
 		zstd.WithDecoderConcurrency(1),
 		zstd.WithDecoderLowmem(true),
-		zstd.WithDecoderMaxMemory(uint64(windowLimit)),
+		zstd.WithDecoderMaxMemory(maxZstdWindowBytes),
 	)
+}
+
+func decodeBody(w http.ResponseWriter, r *http.Request, encoding string, limit int64) (*decodedReadCloser, error) {
+	release, err := acquireDecoder(r.Context())
+	if err != nil {
+		return nil, err
+	}
+
+	compressedLimit := limit
+	if compressedLimit > maxCompressedBodyBytes {
+		compressedLimit = maxCompressedBodyBytes
+	}
+	original := http.MaxBytesReader(w, r.Body, compressedLimit)
+	decoded := &decodedReadCloser{
+		original: original,
+		limit:    limit,
+		release:  release,
+	}
+
+	err = nil
+	switch encoding {
+	case "gzip":
+		var decoder *gzip.Reader
+		decoder, err = gzip.NewReader(original)
+		if err == nil {
+			decoded.reader = decoder
+			decoded.closeDecoder = decoder.Close
+		}
+	case "deflate":
+		var decoder io.ReadCloser
+		decoder, err = zlib.NewReader(original)
+		if err == nil {
+			decoded.reader = decoder
+			decoded.closeDecoder = decoder.Close
+		}
+	case "br":
+		decoded.reader = brotli.NewReader(original)
+	case "zstd":
+		var decoder *zstd.Decoder
+		decoder, err = newZstdDecoder(original)
+		if err == nil {
+			decoded.reader = decoder
+			decoded.closeDecoder = func() error {
+				decoder.Close()
+				return nil
+			}
+		}
+	default:
+		err = fmt.Errorf("unsupported content encoding %q", encoding)
+	}
+	if err != nil {
+		_ = decoded.Close()
+		return nil, err
+	}
+	return decoded, nil
 }
 
 func DecompressMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Body != nil && r.Body != http.NoBody && strings.EqualFold(r.Header.Get("Content-Encoding"), "zstd") {
-			decompressedLimit := maxBytes.Load()
-			release, ok := acquireZstdDecoder(r.Context())
-			if !ok {
-				w.Header().Set("Retry-After", "1")
-				http.Error(w, "zstd decoder capacity unavailable", http.StatusServiceUnavailable)
-				return
-			}
-			compressedCap := decompressedLimit
-			if compressedCap > maxCompressedZstdBytes {
-				compressedCap = maxCompressedZstdBytes
-			}
-			compressedBody := http.MaxBytesReader(w, r.Body, compressedCap)
-			decoder, err := newZstdDecoder(compressedBody, decompressedLimit)
-			if err != nil {
-				release()
-				_ = compressedBody.Close()
-				http.Error(w, "invalid zstd body", http.StatusBadRequest)
-				return
-			}
-			decoded := &zstdReadCloser{
-				decoder: decoder,
-				orig:    compressedBody,
-				limit:   decompressedLimit,
-				release: release,
-			}
-			defer decoded.Close()
-			r.Body = decoded
-			r.Header.Del("Content-Encoding")
-			r.ContentLength = -1
+		if r.Body == nil || r.Body == http.NoBody {
+			next.ServeHTTP(w, r)
+			return
 		}
+
+		encoding := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding")))
+		if encoding == "" || encoding == "identity" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		switch encoding {
+		case "gzip", "deflate", "br", "zstd":
+		default:
+			writeHTTPError(w, http.StatusUnsupportedMediaType, fmt.Sprintf("unsupported content encoding %q", encoding))
+			return
+		}
+
+		decoded, err := decodeBody(w, r, encoding, maxBytes.Load())
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		if err != nil {
+			var limitError *http.MaxBytesError
+			if errors.As(err, &limitError) {
+				writeHTTPError(w, http.StatusRequestEntityTooLarge, "request entity too large")
+				return
+			}
+			writeHTTPError(w, http.StatusBadRequest, "invalid "+encoding+" body")
+			return
+		}
+		defer decoded.Close()
+		r.Body = decoded
+		r.Header.Del("Content-Encoding")
+		r.ContentLength = -1
 		next.ServeHTTP(w, r)
 	})
 }
@@ -178,5 +234,19 @@ func LimitMiddleware(next http.Handler) http.Handler {
 			r.Body = http.MaxBytesReader(w, r.Body, maxBytes.Load())
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func writeHTTPError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Message    string `json:"message"`
+		Error      string `json:"error"`
+		StatusCode int    `json:"statusCode"`
+	}{
+		Message:    message,
+		Error:      http.StatusText(status),
+		StatusCode: status,
 	})
 }

@@ -119,7 +119,7 @@ func TestHandlerValidationPrecedesAllSideEffects(t *testing.T) {
 				countingHandlerProvider{calls: &providerCalls},
 				countingDropper{calls: &dropperCalls},
 			)}
-			req := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			req := newJSONRequest(http.MethodPost, test.path, strings.NewReader(test.body))
 			rec := httptest.NewRecorder()
 
 			server.handleNodeRoutes(rec, req)
@@ -162,7 +162,7 @@ func TestHandlerRoutesProduceOfficialResponseShapes(t *testing.T) {
 				countingHandlerProvider{calls: &providerCalls},
 				countingDropper{calls: &dropperCalls},
 			)}
-			req := httptest.NewRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest))
+			req := newJSONRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest))
 			rec := httptest.NewRecorder()
 
 			server.handleNodeRoutes(rec, req)
@@ -195,7 +195,7 @@ func TestHandlerApplicationErrorUsesOfficialCodeAndPath(t *testing.T) {
 		failingInboundUsersProvider{countingHandlerProvider{calls: &providerCalls}},
 		countingDropper{calls: &dropperCalls},
 	)}
-	req := httptest.NewRequest(
+	req := newJSONRequest(
 		http.MethodPost,
 		"/node/handler/get-inbound-users-count",
 		strings.NewReader(`{"tag":"inbound-1"}`),

@@ -100,6 +100,69 @@ func lookupNodeRoute(method, path string) (nodeRouteID, bool) {
 	return id, ok
 }
 
+func nodeRouteHasRequestDTO(route nodeRouteID) bool {
+	switch route {
+	case routeXrayStart,
+		routeStatsGetUserOnlineStatus,
+		routeStatsGetUsersStats,
+		routeStatsGetInboundStats,
+		routeStatsGetOutboundStats,
+		routeStatsGetAllOutboundsStats,
+		routeStatsGetAllInboundsStats,
+		routeStatsGetCombinedStats,
+		routeStatsGetUserIPList,
+		routeHandlerAddUser,
+		routeHandlerRemoveUser,
+		routeHandlerGetInboundUsersCount,
+		routeHandlerGetInboundUsers,
+		routeHandlerAddUsers,
+		routeHandlerRemoveUsers,
+		routeHandlerDropUsersConnections,
+		routeHandlerDropIPs,
+		routePluginSync,
+		routePluginBlockIPs,
+		routePluginUnblockIPs:
+		return true
+	default:
+		return false
+	}
+}
+
+func nodeRouteHasHeavyRequestBody(route nodeRouteID) bool {
+	switch route {
+	case routeXrayStart,
+		routeHandlerAddUsers,
+		routeHandlerRemoveUsers,
+		routeHandlerDropUsersConnections,
+		routeHandlerDropIPs,
+		routePluginSync:
+		return true
+	default:
+		return false
+	}
+}
+
+func nodeRouteIsReadOnly(route nodeRouteID) bool {
+	switch route {
+	case routeXrayHealthcheck,
+		routeStatsGetUserOnlineStatus,
+		routeStatsGetUsersStats,
+		routeStatsGetSystemStats,
+		routeStatsGetInboundStats,
+		routeStatsGetOutboundStats,
+		routeStatsGetAllOutboundsStats,
+		routeStatsGetAllInboundsStats,
+		routeStatsGetCombinedStats,
+		routeStatsGetUserIPList,
+		routeStatsGetUsersIPList,
+		routeHandlerGetInboundUsersCount,
+		routeHandlerGetInboundUsers:
+		return true
+	default:
+		return false
+	}
+}
+
 // RegisteredNodeRoutes returns a stable copy of the routes used by the dispatcher.
 func RegisteredNodeRoutes() []NodeRoute {
 	routes := make([]NodeRoute, 0, len(nodeRouteDefinitions))

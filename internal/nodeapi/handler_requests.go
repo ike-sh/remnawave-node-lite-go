@@ -46,22 +46,25 @@ type AddUserItemRequest struct {
 func (r *AddUserRequest) Validate() []Issue {
 	issues := make([]Issue, 0)
 	if r.Data == nil {
-		issues = append(issues, MissingIssue([]any{"data"}, "array"))
+		issues = appendValidationIssues(issues, MissingIssue([]any{"data"}, "array"))
 	} else {
 		for index := range *r.Data {
-			issues = append(issues, (*r.Data)[index].validate([]any{"data", index})...)
+			issues = appendValidationIssues(issues, (*r.Data)[index].validate([]any{"data", index})...)
+			if validationIssueLimitReached(issues) {
+				return issues
+			}
 		}
 	}
 	if r.HashData == nil {
-		issues = append(issues, MissingIssue([]any{"hashData"}, "object"))
+		issues = appendValidationIssues(issues, MissingIssue([]any{"hashData"}, "object"))
 	} else {
-		issues = append(issues, validateUUID(r.HashData.VlessUUID, []any{"hashData", "vlessUuid"})...)
+		issues = appendValidationIssues(issues, validateUUID(r.HashData.VlessUUID, []any{"hashData", "vlessUuid"})...)
 		if r.HashData.PrevVlessUUID.Present {
 			path := []any{"hashData", "prevVlessUuid"}
 			if r.HashData.PrevVlessUUID.Null {
-				issues = append(issues, InvalidTypeIssue(path, "string", "null"))
+				issues = appendValidationIssues(issues, InvalidTypeIssue(path, "string", "null"))
 			} else if !uuidPattern.MatchString(r.HashData.PrevVlessUUID.Value) {
-				issues = append(issues, invalidUUIDIssue(path))
+				issues = appendValidationIssues(issues, invalidUUIDIssue(path))
 			}
 		}
 	}
@@ -74,19 +77,19 @@ func (r AddUserItemRequest) validate(path []any) []Issue {
 	}
 
 	issues := make([]Issue, 0, 6)
-	issues = append(issues, requireString(r.Tag, appendPath(path, "tag"))...)
-	issues = append(issues, requireString(r.Username, appendPath(path, "username"))...)
+	issues = appendValidationIssues(issues, requireString(r.Tag, appendPath(path, "tag"))...)
+	issues = appendValidationIssues(issues, requireString(r.Username, appendPath(path, "username"))...)
 	switch *r.Type {
 	case "trojan", "shadowsocks22", "hysteria":
-		issues = append(issues, requireString(r.Password, appendPath(path, "password"))...)
+		issues = appendValidationIssues(issues, requireString(r.Password, appendPath(path, "password"))...)
 	case "vless":
-		issues = append(issues, requireString(r.UUID, appendPath(path, "uuid"))...)
-		issues = append(issues, validateFlow(r.Flow, appendPath(path, "flow"))...)
+		issues = appendValidationIssues(issues, requireString(r.UUID, appendPath(path, "uuid"))...)
+		issues = appendValidationIssues(issues, validateFlow(r.Flow, appendPath(path, "flow"))...)
 	case "shadowsocks":
-		issues = append(issues, requireString(r.Password, appendPath(path, "password"))...)
-		issues = append(issues, validateCipherType(r.CipherType, appendPath(path, "cipherType"))...)
+		issues = appendValidationIssues(issues, requireString(r.Password, appendPath(path, "password"))...)
+		issues = appendValidationIssues(issues, validateCipherType(r.CipherType, appendPath(path, "cipherType"))...)
 		if r.IVCheck == nil {
-			issues = append(issues, MissingIssue(appendPath(path, "ivCheck"), "boolean"))
+			issues = appendValidationIssues(issues, MissingIssue(appendPath(path, "ivCheck"), "boolean"))
 		}
 	}
 	return issues
@@ -136,17 +139,23 @@ type AddUsersUserDataRequest struct {
 func (r *AddUsersRequest) Validate() []Issue {
 	issues := make([]Issue, 0)
 	if r.AffectedInboundTags == nil {
-		issues = append(issues, MissingIssue([]any{"affectedInboundTags"}, "array"))
+		issues = appendValidationIssues(issues, MissingIssue([]any{"affectedInboundTags"}, "array"))
 	} else {
 		for index, tag := range *r.AffectedInboundTags {
-			issues = append(issues, requireString(tag, []any{"affectedInboundTags", index})...)
+			issues = appendValidationIssues(issues, requireString(tag, []any{"affectedInboundTags", index})...)
+			if validationIssueLimitReached(issues) {
+				return issues
+			}
 		}
 	}
 	if r.Users == nil {
 		return append(issues, MissingIssue([]any{"users"}, "array"))
 	}
 	for index := range *r.Users {
-		issues = append(issues, (*r.Users)[index].validate([]any{"users", index})...)
+		issues = appendValidationIssues(issues, (*r.Users)[index].validate([]any{"users", index})...)
+		if validationIssueLimitReached(issues) {
+			break
+		}
 	}
 	return issues
 }
@@ -154,20 +163,23 @@ func (r *AddUsersRequest) Validate() []Issue {
 func (r AddUsersUserRequest) validate(path []any) []Issue {
 	issues := make([]Issue, 0)
 	if r.InboundData == nil {
-		issues = append(issues, MissingIssue(appendPath(path, "inboundData"), "array"))
+		issues = appendValidationIssues(issues, MissingIssue(appendPath(path, "inboundData"), "array"))
 	} else {
 		for index := range *r.InboundData {
-			issues = append(issues, (*r.InboundData)[index].validate(appendPath(path, "inboundData", index))...)
+			issues = appendValidationIssues(issues, (*r.InboundData)[index].validate(appendPath(path, "inboundData", index))...)
+			if validationIssueLimitReached(issues) {
+				return issues
+			}
 		}
 	}
 	if r.UserData == nil {
 		return append(issues, MissingIssue(appendPath(path, "userData"), "object"))
 	}
-	issues = append(issues, requireString(r.UserData.UserID, appendPath(path, "userData", "userId"))...)
-	issues = append(issues, validateUUID(r.UserData.HashUUID, appendPath(path, "userData", "hashUuid"))...)
-	issues = append(issues, validateUUID(r.UserData.VlessUUID, appendPath(path, "userData", "vlessUuid"))...)
-	issues = append(issues, requireString(r.UserData.TrojanPassword, appendPath(path, "userData", "trojanPassword"))...)
-	issues = append(issues, requireString(r.UserData.SSPassword, appendPath(path, "userData", "ssPassword"))...)
+	issues = appendValidationIssues(issues, requireString(r.UserData.UserID, appendPath(path, "userData", "userId"))...)
+	issues = appendValidationIssues(issues, validateUUID(r.UserData.HashUUID, appendPath(path, "userData", "hashUuid"))...)
+	issues = appendValidationIssues(issues, validateUUID(r.UserData.VlessUUID, appendPath(path, "userData", "vlessUuid"))...)
+	issues = appendValidationIssues(issues, requireString(r.UserData.TrojanPassword, appendPath(path, "userData", "trojanPassword"))...)
+	issues = appendValidationIssues(issues, requireString(r.UserData.SSPassword, appendPath(path, "userData", "ssPassword"))...)
 	return issues
 }
 
@@ -177,7 +189,7 @@ func (r AddUsersInboundRequest) validate(path []any) []Issue {
 	}
 	issues := requireString(r.Tag, appendPath(path, "tag"))
 	if *r.Type == "vless" {
-		issues = append(issues, validateFlow(r.Flow, appendPath(path, "flow"))...)
+		issues = appendValidationIssues(issues, validateFlow(r.Flow, appendPath(path, "flow"))...)
 	}
 	return issues
 }
@@ -197,8 +209,11 @@ func (r *RemoveUsersRequest) Validate() []Issue {
 	}
 	issues := make([]Issue, 0)
 	for index, user := range *r.Users {
-		issues = append(issues, requireString(user.UserID, []any{"users", index, "userId"})...)
-		issues = append(issues, validateUUID(user.HashUUID, []any{"users", index, "hashUuid"})...)
+		issues = appendValidationIssues(issues, requireString(user.UserID, []any{"users", index, "userId"})...)
+		issues = appendValidationIssues(issues, validateUUID(user.HashUUID, []any{"users", index, "hashUuid"})...)
+		if validationIssueLimitReached(issues) {
+			break
+		}
 	}
 	return issues
 }
@@ -216,7 +231,10 @@ func (r *DropUsersConnectionsRequest) Validate() []Issue {
 	}
 	issues := make([]Issue, 0)
 	for index, userID := range *r.UserIDs {
-		issues = append(issues, requireString(userID, []any{"userIds", index})...)
+		issues = appendValidationIssues(issues, requireString(userID, []any{"userIds", index})...)
+		if validationIssueLimitReached(issues) {
+			break
+		}
 	}
 	return issues
 }
@@ -234,7 +252,10 @@ func (r *DropIPsRequest) Validate() []Issue {
 	}
 	issues := make([]Issue, 0)
 	for index, ip := range *r.IPs {
-		issues = append(issues, requireString(ip, []any{"ips", index})...)
+		issues = appendValidationIssues(issues, requireString(ip, []any{"ips", index})...)
+		if validationIssueLimitReached(issues) {
+			break
+		}
 	}
 	return issues
 }

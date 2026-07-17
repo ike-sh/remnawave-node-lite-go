@@ -17,13 +17,14 @@ import (
 )
 
 type recordingXrayController struct {
-	startCalls atomic.Int64
-	stopCalls  atomic.Int64
-	request    xray.StartRequest
-	events     *[]string
-	startOnce  sync.Once
-	startEvent chan struct{}
-	stopResult *xray.StopResponse
+	startCalls  atomic.Int64
+	stopCalls   atomic.Int64
+	healthCalls atomic.Int64
+	request     xray.StartRequest
+	events      *[]string
+	startOnce   sync.Once
+	startEvent  chan struct{}
+	stopResult  *xray.StopResponse
 }
 
 func (x *recordingXrayController) Start(_ context.Context, request xray.StartRequest) xray.StartResponse {
@@ -56,6 +57,7 @@ func (x *recordingXrayController) Stop() xray.StopResponse {
 }
 
 func (x *recordingXrayController) Health() xray.HealthResponse {
+	x.healthCalls.Add(1)
 	return xray.HealthResponse{}
 }
 
@@ -80,7 +82,7 @@ func TestXrayStartValidationPrecedesManagerCall(t *testing.T) {
 			t.Parallel()
 			manager := &recordingXrayController{}
 			server := &Server{manager: manager}
-			req := httptest.NewRequest(http.MethodPost, "/node/xray/start", strings.NewReader(test.body))
+			req := newJSONRequest(http.MethodPost, "/node/xray/start", strings.NewReader(test.body))
 			rec := httptest.NewRecorder()
 
 			server.handleNodeRoutes(rec, req)
@@ -101,7 +103,7 @@ func TestXrayStartRouteProducesOfficialResponseShape(t *testing.T) {
 	route, _ := contractspec.FindRouteByPath("/node/xray/start")
 	manager := &recordingXrayController{}
 	server := &Server{manager: manager}
-	req := httptest.NewRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest))
+	req := newJSONRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest))
 	rec := httptest.NewRecorder()
 
 	server.handleNodeRoutes(rec, req)
@@ -195,7 +197,7 @@ func TestXrayStartWaitsUntilStopFinishesPluginReset(t *testing.T) {
 	waitCtx, cancelWait := context.WithCancel(context.Background())
 	defer cancelWait()
 	observed := make(chan struct{})
-	startRequest := httptest.NewRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest)).WithContext(
+	startRequest := newJSONRequest(route.Method, route.Path, bytes.NewReader(route.ValidRequest)).WithContext(
 		&observedDoneContext{Context: waitCtx, observed: observed},
 	)
 	startDone := make(chan struct{})
@@ -238,7 +240,7 @@ func TestXrayStartTransportAppliesDefaultsWithoutCopyingSemantics(t *testing.T) 
 	}`
 	manager := &recordingXrayController{}
 	server := &Server{manager: manager}
-	req := httptest.NewRequest(http.MethodPost, "/node/xray/start", strings.NewReader(body))
+	req := newJSONRequest(http.MethodPost, "/node/xray/start", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	server.handleNodeRoutes(rec, req)
 

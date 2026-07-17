@@ -30,10 +30,10 @@ type TagResetRequest struct {
 func (r *TagResetRequest) Validate() []Issue {
 	issues := make([]Issue, 0, 2)
 	if r.Tag == nil {
-		issues = append(issues, MissingIssue([]any{"tag"}, "string"))
+		issues = appendValidationIssues(issues, MissingIssue([]any{"tag"}, "string"))
 	}
 	if r.Reset == nil {
-		issues = append(issues, MissingIssue([]any{"reset"}, "boolean"))
+		issues = appendValidationIssues(issues, MissingIssue([]any{"reset"}, "boolean"))
 	}
 	return issues
 }

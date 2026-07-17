@@ -15,6 +15,10 @@ type NullablePluginRequest struct {
 	Null    bool
 }
 
+func (*NullablePluginRequest) structuralJSONSchema() any {
+	return PluginRequest{}
+}
+
 func (p *NullablePluginRequest) UnmarshalJSON(raw []byte) error {
 	p.Present = true
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
@@ -41,12 +45,12 @@ func (r *PluginSyncRequest) Validate() []Issue {
 	issues := make([]Issue, 0, 3)
 	configPath := []any{"plugin", "config"}
 	if r.Plugin.Value.Config == nil {
-		issues = append(issues, MissingIssue(configPath, "object"))
+		issues = appendValidationIssues(issues, MissingIssue(configPath, "object"))
 	} else if !rawJSONObject(*r.Plugin.Value.Config) {
-		issues = append(issues, InvalidTypeIssue(configPath, "object", rawJSONType(*r.Plugin.Value.Config)))
+		issues = appendValidationIssues(issues, InvalidTypeIssue(configPath, "object", rawJSONType(*r.Plugin.Value.Config)))
 	}
-	issues = append(issues, validateUUID(r.Plugin.Value.UUID, []any{"plugin", "uuid"})...)
-	issues = append(issues, requireString(r.Plugin.Value.Name, []any{"plugin", "name"})...)
+	issues = appendValidationIssues(issues, validateUUID(r.Plugin.Value.UUID, []any{"plugin", "uuid"})...)
+	issues = appendValidationIssues(issues, requireString(r.Plugin.Value.Name, []any{"plugin", "name"})...)
 	return issues
 }
 
@@ -65,9 +69,12 @@ func (r *BlockIPsRequest) Validate() []Issue {
 	}
 	issues := make([]Issue, 0)
 	for index, item := range *r.IPs {
-		issues = append(issues, validateIP(item.IP, []any{"ips", index, "ip"})...)
+		issues = appendValidationIssues(issues, validateIP(item.IP, []any{"ips", index, "ip"})...)
 		if item.Timeout == nil {
-			issues = append(issues, MissingIssue([]any{"ips", index, "timeout"}, "number"))
+			issues = appendValidationIssues(issues, MissingIssue([]any{"ips", index, "timeout"}, "number"))
+		}
+		if validationIssueLimitReached(issues) {
+			break
 		}
 	}
 	return issues
@@ -84,7 +91,10 @@ func (r *UnblockIPsRequest) Validate() []Issue {
 	issues := make([]Issue, 0)
 	for index := range *r.IPs {
 		value := &(*r.IPs)[index]
-		issues = append(issues, validateIP(value, []any{"ips", index})...)
+		issues = appendValidationIssues(issues, validateIP(value, []any{"ips", index})...)
+		if validationIssueLimitReached(issues) {
+			break
+		}
 	}
 	return issues
 }

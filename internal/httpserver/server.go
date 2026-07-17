@@ -43,6 +43,7 @@ const (
 	defaultMaxHandlers    = 32
 	lowMemoryConnections  = 16
 	lowMemoryHandlers     = 4
+	maxHeavyHandlers      = 1
 	maxRequestDuration    = 5 * time.Minute
 )
 
@@ -77,8 +78,9 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 
 	maxConnections, maxHandlers := serverCapacity(cfg.LowMemory)
 	nodeRoutes := bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes)))
-	limited := limitActiveHandlers(maxHandlers, withRequestTimeout(maxRequestDuration, nodeRoutes))
-	protected := requireJWT(validator, requireKnownNodeRoute(limited))
+	limited := limitActiveHandlers(maxHandlers, nodeRoutes)
+	heavyLimited := limitHeavyNodeRoutes(maxHeavyHandlers, limited)
+	protected := requireJWT(validator, requireKnownNodeRoute(withRequestTimeout(maxRequestDuration, heavyLimited)))
 
 	server.maxConnections = maxConnections
 	server.httpServer = &http.Server{
@@ -153,19 +155,61 @@ func limitActiveHandlers(maxActive int, next http.Handler) http.Handler {
 	if maxActive <= 0 {
 		maxActive = 1
 	}
+	totalSlots := make(chan struct{}, maxActive)
+	readCapacity := maxActive
+	if readCapacity > 1 {
+		readCapacity--
+	}
+	readSlots := make(chan struct{}, readCapacity)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		route, known := lookupNodeRoute(r.Method, r.URL.Path)
+		readOnly := known && nodeRouteIsReadOnly(route)
+		if readOnly {
+			if !acquireRequestSlot(r.Context(), readSlots) {
+				return
+			}
+			defer func() { <-readSlots }()
+		}
+		if !acquireRequestSlot(r.Context(), totalSlots) {
+			return
+		}
+		defer func() { <-totalSlots }()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func limitHeavyNodeRoutes(maxActive int, next http.Handler) http.Handler {
+	if maxActive <= 0 {
+		maxActive = 1
+	}
 	slots := make(chan struct{}, maxActive)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		route, known := lookupNodeRoute(r.Method, r.URL.Path)
+		if !known || !nodeRouteHasHeavyRequestBody(route) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		select {
 		case slots <- struct{}{}:
 			defer func() { <-slots }()
 			next.ServeHTTP(w, r)
-		default:
-			r.Close = true
-			w.Header().Set("Connection", "close")
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, "request capacity unavailable", http.StatusServiceUnavailable)
+		case <-r.Context().Done():
+			return
 		}
 	})
+}
+
+func acquireRequestSlot(ctx context.Context, slots chan struct{}) bool {
+	select {
+	case slots <- struct{}{}:
+		if ctx.Err() != nil {
+			<-slots
+			return false
+		}
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func withRequestTimeout(timeout time.Duration, next http.Handler) http.Handler {
@@ -206,6 +250,9 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	route, ok := lookupNodeRoute(r.Method, r.URL.Path)
 	if !ok {
 		panic(http.ErrAbortHandler)
+	}
+	if !nodeRouteHasRequestDTO(route) && !validateNodeJSONDocument(w, r) {
+		return
 	}
 
 	switch route {

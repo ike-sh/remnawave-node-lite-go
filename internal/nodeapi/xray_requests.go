@@ -44,34 +44,37 @@ type XrayInboundHash struct {
 func (r *XrayStartRequest) Validate() []Issue {
 	issues := make([]Issue, 0)
 	if r.Internals == nil {
-		issues = append(issues, MissingIssue([]any{"internals"}, "object"))
+		issues = appendValidationIssues(issues, MissingIssue([]any{"internals"}, "object"))
 	} else {
 		if r.Internals.ForceRestart.Present && r.Internals.ForceRestart.Null {
-			issues = append(issues, InvalidTypeIssue([]any{"internals", "forceRestart"}, "boolean", "null"))
+			issues = appendValidationIssues(issues, InvalidTypeIssue([]any{"internals", "forceRestart"}, "boolean", "null"))
 		}
 		if r.Internals.Hashes == nil {
-			issues = append(issues, MissingIssue([]any{"internals", "hashes"}, "object"))
+			issues = appendValidationIssues(issues, MissingIssue([]any{"internals", "hashes"}, "object"))
 		} else {
-			issues = append(issues, requireString(
+			issues = appendValidationIssues(issues, requireString(
 				r.Internals.Hashes.EmptyConfig,
 				[]any{"internals", "hashes", "emptyConfig"},
 			)...)
 			if r.Internals.Hashes.Inbounds == nil {
-				issues = append(issues, MissingIssue([]any{"internals", "hashes", "inbounds"}, "array"))
+				issues = appendValidationIssues(issues, MissingIssue([]any{"internals", "hashes", "inbounds"}, "array"))
 			} else {
 				for index, inbound := range *r.Internals.Hashes.Inbounds {
 					path := []any{"internals", "hashes", "inbounds", index}
 					if inbound.UsersCount == nil {
-						issues = append(issues, MissingIssue(appendPath(path, "usersCount"), "number"))
+						issues = appendValidationIssues(issues, MissingIssue(appendPath(path, "usersCount"), "number"))
 					}
-					issues = append(issues, requireString(inbound.Hash, appendPath(path, "hash"))...)
-					issues = append(issues, requireString(inbound.Tag, appendPath(path, "tag"))...)
+					issues = appendValidationIssues(issues, requireString(inbound.Hash, appendPath(path, "hash"))...)
+					issues = appendValidationIssues(issues, requireString(inbound.Tag, appendPath(path, "tag"))...)
+					if validationIssueLimitReached(issues) {
+						return issues
+					}
 				}
 			}
 		}
 	}
 	if r.XrayConfig == nil {
-		issues = append(issues, MissingIssue([]any{"xrayConfig"}, "object"))
+		issues = appendValidationIssues(issues, MissingIssue([]any{"xrayConfig"}, "object"))
 	}
 	return issues
 }
