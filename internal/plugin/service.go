@@ -129,8 +129,8 @@ type CollectReportsResponse struct {
 
 type BlockIP struct {
 	IP string
-	// Timeout zero is the explicit block API's bounded-set permanent mode.
-	// Automatic torrent blocking requires a positive duration during config validation.
+	// Timeout zero is the bounded-set permanent mode used by both explicit and
+	// automatic torrent blocking.
 	Timeout float64
 }
 

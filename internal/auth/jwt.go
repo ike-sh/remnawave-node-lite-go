@@ -22,11 +22,7 @@ type ClaimExpectations struct {
 }
 
 func DefaultClaimExpectations() ClaimExpectations {
-	return ClaimExpectations{
-		Issuer:   "remnawave",
-		Audience: "remnawave-node",
-		Subject:  "remnawave-backend",
-	}
+	return ClaimExpectations{}
 }
 
 type JWTValidator struct {
@@ -98,19 +94,31 @@ func (v *JWTValidator) Validate(token string) error {
 }
 
 func (v *JWTValidator) validateIdentityClaims(claims map[string]any) error {
-	if iss, ok := claims["iss"]; ok {
+	if v.claims.Issuer != "" {
+		iss, ok := claims["iss"]
+		if !ok {
+			return errors.New("JWT iss claim is required")
+		}
 		if !claimStringEquals(iss, v.claims.Issuer) {
-			return fmt.Errorf("JWT iss claim mismatch")
+			return errors.New("JWT iss claim mismatch")
 		}
 	}
-	if aud, ok := claims["aud"]; ok {
+	if v.claims.Audience != "" {
+		aud, ok := claims["aud"]
+		if !ok {
+			return errors.New("JWT aud claim is required")
+		}
 		if !audienceContains(aud, v.claims.Audience) {
-			return fmt.Errorf("JWT aud claim mismatch")
+			return errors.New("JWT aud claim mismatch")
 		}
 	}
-	if sub, ok := claims["sub"]; ok {
+	if v.claims.Subject != "" {
+		sub, ok := claims["sub"]
+		if !ok {
+			return errors.New("JWT sub claim is required")
+		}
 		if !claimStringEquals(sub, v.claims.Subject) {
-			return fmt.Errorf("JWT sub claim mismatch")
+			return errors.New("JWT sub claim mismatch")
 		}
 	}
 	return nil

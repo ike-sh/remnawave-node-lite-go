@@ -149,8 +149,8 @@ func validateTorrentBlockerSection(raw any) error {
 		return fmt.Errorf("torrentBlocker.enabled is required and must be a boolean")
 	}
 	duration, durationOK := numberValue(section["blockDuration"])
-	if !durationOK || math.Trunc(duration) != duration || duration < 1 || duration > maxTorrentBlockDurationSec {
-		return fmt.Errorf("torrentBlocker.blockDuration must be an integer between 1 and %d seconds", maxTorrentBlockDurationSec)
+	if !durationOK || math.Trunc(duration) != duration || duration < 0 || duration > maxTorrentBlockDurationSec {
+		return fmt.Errorf("torrentBlocker.blockDuration must be an integer between 0 and %d seconds", maxTorrentBlockDurationSec)
 	}
 	ignoreRaw, ok := section["ignoreLists"]
 	if !ok {

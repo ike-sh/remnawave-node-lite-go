@@ -1434,10 +1434,14 @@ func TestCloseRetriesBackendCleanupAfterFailure(t *testing.T) {
 }
 
 func torrentPlugin(t *testing.T, enabled bool, includeRuleTags []any) *SyncPlugin {
+	return torrentPluginWithDuration(t, enabled, 300, includeRuleTags)
+}
+
+func torrentPluginWithDuration(t *testing.T, enabled bool, blockDuration float64, includeRuleTags []any) *SyncPlugin {
 	t.Helper()
 	torrent := map[string]any{
 		"enabled":       enabled,
-		"blockDuration": 300,
+		"blockDuration": blockDuration,
 		"ignoreLists":   map[string]any{},
 	}
 	if includeRuleTags != nil {

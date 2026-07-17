@@ -41,7 +41,7 @@ func TestJWTValidator(t *testing.T) {
 	}
 }
 
-func TestJWTValidatorRejectsMismatchedIssuer(t *testing.T) {
+func TestJWTValidatorDefaultIgnoresIdentityClaims(t *testing.T) {
 	key, publicPEM := testJWTKeyPair(t)
 	validator, err := NewJWTValidator(publicPEM)
 	if err != nil {
@@ -52,28 +52,55 @@ func TestJWTValidatorRejectsMismatchedIssuer(t *testing.T) {
 	token := signedJWT(t, key, map[string]any{"alg": "RS256", "typ": "JWT"}, map[string]any{
 		"exp": 2000,
 		"iss": "evil",
+		"aud": []any{"other-service"},
+		"sub": 42,
 	})
-	if err := validator.Validate(token); err == nil {
-		t.Fatal("expected mismatched iss to fail")
+	if err := validator.Validate(token); err != nil {
+		t.Fatalf("default validator rejected an official-compatible token: %v", err)
 	}
 }
 
-func TestJWTValidatorAcceptsPanelClaims(t *testing.T) {
+func TestJWTValidatorWithClaimsRequiresExactIdentityClaims(t *testing.T) {
 	key, publicPEM := testJWTKeyPair(t)
-	validator, err := NewJWTValidator(publicPEM)
+	validator, err := NewJWTValidatorWithClaims(publicPEM, ClaimExpectations{
+		Issuer:   "remnawave",
+		Audience: "remnawave-node",
+		Subject:  "remnawave-backend",
+	})
 	if err != nil {
-		t.Fatalf("NewJWTValidator: %v", err)
+		t.Fatalf("NewJWTValidatorWithClaims: %v", err)
 	}
 	validator.now = func() time.Time { return time.Unix(1000, 0) }
 
-	token := signedJWT(t, key, map[string]any{"alg": "RS256", "typ": "JWT"}, map[string]any{
-		"exp": 2000,
-		"iss": "remnawave",
-		"aud": "remnawave-node",
-		"sub": "remnawave-backend",
-	})
-	if err := validator.Validate(token); err != nil {
-		t.Fatalf("Validate returned error: %v", err)
+	tests := []struct {
+		name    string
+		claims  map[string]any
+		wantErr bool
+	}{
+		{
+			name: "matching",
+			claims: map[string]any{
+				"exp": 2000,
+				"iss": "remnawave",
+				"aud": []any{"remnawave-node"},
+				"sub": "remnawave-backend",
+			},
+		},
+		{name: "missing issuer", claims: map[string]any{"exp": 2000, "aud": "remnawave-node", "sub": "remnawave-backend"}, wantErr: true},
+		{name: "missing audience", claims: map[string]any{"exp": 2000, "iss": "remnawave", "sub": "remnawave-backend"}, wantErr: true},
+		{name: "missing subject", claims: map[string]any{"exp": 2000, "iss": "remnawave", "aud": "remnawave-node"}, wantErr: true},
+		{name: "wrong issuer", claims: map[string]any{"exp": 2000, "iss": "other", "aud": "remnawave-node", "sub": "remnawave-backend"}, wantErr: true},
+		{name: "wrong audience", claims: map[string]any{"exp": 2000, "iss": "remnawave", "aud": "other", "sub": "remnawave-backend"}, wantErr: true},
+		{name: "wrong subject", claims: map[string]any{"exp": 2000, "iss": "remnawave", "aud": "remnawave-node", "sub": "other"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := signedJWT(t, key, map[string]any{"alg": "RS256", "typ": "JWT"}, tt.claims)
+			err := validator.Validate(token)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 

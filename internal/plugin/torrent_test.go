@@ -82,6 +82,44 @@ func TestHandleXrayWebhookBlocksAndAddsReport(t *testing.T) {
 	}
 }
 
+func TestHandleXrayWebhookPreservesPermanentBlockSemantics(t *testing.T) {
+	t.Parallel()
+
+	state := NewState()
+	service, backend := newReadyService(t, state, nil)
+	if response := service.Sync(torrentPluginWithDuration(t, true, 0, nil)); !response.Accepted {
+		t.Fatal("permanent torrent config was rejected")
+	}
+	service.HandleXrayWebhook(xraywebhook.Payload{
+		Email:  xraywebhook.String("user-1"),
+		Source: xraywebhook.String("tcp:203.0.113.10:443"),
+	})
+
+	deadline := time.Now().Add(time.Second)
+	for state.ReportsCount() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("permanent torrent webhook was not processed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	backend.mu.Lock()
+	if len(backend.blockCalls) != 1 || len(backend.blockCalls[0]) != 1 || backend.blockCalls[0][0].Timeout != 0 {
+		calls := backend.blockCalls
+		backend.mu.Unlock()
+		t.Fatalf("permanent block calls = %#v", calls)
+	}
+	backend.mu.Unlock()
+
+	reports := service.CollectReports().Reports
+	if len(reports) != 1 {
+		t.Fatalf("reports = %d, want 1", len(reports))
+	}
+	action := reports[0].ActionReport
+	if action.BlockDuration != 0 || !action.WillUnblockAt.Equal(action.ProcessedAt) {
+		t.Fatalf("permanent report = %#v", action)
+	}
+}
+
 func TestCloseDropsQueuedWebhookWithoutProcessingIt(t *testing.T) {
 	t.Parallel()
 

@@ -38,7 +38,7 @@ func TestValidatePluginConfigAcceptsMinimalConfig(t *testing.T) {
 func TestValidatePluginConfigAcceptsBoundedDurationAndExtEdges(t *testing.T) {
 	t.Parallel()
 
-	for _, duration := range []any{float64(1), float64(maxTorrentBlockDurationSec)} {
+	for _, duration := range []any{float64(0), float64(1), float64(maxTorrentBlockDurationSec)} {
 		cfg := validTorrentBlocker(true)
 		cfg["blockDuration"] = duration
 		cfg["ignoreLists"] = map[string]any{"ip": []any{"ext:"}}
@@ -51,7 +51,7 @@ func TestValidatePluginConfigAcceptsBoundedDurationAndExtEdges(t *testing.T) {
 func TestValidatePluginConfigRejectsUnsafeBlockDuration(t *testing.T) {
 	t.Parallel()
 
-	for _, duration := range []any{float64(-1), float64(0), float64(maxTorrentBlockDurationSec + 1), float64(1e100)} {
+	for _, duration := range []any{float64(-1), float64(maxTorrentBlockDurationSec + 1), float64(1e100)} {
 		cfg := validTorrentBlocker(true)
 		cfg["blockDuration"] = duration
 		if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err == nil {

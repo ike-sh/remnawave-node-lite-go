@@ -84,6 +84,18 @@ func TestRenderNFTBlockRejectsInvalidIP(t *testing.T) {
 	}
 }
 
+func TestRenderNFTBlockRendersZeroTimeoutAsPermanent(t *testing.T) {
+	t.Parallel()
+
+	script, err := renderNFTBlock([]BlockIP{{IP: "203.0.113.1", Timeout: 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if script != "add element ip remnanode torrent-blocker { 203.0.113.1 }" {
+		t.Fatalf("permanent block script = %q", script)
+	}
+}
+
 func TestRenderNFTBlockRejectsUnsafeTimeout(t *testing.T) {
 	t.Parallel()
 
