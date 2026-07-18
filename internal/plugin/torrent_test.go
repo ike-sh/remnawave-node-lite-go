@@ -9,6 +9,17 @@ import (
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
 )
 
+type validatingFirewall struct {
+	fakeFirewall
+}
+
+func (f *validatingFirewall) BlockIPs(ctx context.Context, items []BlockIP) error {
+	if _, err := renderNFTBlock(items); err != nil {
+		return err
+	}
+	return f.fakeFirewall.BlockIPs(ctx, items)
+}
+
 func TestExtractWebhookIP(t *testing.T) {
 	t.Parallel()
 
@@ -117,6 +128,47 @@ func TestHandleXrayWebhookPreservesPermanentBlockSemantics(t *testing.T) {
 	action := reports[0].ActionReport
 	if action.BlockDuration != 0 || !action.WillUnblockAt.Equal(action.ProcessedAt) {
 		t.Fatalf("permanent report = %#v", action)
+	}
+}
+
+func TestHandleXrayWebhookBlocksWithOfficialLongDuration(t *testing.T) {
+	t.Parallel()
+
+	const duration = 31 * 24 * 60 * 60
+	state := NewState()
+	backend := &validatingFirewall{}
+	service := newServiceWithBackend(state, nil, nil, backend)
+	if err := service.Initialize(); err != nil {
+		t.Fatalf("initialize plugin service: %v", err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+
+	if response := service.Sync(torrentPluginWithDuration(t, true, duration, nil)); !response.Accepted {
+		t.Fatal("long-duration torrent config was rejected")
+	}
+	service.HandleXrayWebhook(xraywebhook.Payload{
+		Email:  xraywebhook.String("user-1"),
+		Source: xraywebhook.String("tcp:203.0.113.10:443"),
+	})
+
+	deadline := time.Now().Add(time.Second)
+	for state.ReportsCount() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("long-duration torrent webhook was not processed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	backend.mu.Lock()
+	if len(backend.blockCalls) != 1 || len(backend.blockCalls[0]) != 1 || backend.blockCalls[0][0].Timeout != duration {
+		calls := backend.blockCalls
+		backend.mu.Unlock()
+		t.Fatalf("long-duration block calls = %#v", calls)
+	}
+	backend.mu.Unlock()
+
+	reports := service.CollectReports().Reports
+	if len(reports) != 1 || !reports[0].ActionReport.Blocked || reports[0].ActionReport.BlockDuration != duration {
+		t.Fatalf("long-duration reports = %#v", reports)
 	}
 }
 
