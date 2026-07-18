@@ -133,3 +133,25 @@ func TestIsUserExists(t *testing.T) {
 		})
 	}
 }
+
+func TestAddUserTreatsExistingUserAsIdempotentSuccess(t *testing.T) {
+	t.Parallel()
+
+	conn := &fakeInvokeConn{invoke: func(_ context.Context, method string, _, _ any, _ ...grpc.CallOption) error {
+		if method != handlerAlterInboundMethod {
+			return fmt.Errorf("method = %q", method)
+		}
+		return status.Error(codes.Unknown, "User duplicate@example.com already exists.")
+	}}
+	result := NewHandlerAPI(conn).AddVlessUser(
+		context.Background(),
+		"inbound",
+		"duplicate@example.com",
+		"2a9fa391-41be-4207-9d63-df7ba48cb306",
+		"",
+		0,
+	)
+	if !result.OK || result.Message != "" {
+		t.Fatalf("result = %+v, want idempotent success matching official SDK", result)
+	}
+}

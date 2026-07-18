@@ -176,11 +176,8 @@ func (h *HandlerAPI) addUser(ctx context.Context, tag string, user *xrpc.User) H
 		return HandlerResult{OK: false, Message: marshalErr.Error()}
 	}
 	err := h.conn.Invoke(ctx, handlerAlterInboundMethod, &xrpc.AlterInboundRequest{Tag: tag, Operation: operation}, &xrpc.Empty{}, grpc.StaticMethod())
-	if err == nil {
+	if err == nil || isUserExists(err) {
 		return HandlerResult{OK: true}
-	}
-	if isUserExists(err) {
-		return HandlerResult{OK: false, Message: grpcErrorMessage(err)}
 	}
 	return HandlerResult{OK: false, Message: grpcErrorMessage(err)}
 }
