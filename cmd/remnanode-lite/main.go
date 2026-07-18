@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -32,7 +33,10 @@ import (
 
 const nodeShutdownTimeout = 25 * time.Second
 
-const cliUsage = "usage: remnanode-lite [version|doctor|validate-secret|canonicalize-secret|release-url|install-script-url]"
+const cliUsage = `usage: remnanode-lite [version|doctor|kill-sockets|validate-secret|canonicalize-secret|release-url|install-script-url]
+  kill-sockets, --kill-sockets, -k  Kill sockets by IP address`
+
+type socketKiller func(context.Context, string) error
 
 func main() {
 	code := runCLI(
@@ -42,6 +46,7 @@ func main() {
 		os.Stderr,
 		runNode,
 		doctor.Run,
+		netadmin.KillSocketsByIP,
 	)
 	if code != 0 {
 		os.Exit(code)
@@ -54,6 +59,7 @@ func runCLI(
 	stdout, stderr io.Writer,
 	runDaemon func() error,
 	runDoctor func([]string) int,
+	killSockets socketKiller,
 ) int {
 	if len(args) == 0 {
 		if err := runDaemon(); err != nil {
@@ -92,6 +98,11 @@ func runCLI(
 			return usageError("usage: remnanode-lite doctor [--env PATH]")
 		}
 		return runDoctor(doctorArgs)
+	case "kill-sockets", "--kill-sockets", "-k":
+		if len(args) != 1 {
+			return usageError("usage: remnanode-lite kill-sockets")
+		}
+		return killSocketsCommand(stdin, stdout, stderr, killSockets)
 	case "validate-secret":
 		if len(args) != 1 {
 			return usageError("usage: remnanode-lite validate-secret < SECRET_KEY")
@@ -117,6 +128,43 @@ func runCLI(
 		fmt.Fprintln(stderr, cliUsage)
 		return 1
 	}
+}
+
+func killSocketsCommand(input io.Reader, stdout, stderr io.Writer, killSockets socketKiller) int {
+	if _, err := io.WriteString(stdout, "Enter IP address to kill sockets for: "); err != nil {
+		fmt.Fprintf(stderr, "Failed to kill sockets: write prompt: %v\n", err)
+		return 1
+	}
+
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 64), 128)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintf(stderr, "Failed to kill sockets: read IP address: %v\n", err)
+		} else {
+			fmt.Fprintln(stderr, "Failed to kill sockets: IP address is required")
+		}
+		return 1
+	}
+
+	ipAddress := strings.TrimSpace(scanner.Text())
+	if ipAddress == "" {
+		fmt.Fprintln(stderr, "Failed to kill sockets: IP address is required")
+		return 1
+	}
+	if _, err := fmt.Fprintf(stdout, "Killing sockets for IP: %s...\n", ipAddress); err != nil {
+		fmt.Fprintf(stderr, "Failed to kill sockets: write progress: %v\n", err)
+		return 1
+	}
+	if err := killSockets(context.Background(), ipAddress); err != nil {
+		fmt.Fprintf(stderr, "Failed to kill sockets: %v\n", err)
+		return 1
+	}
+	if _, err := fmt.Fprintln(stdout, "Sockets killed successfully."); err != nil {
+		fmt.Fprintf(stderr, "Failed to kill sockets: write result: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func validateSecretCommand(input io.Reader, stderr io.Writer) int {
