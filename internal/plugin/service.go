@@ -25,6 +25,7 @@ var (
 )
 
 type XrayController interface {
+	RemoveTorrentBlockerOutbound() error
 	StopIfOnline() error
 }
 
@@ -399,6 +400,10 @@ func (s *Service) reconcileTorrentLocked(previous, next *pluginSnapshot) error {
 		nextTags = next.torrent.includeRuleTags
 	}
 
+	if wasEnabled && !nowEnabled && len(nextTags) == 0 {
+		return s.xray.RemoveTorrentBlockerOutbound()
+	}
+
 	needsRestart := (wasEnabled && !nowEnabled) ||
 		(!wasEnabled && nowEnabled) ||
 		(wasEnabled && nowEnabled && hashIncludeRuleTags(previousTags) != hashIncludeRuleTags(nextTags))
@@ -504,7 +509,7 @@ func (s *Service) RecreateTablesContext(ctx context.Context) AcceptedResponse {
 		copy.firewallReady = true
 		next = &copy
 	}
-	if err := s.applySnapshotResetReconcileFirstLocked(ctx, next, s.stopXrayLocked); err != nil {
+	if err := s.applySnapshotResetReconcileFirstLocked(ctx, next, s.reconcileTorrentLocked); err != nil {
 		slog.Warn("nftables recreate request failed", "error", err)
 		return AcceptedResponse{Accepted: false}
 	}

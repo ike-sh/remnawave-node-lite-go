@@ -191,9 +191,11 @@ func (f *fakeFirewall) snapshot() (calls []firewallConfig, current firewallConfi
 }
 
 type mockXray struct {
-	stopIfOnline int
-	stopErr      error
-	events       *[]string
+	removeOutbound int
+	removeErr      error
+	stopIfOnline   int
+	stopErr        error
+	events         *[]string
 }
 
 type doneObservedContext struct {
@@ -237,7 +239,16 @@ func (m *mockXray) StopIfOnline() error {
 	return m.stopErr
 }
 
+func (m *mockXray) RemoveTorrentBlockerOutbound() error {
+	m.removeOutbound++
+	if m.events != nil {
+		*m.events = append(*m.events, "remove")
+	}
+	return m.removeErr
+}
+
 func (m *mockXray) resetCalls() {
+	m.removeOutbound = 0
 	m.stopIfOnline = 0
 }
 
@@ -252,24 +263,36 @@ func newReadyService(t *testing.T, state *State, xray XrayController) (*Service,
 	return service, backend
 }
 
-func TestSyncDisableStopsXrayWhenIncludeTagsAbsent(t *testing.T) {
+func TestSyncDisableRemovesTorrentOutboundWhenIncludeTagsAbsent(t *testing.T) {
 	t.Parallel()
 
-	state := NewState()
-	xray := &mockXray{}
-	service, _ := newReadyService(t, state, xray)
-	if response := service.Sync(torrentPlugin(t, true, nil)); !response.Accepted {
-		t.Fatal("initial sync was not accepted")
+	tests := map[string]func(*testing.T) *SyncPlugin{
+		"disabled section": func(t *testing.T) *SyncPlugin {
+			return torrentPlugin(t, false, nil)
+		},
+		"absent section": func(t *testing.T) *SyncPlugin {
+			return filterPlugin(t, "192.0.2.0/24")
+		},
 	}
-	xray.resetCalls()
+	for name, next := range tests {
+		t.Run(name, func(t *testing.T) {
+			state := NewState()
+			xray := &mockXray{}
+			service, _ := newReadyService(t, state, xray)
+			if response := service.Sync(torrentPlugin(t, true, nil)); !response.Accepted {
+				t.Fatal("initial sync was not accepted")
+			}
+			xray.resetCalls()
 
-	response := service.Sync(torrentPlugin(t, false, nil))
+			response := service.Sync(next(t))
 
-	if !response.Accepted {
-		t.Fatal("sync was not accepted")
-	}
-	if xray.stopIfOnline != 1 {
-		t.Fatalf("xray stop calls = %d, want 1", xray.stopIfOnline)
+			if !response.Accepted {
+				t.Fatal("sync was not accepted")
+			}
+			if xray.removeOutbound != 1 || xray.stopIfOnline != 0 {
+				t.Fatalf("Xray calls: remove=%d stop=%d, want remove=1 stop=0", xray.removeOutbound, xray.stopIfOnline)
+			}
+		})
 	}
 }
 
@@ -289,6 +312,9 @@ func TestSyncDisableWithIncludeTagsRestartsXray(t *testing.T) {
 	}
 	if xray.stopIfOnline != 1 {
 		t.Fatalf("xray stop calls = %d, want 1", xray.stopIfOnline)
+	}
+	if xray.removeOutbound != 0 {
+		t.Fatalf("remove outbound calls = %d, want 0", xray.removeOutbound)
 	}
 }
 
@@ -1024,7 +1050,7 @@ func TestXrayFailureRollsBackFirewallAndKeepsSnapshot(t *testing.T) {
 	}
 }
 
-func TestDisableStopFailureKeepsFirewallAndTorrentEnabled(t *testing.T) {
+func TestDisableRemoveOutboundFailureKeepsFirewallAndTorrentEnabled(t *testing.T) {
 	t.Parallel()
 
 	state := NewState()
@@ -1036,15 +1062,15 @@ func TestDisableStopFailureKeepsFirewallAndTorrentEnabled(t *testing.T) {
 	oldHash := state.ConfigHash()
 	_, oldFirewall := backend.snapshot()
 	xray.resetCalls()
-	xray.stopErr = errors.New("stop failed")
+	xray.removeErr = errors.New("remove outbound failed")
 
 	response := service.Sync(torrentPlugin(t, false, nil))
 
 	if response.Accepted {
-		t.Fatal("sync with failed Xray stop was accepted")
+		t.Fatal("sync with failed outbound removal was accepted")
 	}
 	if state.ConfigHash() != oldHash || !state.TorrentBlockerEnabled() {
-		t.Fatal("failed Xray stop replaced committed state")
+		t.Fatal("failed outbound removal replaced committed state")
 	}
 	_, current := backend.snapshot()
 	if !reflect.DeepEqual(current, oldFirewall) {
@@ -1071,7 +1097,7 @@ func TestRecreateTablesReplaysCommittedFirewallPlan(t *testing.T) {
 	}
 }
 
-func TestRecreateStopsXrayBeforeResetWhenTorrentStateIsUnchanged(t *testing.T) {
+func TestRecreateHealthyTorrentDoesNotStopXrayBeforeReset(t *testing.T) {
 	t.Parallel()
 
 	events := make([]string, 0, 2)
@@ -1081,18 +1107,22 @@ func TestRecreateStopsXrayBeforeResetWhenTorrentStateIsUnchanged(t *testing.T) {
 	if !service.Sync(torrentPlugin(t, true, []any{"rule-a"})).Accepted {
 		t.Fatal("initial torrent sync failed")
 	}
+	xray.resetCalls()
 	events = events[:0]
 	backend.setApplyHook(func(int) { events = append(events, "reset") })
 
 	if response := service.RecreateTables(); !response.Accepted {
 		t.Fatal("recreate was not accepted")
 	}
-	if got := strings.Join(events, ","); got != "stop,reset" {
-		t.Fatalf("recreate order = %q, want stop,reset", got)
+	if got := strings.Join(events, ","); got != "reset" {
+		t.Fatalf("recreate events = %q, want reset only", got)
+	}
+	if xray.stopIfOnline != 0 || xray.removeOutbound != 0 {
+		t.Fatalf("healthy recreate called Xray: stop=%d remove=%d", xray.stopIfOnline, xray.removeOutbound)
 	}
 }
 
-func TestRecreateStopFailureDoesNotResetUnchangedTorrentFirewall(t *testing.T) {
+func TestRecreateHealthyTorrentDoesNotDependOnXrayHandlers(t *testing.T) {
 	t.Parallel()
 
 	state := NewState()
@@ -1104,18 +1134,23 @@ func TestRecreateStopFailureDoesNotResetUnchangedTorrentFirewall(t *testing.T) {
 	if !service.BlockIPs([]BlockIP{{IP: "203.0.113.10", Timeout: 60}}).Accepted {
 		t.Fatal("dynamic block failed")
 	}
+	xray.resetCalls()
 	before, _ := backend.snapshot()
 	xray.stopErr = errors.New("stop failed")
+	xray.removeErr = errors.New("remove failed")
 
-	if response := service.RecreateTables(); response.Accepted {
-		t.Fatal("recreate with failed Xray stop was accepted")
+	if response := service.RecreateTables(); !response.Accepted {
+		t.Fatal("healthy recreate was rejected without an Xray transition")
 	}
 	after, _ := backend.snapshot()
-	if len(after) != len(before) || !backend.hasDynamicBlock("203.0.113.10") {
-		t.Fatalf("failed stop reached destructive reset: applies=%d->%d dynamic=%v", len(before), len(after), backend.hasDynamicBlock("203.0.113.10"))
+	if len(after) != len(before)+1 || backend.hasDynamicBlock("203.0.113.10") {
+		t.Fatalf("recreate did not reset firewall: applies=%d->%d dynamic=%v", len(before), len(after), backend.hasDynamicBlock("203.0.113.10"))
 	}
 	if !state.TorrentBlockerEnabled() {
-		t.Fatal("failed recreate changed the committed torrent snapshot")
+		t.Fatal("healthy recreate changed the committed torrent snapshot")
+	}
+	if xray.stopIfOnline != 0 || xray.removeOutbound != 0 {
+		t.Fatalf("healthy recreate called Xray: stop=%d remove=%d", xray.stopIfOnline, xray.removeOutbound)
 	}
 }
 

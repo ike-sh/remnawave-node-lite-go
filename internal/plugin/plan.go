@@ -97,10 +97,10 @@ func buildPluginPlanFromConfigContext(
 	plan := &pluginPlan{snapshot: snapshot, diagnostics: diagnostics}
 	if blocker, ok := config["torrentBlocker"].(map[string]any); ok {
 		includeRuleTags := toStringSlice(blocker["includeRuleTags"])
+		snapshot.torrent.includeRuleTags = append([]string(nil), includeRuleTags...)
 		if enabled, _ := blocker["enabled"].(bool); enabled {
 			snapshot.torrent.enabled = true
 			snapshot.torrent.blockDuration, _ = numberValue(blocker["blockDuration"])
-			snapshot.torrent.includeRuleTags = append([]string(nil), includeRuleTags...)
 			if ignore, ok := blocker["ignoreLists"].(map[string]any); ok {
 				resolved, resolveErr := resolveIPListContext(ctx, toStringSlice(ignore["ip"]), shared, &plan.diagnostics, &resolvedBudget)
 				if resolveErr != nil {
