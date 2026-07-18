@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -96,10 +97,24 @@ func TestRenderNFTBlockRendersZeroTimeoutAsPermanent(t *testing.T) {
 	}
 }
 
+func TestRenderNFTBlockAcceptsLongTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, timeout := range []float64{31 * 24 * 60 * 60, 1e20} {
+		script, err := renderNFTBlock([]BlockIP{{IP: "203.0.113.1", Timeout: timeout}})
+		if err != nil {
+			t.Fatalf("timeout %v was rejected: %v", timeout, err)
+		}
+		if !strings.Contains(script, " timeout ") {
+			t.Fatalf("timeout %v was omitted from script: %s", timeout, script)
+		}
+	}
+}
+
 func TestRenderNFTBlockRejectsUnsafeTimeout(t *testing.T) {
 	t.Parallel()
 
-	for _, timeout := range []float64{-1, maxTorrentBlockDurationSec + 1} {
+	for _, timeout := range []float64{-1, math.Inf(1), math.NaN()} {
 		if _, err := renderNFTBlock([]BlockIP{{IP: "203.0.113.1", Timeout: timeout}}); err == nil {
 			t.Fatalf("timeout %v was accepted", timeout)
 		}

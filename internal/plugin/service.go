@@ -694,8 +694,8 @@ func validateBlockMutation(items []BlockIP) error {
 		if err := validateStringLength(fmt.Sprintf("ips[%d].ip", i), item.IP); err != nil {
 			return err
 		}
-		if math.IsNaN(item.Timeout) || math.IsInf(item.Timeout, 0) || item.Timeout < 0 || item.Timeout > maxTorrentBlockDurationSec {
-			return fmt.Errorf("ips[%d].timeout must be between 0 and %d seconds", i, maxTorrentBlockDurationSec)
+		if math.IsNaN(item.Timeout) || math.IsInf(item.Timeout, 0) || item.Timeout < 0 {
+			return fmt.Errorf("ips[%d].timeout must be a finite non-negative number of seconds", i)
 		}
 	}
 	return nil

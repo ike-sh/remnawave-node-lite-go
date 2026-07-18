@@ -42,7 +42,7 @@ func TestValidatePluginConfigAcceptsNonNegativeIntegerDurationAndExtEdges(t *tes
 	for _, duration := range []any{
 		float64(0),
 		float64(1),
-		float64(maxTorrentBlockDurationSec + 1),
+		float64(31 * 24 * 60 * 60),
 		float64(1 << 53),
 		float64(1e20),
 	} {
