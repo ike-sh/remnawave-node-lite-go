@@ -81,6 +81,11 @@ type testProcess struct {
 	starts atomic.Int32
 }
 
+type discardWriteCloser struct{}
+
+func (discardWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (discardWriteCloser) Close() error                { return nil }
+
 func newLifecycleManager(t *testing.T, mode string) (*Manager, *testProcess) {
 	t.Helper()
 	manager, err := NewManager(Options{
@@ -417,6 +422,113 @@ func TestProcessWaitDelayBoundsInheritedLogPipe(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("inherited output pipe delayed process reap for %s", elapsed)
+	}
+}
+
+func TestConcurrentFinalizeRetriesCleanupAndReapsLeaderOnce(t *testing.T) {
+	cleanupFailure := errors.New("injected cleanup failure")
+	leaderExit := errors.New("injected leader exit")
+	var cleanupAttempts atomic.Int32
+	var reapCalls atomic.Int32
+	reapEntered := make(chan struct{})
+	releaseReap := make(chan struct{})
+	var reapEnteredOnce sync.Once
+	manager := &Manager{
+		processGroupCleanup: func(*os.Process, time.Duration) error {
+			cleanupAttempts.Add(1)
+			return cleanupFailure
+		},
+	}
+	process := &processState{
+		cmd: &exec.Cmd{},
+		reap: func() error {
+			reapCalls.Add(1)
+			reapEnteredOnce.Do(func() { close(reapEntered) })
+			<-releaseReap
+			return leaderExit
+		},
+		done:           make(chan struct{}),
+		leaderDone:     make(chan struct{}),
+		monitorDone:    make(chan struct{}),
+		stdout:         discardWriteCloser{},
+		stderr:         discardWriteCloser{},
+		leaderObserved: true,
+	}
+
+	if err := manager.finalizeExitedProcess(process, time.Second); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("first finalize error = %v", err)
+	}
+	outcome := process.outcome()
+	if outcome.finalized || outcome.cleanupVerified || !errors.Is(outcome.cleanupErr, cleanupFailure) {
+		t.Fatalf("outcome after failed cleanup = %#v", outcome)
+	}
+	if got := reapCalls.Load(); got != 0 {
+		t.Fatalf("leader reaped before cleanup verification: calls=%d", got)
+	}
+
+	retryEntered := make(chan struct{})
+	releaseRetry := make(chan struct{})
+	var retryOnce sync.Once
+	manager.mu.Lock()
+	manager.processGroupCleanup = func(*os.Process, time.Duration) error {
+		cleanupAttempts.Add(1)
+		retryOnce.Do(func() { close(retryEntered) })
+		<-releaseRetry
+		return nil
+	}
+	manager.mu.Unlock()
+
+	results := []chan error{make(chan error, 1), make(chan error, 1)}
+	for _, result := range results {
+		go func(result chan<- error) {
+			result <- manager.finalizeExitedProcess(process, time.Second)
+		}(result)
+	}
+	awaitSignal(t, retryEntered, "cleanup finalizer retry")
+	close(releaseRetry)
+	awaitSignal(t, reapEntered, "leader reap")
+	killResult := make(chan error, 1)
+	go func() { killResult <- process.kill() }()
+	close(releaseReap)
+	for index, result := range results {
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("finalizer %d: %v", index+1, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for finalizer %d", index+1)
+		}
+	}
+	select {
+	case err := <-killResult:
+		if !errors.Is(err, os.ErrProcessDone) {
+			t.Fatalf("kill racing with leader reap = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("kill did not resume after leader finalization")
+	}
+
+	if got := cleanupAttempts.Load(); got != 2 {
+		t.Fatalf("cleanup calls = %d, want 2 (one failed, one successful)", got)
+	}
+	if got := reapCalls.Load(); got != 1 {
+		t.Fatalf("leader reap calls = %d, want 1", got)
+	}
+	outcome = process.outcome()
+	if !outcome.finalized || !outcome.cleanupVerified || !errors.Is(outcome.cleanupErr, cleanupFailure) || !errors.Is(outcome.leaderErr, leaderExit) {
+		t.Fatalf("final outcome = %#v", outcome)
+	}
+	select {
+	case <-process.done:
+	default:
+		t.Fatal("finalized process did not close done")
+	}
+	if err := manager.finalizeExitedProcess(process, time.Second); err != nil {
+		t.Fatalf("idempotent finalize: %v", err)
+	}
+	if got := reapCalls.Load(); got != 1 {
+		t.Fatalf("idempotent finalize repeated leader reap: calls=%d", got)
 	}
 }
 

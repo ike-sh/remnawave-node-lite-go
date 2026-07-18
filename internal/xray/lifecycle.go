@@ -57,16 +57,39 @@ type stopOperation struct {
 	isStopped bool
 }
 
-type processState struct {
-	cmd        *exec.Cmd
-	generation uint64
-	done       chan struct{}
-	stdout     io.WriteCloser
-	stderr     io.WriteCloser
+type processLeaderWait struct {
+	reaped    bool
+	leaderErr error
+}
 
-	mu      sync.Mutex
-	exited  bool
-	exitErr error
+type processOutcome struct {
+	leaderObserved  bool
+	finalized       bool
+	cleanupVerified bool
+	leaderErr       error
+	cleanupErr      error
+	observationErr  error
+}
+
+type processState struct {
+	cmd         *exec.Cmd
+	reap        func() error
+	generation  uint64
+	done        chan struct{}
+	leaderDone  chan struct{}
+	monitorDone chan struct{}
+	stdout      io.WriteCloser
+	stderr      io.WriteCloser
+
+	finalizeMu      sync.Mutex
+	mu              sync.Mutex
+	leaderObserved  bool
+	leaderReaped    bool
+	finalized       bool
+	cleanupVerified bool
+	leaderErr       error
+	cleanupErr      error
+	observationErr  error
 }
 
 func (m *Manager) Start(parent context.Context, req StartRequest) StartResponse {
@@ -166,10 +189,15 @@ func (m *Manager) Start(parent context.Context, req StartRequest) StartResponse 
 	}
 
 	if !m.assignProcess(generation, process) {
-		_ = m.terminateProcess(process)
+		stopErr := m.terminateProcess(process)
+		finalState := lifecycleStopped
+		if stopErr != nil {
+			finalState = lifecycleStopping
+			m.retainUncleanProcess(process)
+		}
 		cancel()
-		m.completeStart(generation, lifecycleStopped, nil)
-		return m.startFailure("xray start canceled", context.Canceled)
+		m.completeStart(generation, finalState, nil)
+		return m.startFailure("xray start canceled", errors.Join(context.Canceled, stopErr))
 	}
 
 	startupTimeout := m.grpcStartupTimeout()
@@ -228,6 +256,12 @@ func (m *Manager) beginStart(parent context.Context) (context.Context, context.C
 	if m.state == lifecycleStarting || m.state == lifecycleStopping {
 		return nil, nil, 0, m.state, false
 	}
+	if m.process != nil {
+		outcome := m.process.outcome()
+		if outcome.cleanupErr != nil || outcome.observationErr != nil {
+			return nil, nil, 0, m.state, false
+		}
+	}
 	if !m.lifecycleMu.TryLock() {
 		return nil, nil, 0, m.state, false
 	}
@@ -270,7 +304,7 @@ func (m *Manager) completeUnchangedStart(generation uint64) (completed, owned bo
 	if m.process == nil {
 		return false, true
 	}
-	if exited, _ := m.process.exitStatus(); exited {
+	if unavailable, _ := m.process.leaderUnavailable(); unavailable {
 		return false, true
 	}
 
@@ -304,6 +338,15 @@ func (m *Manager) assignProcess(generation uint64, process *processState) bool {
 	return true
 }
 
+func (m *Manager) retainUncleanProcess(process *processState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.process == nil {
+		m.process = process
+	}
+	m.state = lifecycleStopping
+}
+
 func (m *Manager) commitRunningStart(generation uint64, process *processState, hashState runtimeHashState, version *string) (committed, owned bool, exitErr error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -314,7 +357,7 @@ func (m *Manager) commitRunningStart(generation uint64, process *processState, h
 	if m.process != process {
 		return false, true, nil
 	}
-	if exited, err := process.exitStatus(); exited {
+	if unavailable, err := process.leaderUnavailable(); unavailable {
 		return false, true, err
 	}
 
@@ -328,7 +371,7 @@ func (m *Manager) commitRunningStart(generation uint64, process *processState, h
 }
 
 func (m *Manager) Stop() StopResponse {
-	op, cancelStart, waitOnly, waitForOwner := m.reserveStop()
+	op, cancelStart, waitOnly, waitForOwner, retryCleanup := m.reserveStop()
 	if waitOnly {
 		<-op.done
 		return StopResponse{IsStopped: op.isStopped}
@@ -343,12 +386,17 @@ func (m *Manager) Stop() StopResponse {
 	m.mu.RLock()
 	process := m.process
 	m.mu.RUnlock()
-	err := m.terminateProcess(process)
-	exited := process == nil
-	if process != nil {
-		exited, _ = process.exitStatus()
+	var err error
+	if retryCleanup {
+		err = m.retryProcessCleanup(process)
+	} else {
+		err = m.terminateProcess(process)
 	}
-	succeeded := exited
+	succeeded := process == nil
+	if process != nil {
+		outcome := process.outcome()
+		succeeded = outcome.finalized && outcome.cleanupVerified
+	}
 
 	m.mu.Lock()
 	if succeeded {
@@ -372,15 +420,16 @@ func (m *Manager) Stop() StopResponse {
 	return StopResponse{IsStopped: succeeded}
 }
 
-func (m *Manager) reserveStop() (op *stopOperation, cancelStart context.CancelFunc, waitOnly, waitForOwner bool) {
+func (m *Manager) reserveStop() (op *stopOperation, cancelStart context.CancelFunc, waitOnly, waitForOwner, retryCleanup bool) {
 	m.mu.Lock()
 	if m.state == lifecycleStopping && m.stopOp != nil {
 		op = m.stopOp
 		m.mu.Unlock()
-		return op, nil, true, false
+		return op, nil, true, false, false
 	}
 
 	op = &stopOperation{done: make(chan struct{})}
+	retryCleanup = m.state == lifecycleStopping
 	if m.state == lifecycleStarting {
 		m.generation++
 		m.state = lifecycleStopping
@@ -388,7 +437,7 @@ func (m *Manager) reserveStop() (op *stopOperation, cancelStart context.CancelFu
 		cancelStart = m.startCancel
 		m.startCancel = nil
 		m.mu.Unlock()
-		return op, cancelStart, false, true
+		return op, cancelStart, false, true, false
 	}
 
 	if !m.lifecycleMu.TryLock() {
@@ -400,14 +449,14 @@ func (m *Manager) reserveStop() (op *stopOperation, cancelStart context.CancelFu
 		cancelStart = m.startCancel
 		m.startCancel = nil
 		m.mu.Unlock()
-		return op, cancelStart, false, true
+		return op, cancelStart, false, true, retryCleanup
 	}
 
 	m.generation++
 	m.state = lifecycleStopping
 	m.stopOp = op
 	m.mu.Unlock()
-	return op, nil, false, false
+	return op, nil, false, false, retryCleanup
 }
 
 func (m *Manager) probeReadiness(ctx context.Context) bool {
@@ -432,7 +481,7 @@ func (m *Manager) waitForGRPC(parent context.Context, process *processState, tim
 	}
 
 	for {
-		if exited, err := process.exitStatus(); exited {
+		if exited, err := process.leaderUnavailable(); exited {
 			return processExitedError(err)
 		}
 		if m.probeReadiness(ctx) {
@@ -442,7 +491,7 @@ func (m *Manager) waitForGRPC(parent context.Context, process *processState, tim
 			if err := ctx.Err(); err != nil {
 				return errGRPCStartupTimeout
 			}
-			if exited, err := process.exitStatus(); exited {
+			if exited, err := process.leaderUnavailable(); exited {
 				return processExitedError(err)
 			}
 			return nil
@@ -459,9 +508,9 @@ func (m *Manager) waitForGRPC(parent context.Context, process *processState, tim
 				return err
 			}
 			return errGRPCStartupTimeout
-		case <-process.done:
+		case <-process.leaderDone:
 			timer.Stop()
-			_, err := process.exitStatus()
+			_, err := process.leaderUnavailable()
 			return processExitedError(err)
 		case <-timer.C:
 		}
@@ -572,27 +621,34 @@ func (m *Manager) startProcess(generation uint64) (*processState, error) {
 	}
 
 	process := &processState{
-		cmd:        cmd,
-		generation: generation,
-		done:       make(chan struct{}),
-		stdout:     stdout,
-		stderr:     stderr,
+		cmd:         cmd,
+		reap:        cmd.Wait,
+		generation:  generation,
+		done:        make(chan struct{}),
+		leaderDone:  make(chan struct{}),
+		monitorDone: make(chan struct{}),
+		stdout:      stdout,
+		stderr:      stderr,
 	}
 	go m.monitorProcess(process)
 	return process, nil
 }
 
 func (m *Manager) monitorProcess(process *processState) {
-	err := process.cmd.Wait()
-	_ = process.stdout.Close()
-	_ = process.stderr.Close()
-	if process.cmd.Process != nil {
-		err = errors.Join(err, cleanupOwnedProcessGroup(process.cmd.Process))
+	leader, observationErr := waitForProcessLeader(process)
+	process.markLeaderWait(leader, observationErr)
+	var cleanupErr error
+	if observationErr == nil {
+		cleanupErr = m.finalizeExitedProcess(process, m.processCleanupTimeout())
 	}
-	process.markExited(err)
-	close(process.done)
-	if err != nil {
-		log.Printf("rw-core exited (generation=%d): %v", process.generation, err)
+	close(process.monitorDone)
+
+	outcome := process.outcome()
+	if outcome.observationErr != nil {
+		log.Printf("rw-core leader observation failed (generation=%d): %v", process.generation, outcome.observationErr)
+	}
+	if cleanupErr != nil {
+		log.Printf("rw-core process-group cleanup failed (generation=%d): %v", process.generation, cleanupErr)
 	}
 
 	m.mu.Lock()
@@ -602,29 +658,146 @@ func (m *Manager) monitorProcess(process *processState) {
 	}
 	switch m.state {
 	case lifecycleRunning:
-		m.process = nil
 		m.clearRuntimeLocked()
-		m.state = lifecycleStopped
+		if outcome.finalized {
+			m.process = nil
+			m.state = lifecycleStopped
+		} else {
+			m.state = lifecycleStopping
+		}
 	case lifecycleStopping:
 		if m.stopOp == nil {
-			m.process = nil
 			m.clearRuntimeLocked()
-			m.state = lifecycleStopped
+			if outcome.finalized {
+				m.process = nil
+				m.state = lifecycleStopped
+			}
 		}
 	}
 }
 
-func (p *processState) markExited(err error) {
+func (p *processState) markLeaderWait(result processLeaderWait, observationErr error) {
 	p.mu.Lock()
-	p.exited = true
-	p.exitErr = err
+	p.leaderObserved = observationErr == nil
+	p.leaderReaped = result.reaped
+	p.leaderErr = result.leaderErr
+	p.observationErr = observationErr
 	p.mu.Unlock()
+	close(p.leaderDone)
 }
 
 func (p *processState) exitStatus() (bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.exited, p.exitErr
+	return p.finalized, p.leaderErr
+}
+
+func (p *processState) leaderUnavailable() (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.observationErr != nil {
+		return true, p.observationErr
+	}
+	return p.leaderObserved || p.finalized, p.leaderErr
+}
+
+func (p *processState) outcome() processOutcome {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return processOutcome{
+		leaderObserved:  p.leaderObserved,
+		finalized:       p.finalized,
+		cleanupVerified: p.cleanupVerified,
+		leaderErr:       p.leaderErr,
+		cleanupErr:      p.cleanupErr,
+		observationErr:  p.observationErr,
+	}
+}
+
+func (p *processState) markCleanupFailure(err error) {
+	p.mu.Lock()
+	p.cleanupErr = err
+	p.mu.Unlock()
+}
+
+func (p *processState) markFinalized(leaderErr error) {
+	p.mu.Lock()
+	p.finalized = true
+	p.cleanupVerified = true
+	p.leaderErr = leaderErr
+	p.mu.Unlock()
+}
+
+func (p *processState) signal(signal os.Signal) error {
+	p.finalizeMu.Lock()
+	defer p.finalizeMu.Unlock()
+	if outcome := p.outcome(); outcome.finalized {
+		return os.ErrProcessDone
+	}
+	return signalOwnedProcess(p.cmd.Process, signal)
+}
+
+func (p *processState) kill() error {
+	p.finalizeMu.Lock()
+	defer p.finalizeMu.Unlock()
+	if outcome := p.outcome(); outcome.finalized {
+		return os.ErrProcessDone
+	}
+	return killOwnedProcess(p.cmd.Process)
+}
+
+func (m *Manager) processCleanupTimeout() time.Duration {
+	m.mu.RLock()
+	timeout := m.killTimeout
+	m.mu.RUnlock()
+	if timeout <= 0 {
+		return defaultKillTimeout
+	}
+	return timeout
+}
+
+func (m *Manager) finalizeExitedProcess(process *processState, timeout time.Duration) error {
+	process.finalizeMu.Lock()
+	defer process.finalizeMu.Unlock()
+
+	outcome := process.outcome()
+	if outcome.finalized {
+		return nil
+	}
+	if outcome.observationErr != nil {
+		return fmt.Errorf("observe rw-core leader exit: %w", outcome.observationErr)
+	}
+	if !outcome.leaderObserved {
+		return errors.New("rw-core leader exit has not been observed")
+	}
+
+	process.mu.Lock()
+	leaderReaped := process.leaderReaped
+	process.mu.Unlock()
+	leaderErr := outcome.leaderErr
+	if !leaderReaped {
+		m.mu.RLock()
+		cleanup := m.processGroupCleanup
+		m.mu.RUnlock()
+		if cleanup == nil {
+			cleanup = cleanupOwnedProcessGroup
+		}
+		if err := cleanup(process.cmd.Process, timeout); err != nil {
+			cleanupErr := fmt.Errorf("cleanup rw-core process group: %w", err)
+			process.markCleanupFailure(cleanupErr)
+			return cleanupErr
+		}
+		leaderErr = process.reap()
+	}
+
+	_ = process.stdout.Close()
+	_ = process.stderr.Close()
+	process.markFinalized(leaderErr)
+	close(process.done)
+	if leaderErr != nil {
+		log.Printf("rw-core leader exited (generation=%d): %v", process.generation, leaderErr)
+	}
+	return nil
 }
 
 func (m *Manager) terminateProcess(process *processState) error {
@@ -647,23 +820,43 @@ func (m *Manager) terminateProcess(process *processState) error {
 	}
 
 	if process.cmd.Process != nil {
-		err := signalOwnedProcess(process.cmd.Process, os.Interrupt)
+		err := process.signal(os.Interrupt)
 		if err == nil || errors.Is(err, os.ErrProcessDone) {
-			if waitForProcess(process, interruptTimeout) {
-				return nil
+			if waitForProcessAttempt(process, interruptTimeout) {
+				return processTerminationResult(process)
 			}
 		}
-		if err := killOwnedProcess(process.cmd.Process); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := process.kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return fmt.Errorf("kill rw-core: %w", err)
 		}
 	}
-	if waitForProcess(process, killTimeout) {
-		return nil
+	if waitForProcessAttempt(process, killTimeout) {
+		return processTerminationResult(process)
+	}
+	if err := processTerminationFailure(process); err != nil {
+		return err
 	}
 	return errors.New("timed out stopping rw-core process")
 }
 
-func waitForProcess(process *processState, timeout time.Duration) bool {
+func (m *Manager) retryProcessCleanup(process *processState) error {
+	if process == nil {
+		return nil
+	}
+	outcome := process.outcome()
+	if outcome.finalized {
+		return nil
+	}
+	if outcome.observationErr != nil {
+		return fmt.Errorf("observe rw-core leader exit: %w", outcome.observationErr)
+	}
+	if outcome.leaderObserved && outcome.cleanupErr != nil {
+		return m.finalizeExitedProcess(process, m.processCleanupTimeout())
+	}
+	return m.terminateProcess(process)
+}
+
+func waitForProcessAttempt(process *processState, timeout time.Duration) bool {
 	if exited, _ := process.exitStatus(); exited {
 		return true
 	}
@@ -672,9 +865,33 @@ func waitForProcess(process *processState, timeout time.Duration) bool {
 	select {
 	case <-process.done:
 		return true
+	case <-process.monitorDone:
+		return true
 	case <-timer.C:
 		return false
 	}
+}
+
+func processTerminationResult(process *processState) error {
+	outcome := process.outcome()
+	if outcome.finalized {
+		return nil
+	}
+	if err := processTerminationFailure(process); err != nil {
+		return err
+	}
+	return errors.New("rw-core process termination did not finalize")
+}
+
+func processTerminationFailure(process *processState) error {
+	outcome := process.outcome()
+	if outcome.observationErr != nil {
+		return fmt.Errorf("observe rw-core leader exit: %w", outcome.observationErr)
+	}
+	if outcome.cleanupErr != nil {
+		return outcome.cleanupErr
+	}
+	return nil
 }
 
 func processExitHint(process *processState) string {

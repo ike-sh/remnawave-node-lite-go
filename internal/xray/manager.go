@@ -64,16 +64,17 @@ type Manager struct {
 	inboundHashes     map[string]*HashedSet
 	inboundTags       map[string]struct{}
 
-	readinessProbe    func(context.Context) bool
-	readinessInterval time.Duration
-	startupTimeout    time.Duration
-	interruptTimeout  time.Duration
-	killTimeout       time.Duration
-	processCommand    func() *exec.Cmd
-	processWaitDelay  time.Duration
-	versionProbe      func(context.Context) (string, error)
-	versionProbeBusy  bool
-	nextVersionProbe  time.Time
+	readinessProbe      func(context.Context) bool
+	readinessInterval   time.Duration
+	startupTimeout      time.Duration
+	interruptTimeout    time.Duration
+	killTimeout         time.Duration
+	processCommand      func() *exec.Cmd
+	processGroupCleanup func(*os.Process, time.Duration) error
+	processWaitDelay    time.Duration
+	versionProbe        func(context.Context) (string, error)
+	versionProbeBusy    bool
+	nextVersionProbe    time.Time
 
 	versionProbeContext      context.Context
 	versionProbeCancel       context.CancelFunc
@@ -152,6 +153,7 @@ func NewManager(opts Options) (*Manager, error) {
 		interruptTimeout:         defaultInterruptTimeout,
 		killTimeout:              defaultKillTimeout,
 		processWaitDelay:         defaultProcessWaitDelay,
+		processGroupCleanup:      cleanupOwnedProcessGroup,
 		versionProbeContext:      versionProbeContext,
 		versionProbeCancel:       versionProbeCancel,
 		versionProbeShutdownDone: make(chan struct{}),

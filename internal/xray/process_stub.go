@@ -5,6 +5,7 @@ package xray
 import (
 	"os"
 	"os/exec"
+	"time"
 )
 
 func configureProcessOwnership(_ *exec.Cmd) {}
@@ -23,4 +24,8 @@ func killOwnedProcess(process *os.Process) error {
 	return process.Kill()
 }
 
-func cleanupOwnedProcessGroup(*os.Process) error { return nil }
+func waitForProcessLeader(process *processState) (processLeaderWait, error) {
+	return processLeaderWait{reaped: true, leaderErr: process.reap()}, nil
+}
+
+func cleanupOwnedProcessGroup(*os.Process, time.Duration) error { return nil }
