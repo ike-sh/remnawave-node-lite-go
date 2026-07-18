@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/net/netutil"
@@ -30,8 +29,7 @@ import (
 type Server struct {
 	httpServer     *http.Server
 	maxConnections int
-	xrayGateOnce   sync.Once
-	xrayGate       chan struct{}
+	xrayGate       xrayLifecycleGate
 	manager        xrayController
 	statsService   *stats.Service
 	handlerService *nodehandler.Service
@@ -44,6 +42,7 @@ const (
 	lowMemoryConnections  = 16
 	lowMemoryHandlers     = 4
 	maxBulkHandlers       = 1
+	maxXrayStartHandlers  = 2
 	maxRequestDuration    = 5 * time.Minute
 )
 
@@ -77,10 +76,7 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 	}
 
 	maxConnections, maxHandlers := serverCapacity(cfg.LowMemory)
-	nodeRoutes := withNodeRequestBodyLimit(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes))))
-	limited := limitActiveHandlers(maxHandlers, nodeRoutes)
-	bulkLimited := limitBulkNodeRoutes(maxBulkHandlers, limited)
-	protected := requireJWT(validator, requireKnownNodeRoute(withRequestTimeout(maxRequestDuration, bulkLimited)))
+	protected := requireJWT(validator, requireKnownNodeRoute(withRequestTimeout(maxRequestDuration, server.nodeRequestHandler(maxHandlers))))
 
 	server.maxConnections = maxConnections
 	server.httpServer = &http.Server{
@@ -97,6 +93,13 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 	}
 
 	return server, nil
+}
+
+func (s *Server) nodeRequestHandler(maxHandlers int) http.Handler {
+	nodeRoutes := withNodeRequestBodyLimit(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(s.handleNodeRoutes))))
+	limited := limitActiveHandlers(maxHandlers, nodeRoutes)
+	startLimited := limitXrayStartRoutes(maxXrayStartHandlers, limited)
+	return limitBulkNodeRoutes(maxBulkHandlers, startLimited)
 }
 
 func requireJWT(validator *auth.JWTValidator, next http.Handler) http.Handler {
@@ -191,13 +194,21 @@ func limitActiveHandlers(maxActive int, next http.Handler) http.Handler {
 }
 
 func limitBulkNodeRoutes(maxActive int, next http.Handler) http.Handler {
+	return limitSelectedNodeRoutes(maxActive, nodeRouteUsesBulkHandlerSlot, next)
+}
+
+func limitXrayStartRoutes(maxActive int, next http.Handler) http.Handler {
+	return limitSelectedNodeRoutes(maxActive, func(route nodeRouteID) bool { return route == routeXrayStart }, next)
+}
+
+func limitSelectedNodeRoutes(maxActive int, usesSlot func(nodeRouteID) bool, next http.Handler) http.Handler {
 	if maxActive <= 0 {
 		maxActive = 1
 	}
 	slots := make(chan struct{}, maxActive)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		route, known := lookupNodeRoute(r.Method, r.URL.Path)
-		if !known || !nodeRouteHasBulkRequestBody(route) {
+		if !known || !usesSlot(route) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -289,21 +300,19 @@ func withRequestTimeout(timeout time.Duration, next http.Handler) http.Handler {
 }
 
 func (s *Server) acquireXrayLifecycle(ctx context.Context) bool {
-	s.xrayGateOnce.Do(func() { s.xrayGate = make(chan struct{}, 1) })
-	select {
-	case s.xrayGate <- struct{}{}:
-		if ctx.Err() != nil {
-			s.releaseXrayLifecycle()
-			return false
-		}
-		return true
-	case <-ctx.Done():
-		return false
-	}
+	return s.xrayGate.acquireExclusive(ctx)
 }
 
 func (s *Server) releaseXrayLifecycle() {
-	<-s.xrayGate
+	s.xrayGate.releaseExclusive()
+}
+
+func (s *Server) acquireXrayStart(ctx context.Context) bool {
+	return s.xrayGate.acquireStart(ctx)
+}
+
+func (s *Server) releaseXrayStart() {
+	s.xrayGate.releaseStart()
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {

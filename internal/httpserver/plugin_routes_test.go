@@ -361,6 +361,74 @@ func TestPluginLifecycleOperationsSerializeWithXrayLifecycle(t *testing.T) {
 	}
 }
 
+func TestPluginLifecycleOperationsWaitUntilXrayStartFinishes(t *testing.T) {
+	t.Parallel()
+
+	for _, pluginPath := range []string{
+		"/node/plugin/sync",
+		"/node/plugin/nftables/recreate-tables",
+	} {
+		pluginPath := pluginPath
+		t.Run(pluginPath, func(t *testing.T) {
+			t.Parallel()
+
+			events := []string{}
+			startEntered := make(chan struct{})
+			releaseStart := make(chan struct{})
+			var releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(releaseStart) }) })
+			manager := &recordingXrayController{
+				events:     &events,
+				startEvent: startEntered,
+				startWait:  releaseStart,
+			}
+			plugins := &recordingPluginController{events: &events}
+			server := &Server{manager: manager, pluginService: plugins}
+
+			startRoute, _ := contractspec.FindRouteByPath("/node/xray/start")
+			startResult := serveNodeRouteAsync(server, newJSONRequest(
+				startRoute.Method,
+				startRoute.Path,
+				bytes.NewReader(startRoute.ValidRequest),
+			))
+			awaitTestSignal(t, startEntered, "Xray start")
+
+			waitCtx, cancelWait := context.WithCancel(context.Background())
+			defer cancelWait()
+			observed := make(chan struct{})
+			pluginRoute, _ := contractspec.FindRouteByPath(pluginPath)
+			pluginRequest := newJSONRequest(
+				pluginRoute.Method,
+				pluginRoute.Path,
+				bytes.NewReader(pluginRoute.ValidRequest),
+			).WithContext(&observedDoneContext{Context: waitCtx, observed: observed})
+			pluginResult := serveNodeRouteAsync(server, pluginRequest)
+			awaitTestSignal(t, observed, pluginPath+" lifecycle wait")
+			if plugins.calls.Load() != 0 {
+				t.Fatalf("plugin controller ran %d times during Xray start", plugins.calls.Load())
+			}
+
+			releaseOnce.Do(func() { close(releaseStart) })
+			for name, result := range map[string]<-chan asyncRouteResult{
+				"Xray start":       startResult,
+				"plugin operation": pluginResult,
+			} {
+				value := awaitRouteResult(t, result, name)
+				if value.panicValue != nil || value.response.Code != http.StatusOK {
+					t.Fatalf("%s result: panic=%v status=%d body=%s", name, value.panicValue, value.response.Code, value.response.Body.String())
+				}
+			}
+			wantPluginEvent := "sync-plugin"
+			if pluginPath == "/node/plugin/nftables/recreate-tables" {
+				wantPluginEvent = "recreate-tables"
+			}
+			if got, want := strings.Join(events, ","), "start-xray,"+wantPluginEvent; got != want {
+				t.Fatalf("lifecycle events = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestLifecycleGateCancellationDoesNotReachWaitingController(t *testing.T) {
 	t.Parallel()
 

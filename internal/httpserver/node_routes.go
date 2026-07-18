@@ -193,6 +193,10 @@ func nodeRouteHasBulkRequestBody(route nodeRouteID) bool {
 	return nodeRouteRequestBodyClass(route) == nodeRequestBodyBulk
 }
 
+func nodeRouteUsesBulkHandlerSlot(route nodeRouteID) bool {
+	return route != routeXrayStart && nodeRouteHasBulkRequestBody(route)
+}
+
 func nodeRouteIsReadOnly(route nodeRouteID) bool {
 	switch route {
 	case routeXrayHealthcheck,

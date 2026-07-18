@@ -31,10 +31,10 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		},
 		XrayConfig: *request.XrayConfig,
 	}
-	if !s.acquireXrayLifecycle(r.Context()) {
+	if !s.acquireXrayStart(r.Context()) {
 		handleRequestWaitFailure(w, r)
 		return
 	}
-	defer s.releaseXrayLifecycle()
+	defer s.releaseXrayStart()
 	writeNodeResponse(w, s.manager.Start(r.Context(), command))
 }

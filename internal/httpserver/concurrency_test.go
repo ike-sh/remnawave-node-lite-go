@@ -73,11 +73,9 @@ func awaitRouteResult(t *testing.T, result <-chan asyncRouteResult, name string)
 
 func assertLifecycleGateHeld(t *testing.T, server *Server, name string) {
 	t.Helper()
-	if server.xrayGate == nil {
-		t.Fatalf("%s lifecycle gate is nil", name)
-	}
-	if capacity, held := cap(server.xrayGate), len(server.xrayGate); capacity != 1 || held != 1 {
-		t.Fatalf("%s lifecycle gate state = %d/%d, want 1/1", name, held, capacity)
+	mode, activeStarts, _ := server.xrayGate.snapshot()
+	if mode != xrayLifecycleExclusive || activeStarts != 0 {
+		t.Fatalf("%s lifecycle gate state = mode %d, starts %d; want exclusive", name, mode, activeStarts)
 	}
 }
 
@@ -149,7 +147,7 @@ func TestBulkRouteLimiterWaitsBeforeReadingBody(t *testing.T) {
 	go func() {
 		handler.ServeHTTP(
 			httptest.NewRecorder(),
-			httptest.NewRequest(http.MethodPost, "/node/xray/start", nil),
+			httptest.NewRequest(http.MethodPost, "/node/handler/add-users", nil),
 		)
 		close(firstDone)
 	}()
@@ -176,6 +174,55 @@ func TestBulkRouteLimiterWaitsBeforeReadingBody(t *testing.T) {
 	awaitTestSignal(t, signalForCall(entered, 2), "second heavy route")
 	awaitTestSignal(t, secondDone, "second heavy route completion")
 	awaitTestSignal(t, firstDone, "first heavy route completion")
+}
+
+func TestXrayStartLimiterAllowsTwoAndBoundsAdditionalRequests(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	handler := limitXrayStartRoutes(2, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		entered <- struct{}{}
+		<-release
+	}))
+
+	completed := make(chan struct{}, 3)
+	for range 2 {
+		go func() {
+			handler.ServeHTTP(
+				httptest.NewRecorder(),
+				httptest.NewRequest(http.MethodPost, "/node/xray/start", nil),
+			)
+			completed <- struct{}{}
+		}()
+	}
+	awaitTestSignal(t, entered, "first Xray start handler")
+	awaitTestSignal(t, entered, "second Xray start handler")
+
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	defer cancelWait()
+	observed := make(chan struct{})
+	thirdRequest := httptest.NewRequest(http.MethodPost, "/node/xray/start", nil).WithContext(
+		&observedDoneContext{Context: waitCtx, observed: observed},
+	)
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), thirdRequest)
+		completed <- struct{}{}
+	}()
+	awaitTestSignal(t, observed, "third Xray start admission wait")
+	select {
+	case <-entered:
+		t.Fatal("third Xray start entered while both start slots were occupied")
+	default:
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	awaitTestSignal(t, entered, "third Xray start handler")
+	for range 3 {
+		awaitTestSignal(t, completed, "Xray start handler completion")
+	}
 }
 
 func TestActiveHandlerLimitReservesCapacityForMutations(t *testing.T) {
@@ -351,7 +398,7 @@ func TestAdmissionDeadlinesReturnRetryableServiceUnavailable(t *testing.T) {
 			build: func(next http.Handler) http.Handler {
 				return limitBulkNodeRoutes(1, next)
 			},
-			occupyingPath: "/node/xray/start",
+			occupyingPath: "/node/handler/add-users",
 			waitingPath:   "/node/plugin/sync",
 		},
 	}
