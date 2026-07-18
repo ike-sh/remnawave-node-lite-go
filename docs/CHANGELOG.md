@@ -19,6 +19,7 @@
 
 ### 安全
 
+- JWT header 与 claims 必须各自只包含一个完整 JSON 值；签名有效但附带第二个 JSON 值的畸形 token 不再被接受。
 - 外部传输最低版本收敛为 TLS 1.3，并禁用 HTTP/2；无效 JWT、未知路由和错误 method 与官方一致地直接销毁连接。
 - systemd/OpenRC 改用专用 `remnanode` 用户，只保留 `CAP_NET_ADMIN` 与 `CAP_NET_BIND_SERVICE`；systemd 同时启用 capability bounding、sandbox、448 MiB/no-swap/1 CPU/256 tasks 限额。
 - Release archive、rw-core、自定义 core 与 ASN 资产均在写盘前校验 SHA-256、结构和版本；固定 rw-core 摘要不可覆盖，GitHub Actions 固定到完整 commit SHA。

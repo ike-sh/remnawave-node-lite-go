@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -181,9 +183,19 @@ func decodeJWTJSON(segment string, target any) error {
 	if err != nil {
 		return err
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	return decoder.Decode(target)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }
 
 func parseRSAPublicKey(publicKeyPEM string) (*rsa.PublicKey, error) {

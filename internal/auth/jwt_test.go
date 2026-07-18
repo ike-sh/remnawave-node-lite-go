@@ -131,6 +131,43 @@ func TestJWTValidatorRejectsExpired(t *testing.T) {
 	}
 }
 
+func TestJWTValidatorRejectsTrailingJSON(t *testing.T) {
+	key, publicPEM := testJWTKeyPair(t)
+	validator, err := NewJWTValidator(publicPEM)
+	if err != nil {
+		t.Fatalf("NewJWTValidator: %v", err)
+	}
+	validator.now = func() time.Time { return time.Unix(1000, 0) }
+
+	tests := []struct {
+		name      string
+		header    string
+		claims    string
+		wantError string
+	}{
+		{
+			name:      "header",
+			header:    `{"alg":"RS256"} {}`,
+			claims:    `{"exp":2000}`,
+			wantError: "decode JWT header: multiple JSON values",
+		},
+		{
+			name:      "claims",
+			header:    `{"alg":"RS256"}`,
+			claims:    `{"exp":2000} []`,
+			wantError: "decode JWT claims: multiple JSON values",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			token := signedRawJWT(t, key, test.header, test.claims)
+			if err := validator.Validate(token); err == nil || err.Error() != test.wantError {
+				t.Fatalf("Validate error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
 func signedJWT(t *testing.T, key *rsa.PrivateKey, header, claims map[string]any) string {
 	t.Helper()
 
@@ -143,8 +180,14 @@ func signedJWT(t *testing.T, key *rsa.PrivateKey, header, claims map[string]any)
 		t.Fatalf("marshal claims: %v", err)
 	}
 
-	encodedHeader := base64.RawURLEncoding.EncodeToString(headerJSON)
-	encodedClaims := base64.RawURLEncoding.EncodeToString(claimsJSON)
+	return signedRawJWT(t, key, string(headerJSON), string(claimsJSON))
+}
+
+func signedRawJWT(t *testing.T, key *rsa.PrivateKey, headerJSON, claimsJSON string) string {
+	t.Helper()
+
+	encodedHeader := base64.RawURLEncoding.EncodeToString([]byte(headerJSON))
+	encodedClaims := base64.RawURLEncoding.EncodeToString([]byte(claimsJSON))
 	signed := encodedHeader + "." + encodedClaims
 	sum := sha256.Sum256([]byte(signed))
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
