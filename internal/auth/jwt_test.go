@@ -36,8 +36,19 @@ func TestJWTValidator(t *testing.T) {
 	validator.now = func() time.Time { return time.Unix(1000, 0) }
 
 	token := signedJWT(t, key, map[string]any{"alg": "RS256", "typ": "JWT"}, map[string]any{"exp": 2000})
-	if err := validator.ValidateBearer("Bearer " + token); err != nil {
-		t.Fatalf("ValidateBearer returned error: %v", err)
+	for _, header := range []string{
+		"Bearer " + token,
+		"bearer " + token,
+		"BEARER\t" + token,
+	} {
+		if err := validator.ValidateBearer(header); err != nil {
+			t.Errorf("ValidateBearer(%q) returned error: %v", header[:6], err)
+		}
+	}
+	for _, header := range []string{"", "Basic " + token, "Bearer", "Bearer " + token + " trailing"} {
+		if err := validator.ValidateBearer(header); err == nil {
+			t.Errorf("ValidateBearer(%q) accepted malformed authorization header", header)
+		}
 	}
 }
 

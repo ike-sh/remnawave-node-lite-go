@@ -48,11 +48,11 @@ func NewJWTValidatorWithClaims(publicKeyPEM string, claims ClaimExpectations) (*
 }
 
 func (v *JWTValidator) ValidateBearer(header string) error {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
+	parts := strings.Fields(header)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return errors.New("missing bearer token")
 	}
-	return v.Validate(strings.TrimSpace(strings.TrimPrefix(header, prefix)))
+	return v.Validate(parts[1])
 }
 
 func (v *JWTValidator) Validate(token string) error {
