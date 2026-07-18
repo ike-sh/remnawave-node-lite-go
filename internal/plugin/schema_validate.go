@@ -96,7 +96,6 @@ func validateSharedLists(raw any) error {
 		return err
 	}
 	totalItems := 0
-	names := make(map[string]struct{}, len(lists))
 	for i, entry := range lists {
 		obj, ok := entry.(map[string]any)
 		if !ok {
@@ -109,10 +108,6 @@ func validateSharedLists(raw any) error {
 		if !strings.HasPrefix(name, "ext:") {
 			return fmt.Errorf("sharedLists[%d].name must start with ext:", i)
 		}
-		if _, duplicate := names[name]; duplicate {
-			return fmt.Errorf("sharedLists[%d].name duplicates %s", i, quotedForError(name))
-		}
-		names[name] = struct{}{}
 		items, ok := obj["items"].([]any)
 		if !ok {
 			return fmt.Errorf("sharedLists[%d].items must be an array", i)
@@ -149,8 +144,8 @@ func validateTorrentBlockerSection(raw any) error {
 		return fmt.Errorf("torrentBlocker.enabled is required and must be a boolean")
 	}
 	duration, durationOK := numberValue(section["blockDuration"])
-	if !durationOK || math.Trunc(duration) != duration || duration < 0 || duration > maxTorrentBlockDurationSec {
-		return fmt.Errorf("torrentBlocker.blockDuration must be an integer between 0 and %d seconds", maxTorrentBlockDurationSec)
+	if !durationOK || math.Trunc(duration) != duration || duration < 0 {
+		return fmt.Errorf("torrentBlocker.blockDuration must be a non-negative integer")
 	}
 	ignoreRaw, ok := section["ignoreLists"]
 	if !ok {

@@ -65,6 +65,24 @@ func TestBuildSharedIPMapResolvesASList(t *testing.T) {
 	}
 }
 
+func TestBuildSharedIPMapDuplicateNameUsesLastList(t *testing.T) {
+	t.Parallel()
+	cfg := map[string]any{
+		"sharedLists": []any{
+			map[string]any{"name": "ext:duplicate", "type": "asList", "items": []any{float64(13335)}},
+			map[string]any{"name": "ext:duplicate", "type": "ipList", "items": []any{"9.9.9.9"}},
+		},
+	}
+	shared, err := buildSharedIPMapWithDiagnosticsContext(context.Background(), cfg, stubASNResolver{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := shared["ext:duplicate"]; !reflect.DeepEqual(got, []string{"9.9.9.9"}) {
+		t.Errorf("ext:duplicate = %v, want the last list's items", got)
+	}
+}
+
 func TestBuildSharedIPMapASListWithoutResolver(t *testing.T) {
 	t.Parallel()
 	cfg := map[string]any{

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 )
@@ -35,15 +36,29 @@ func TestValidatePluginConfigAcceptsMinimalConfig(t *testing.T) {
 	}
 }
 
-func TestValidatePluginConfigAcceptsBoundedDurationAndExtEdges(t *testing.T) {
+func TestValidatePluginConfigAcceptsNonNegativeIntegerDurationAndExtEdges(t *testing.T) {
 	t.Parallel()
 
-	for _, duration := range []any{float64(0), float64(1), float64(maxTorrentBlockDurationSec)} {
+	for _, duration := range []any{
+		float64(0),
+		float64(1),
+		float64(maxTorrentBlockDurationSec + 1),
+		float64(1 << 53),
+		float64(1e20),
+	} {
 		cfg := validTorrentBlocker(true)
 		cfg["blockDuration"] = duration
 		cfg["ignoreLists"] = map[string]any{"ip": []any{"ext:"}}
 		if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err != nil {
 			t.Errorf("blockDuration=%v rejected: %v", duration, err)
+		}
+		request := mustSyncPlugin(t, map[string]any{
+			"uuid":   "00000000-0000-4000-8000-000000000001",
+			"name":   "duration-test",
+			"config": map[string]any{"torrentBlocker": cfg},
+		})
+		if _, err := buildPluginPlan(request, nil, true); err != nil {
+			t.Errorf("sync plan with blockDuration=%v rejected: %v", duration, err)
 		}
 	}
 }
@@ -51,12 +66,41 @@ func TestValidatePluginConfigAcceptsBoundedDurationAndExtEdges(t *testing.T) {
 func TestValidatePluginConfigRejectsUnsafeBlockDuration(t *testing.T) {
 	t.Parallel()
 
-	for _, duration := range []any{float64(-1), float64(maxTorrentBlockDurationSec + 1), float64(1e100)} {
+	for _, duration := range []any{float64(-1), math.Inf(1), math.NaN()} {
 		cfg := validTorrentBlocker(true)
 		cfg["blockDuration"] = duration
 		if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err == nil {
 			t.Errorf("blockDuration=%v was accepted", duration)
 		}
+	}
+}
+
+func TestValidatePluginConfigAcceptsDuplicateSharedListNames(t *testing.T) {
+	t.Parallel()
+
+	lists := []any{
+		map[string]any{"name": "ext:duplicate", "type": "ipList", "items": []any{"192.0.2.1"}},
+		map[string]any{"name": "ext:duplicate", "type": "ipList", "items": []any{"198.51.100.1"}},
+	}
+	if err := ValidatePluginConfig(map[string]any{"sharedLists": lists}); err != nil {
+		t.Fatalf("duplicate shared list names should be accepted: %v", err)
+	}
+}
+
+func TestValidatePluginConfigDuplicateSharedListsStillCountTowardItemBudget(t *testing.T) {
+	t.Parallel()
+
+	items := make([]any, maxSharedListItems)
+	for i := range items {
+		items[i] = "192.0.2.1"
+	}
+	lists := []any{
+		map[string]any{"name": "ext:duplicate", "type": "ipList", "items": items},
+		map[string]any{"name": "ext:duplicate", "type": "ipList", "items": items},
+		map[string]any{"name": "ext:duplicate", "type": "ipList", "items": []any{"198.51.100.1"}},
+	}
+	if err := ValidatePluginConfig(map[string]any{"sharedLists": lists}); err == nil {
+		t.Fatal("duplicate shared lists bypassed the total item budget")
 	}
 }
 
