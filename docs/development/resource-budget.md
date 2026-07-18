@@ -83,7 +83,7 @@ OpenRC 另外由 supervisor 写入 `openrc.log` 与 `openrc.err.log`。它们每
 - Debian 与 Alpine 安装器在 `MemTotal <= 512 MiB` 时自动写入 `LOW_MEMORY=1`。
 - OpenRC 校验 cgroup v2 的 `448 MiB` memory、零 swap、1 CPU、256 PID 以及启动 shell 的实际 cgroup 成员关系；controller 缺失或写入未生效时拒绝启动。停止后不依赖 OpenRC 0.62.6 的路径清理，而是将 `stop_post` 自身迁出、通过 `cgroup.kill` 清理精确 service cgroup、最多等待 5 秒确认 `populated=0` 后删除该目录。
 
-当前上述 OpenRC 清理保证只覆盖 init 实际执行 `stop_post` 的显式停止路径。installer 共享锁已经消除并发写入，但事务尚未具备 SIGKILL/掉电后的持久 phase journal 与开机恢复；supervise-daemon 自身异常退出后的残留 cgroup 恢复同样未完成。这两项仍是 M8 发布阻断，不得用本节的正常路径测试替代。
+当前上述 OpenRC 清理保证只覆盖 init 实际执行 `stop_post` 的显式停止路径。installer 共享锁已经消除并发写入，但事务尚未具备 SIGKILL/掉电后的持久 phase journal 与开机恢复；supervise-daemon 自身异常退出后的残留 cgroup 恢复同样未完成。这两项已后置为发布阶段的韧性条件，不阻塞当前官方代码对齐；进入正式发布验收时仍必须关闭，不得用本节的正常路径测试替代。
 
 任何修改请求解码、Xray 配置生命周期、RPC 消息、报告队列或依赖图的提交，都应重新执行此门禁并比较阶段峰值。
 

@@ -48,15 +48,15 @@ Go manager 使用单一显式状态，而不是多个可形成非法组合的布
 | `starting` | stop | `stopping` | generation 失效并取消 start，由 stop 接管进程 |
 | `running` | stop 或自然退出 | `stopping` / `stopped` | 回收进程并清理配置与 hash 状态 |
 
-生命周期修改由独占 operation mutex 串行化，状态发布与所有权交接在 manager mutex 下完成。每个 start 使用单调 generation，旧操作不能覆盖新 stop；并发 start 返回官方兼容的 `Request already in progress`。所有成功 spawn 的子进程都由唯一 `Wait` goroutine 回收。Linux 将 rw-core 启动在独立 process group 中并设置 parent-death signal；正常 stop 的 SIGINT、超时后的 SIGKILL 以及组长自然退出后的兜底清理都作用于整个进程组。parent-death signal 只直接保护组长，Node 硬崩时后代进程的最终清理仍依赖 systemd cgroup/OpenRC supervisor，M8 必须在两种发行环境用 wrapper + child 实测，不能把该信号表述为对所有后代的单独保证。
+Manager 内部的生命周期修改由 operation mutex 保护，状态发布与所有权交接在 manager mutex 下完成。HTTP coordinator 为 start 提供共享 lease，并用独立的两个 handler 槽限制同时保留的配置；因此第二个并发 start 可以进入 Manager 并立即得到官方兼容的 `Request already in progress`。stop、plugin sync/recreate 使用独占 lease，等待中的独占操作阻止后续 start 插队。每个已接受的 start 使用单调 generation，旧操作不能覆盖新 stop；所有成功 spawn 的子进程都由唯一 `Wait` goroutine 回收。Linux 将 rw-core 启动在独立 process group 中并设置 parent-death signal；正常 stop 的 SIGINT、超时后的 SIGKILL 以及组长自然退出后的兜底清理都作用于整个进程组。parent-death signal 只直接保护组长，Node 硬崩时后代进程的最终清理仍依赖 systemd cgroup/OpenRC supervisor，后续发布阶段必须在两种发行环境用 wrapper + child 实测，不能把该信号表述为对所有后代的单独保证。
 
-进程级测试覆盖 pending 到 active 的提交边界、并发 start、start 与 stop 交错、context cancel、启动超时、就绪前后退出、自然退出、并发/重复 stop、SIGINT 与 SIGKILL 升级。Linux 测试额外固定独立进程组、整组信号与后代清理。路由测试固定 Panel stop 的 `Stop -> ResetPlugins` 顺序，并验证 Stop 失败时保留插件快照和 nft 规则。
+进程级测试覆盖 pending 到 active 的提交边界、并发 start、start 与 stop 交错、context cancel、启动超时、就绪前后退出、自然退出、并发/重复 stop、SIGINT 与 SIGKILL 升级。Linux 测试额外固定独立进程组、整组信号与后代清理。路由测试覆盖 start 共享进入、stop/plugin 独占等待、等待取消、Panel stop 的 `Stop -> ResetPlugins` 顺序，以及 Stop 失败时保留插件快照和 nft 规则。
 
 ## Go 插件与 nftables 实现
 
-M4 以官方 `plugin.service.ts`、`nft.service.ts`、`plugin-state.service.ts`、torrent blocker state/webhook handler，以及 `@remnawave/node-plugins@0.4.5` 为行为依据。每次变更先从已校验配置构建不可变 plan，一次完成 shared list/ASN 展开、connection-drop whitelist、torrent effective state 和 firewall plan；随后严格执行 `firewall apply -> Xray reconcile -> state commit`。firewall 或 Xray 失败时不发布新状态，并尽力重放上一份 firewall plan，使同一 Panel 请求可以安全重试。
+M4 以官方 `plugin.service.ts`、`nft.service.ts`、`plugin-state.service.ts`、torrent blocker state/webhook handler，以及 `@remnawave/node-plugins@0.4.5` 为行为依据。每次变更先从已校验配置构建不可变 plan，一次完成 shared list/ASN 展开、connection-drop whitelist、torrent effective state 和 firewall plan。启用或更新时先应用 firewall 再协调 Xray；关闭、清理和破坏性 recreate 则先协调 Xray，再重置 firewall；两侧成功后才提交 snapshot。失败不发布不匹配的新状态，并在可回滚路径重放上一份 firewall plan，使同一 Panel 请求可以安全重试。
 
-Initialize、sync、reset、block、unblock 与 recreate 通过容量为 1、支持 context 取消的 operation gate 串行化。HTTP 应用层还使用同一个 Xray lifecycle gate 串行化 `plugin sync/recreate` 与 `xray start/stop`，固定锁序为 `Xray lifecycle gate -> Plugin operation gate -> Manager`，防止 core 启动读取配置期间插件快照变化；未来新增绕过 HTTP 的内部入口时也必须复用该协调器。webhook 接收不直接等待 operation gate，而是在内部请求的 30 秒 deadline 内等待最多 64 条的有界队列容量，再由单 worker 获取同一 gate 后执行 nft/report 副作用；容量未恢复、请求取消或服务关闭时返回 `503 + Retry-After`，不会把未接纳事件伪报为成功。collect 只在 State 锁下原子 drain 报告。nftables 初始化与 Go 对象构造分离；缺少 `CAP_NET_ADMIN` 或 nft 初始化失败时仍接受合法插件配置，但 ingress/egress/torrent 保持不可用，torrent 状态不会错误注入 Xray。reset 只替换插件快照，不丢弃 Panel 尚未 collect 的 torrent reports；recreate 重放当前已提交过滤计划，而不是错误地创建空表。
+Initialize、sync、reset、block、unblock 与 recreate 通过容量为 1、支持 context 取消的 operation gate 串行化。HTTP 应用层使用 shared-start/exclusive-mutation lifecycle coordinator，固定锁序为 `Xray lifecycle lease -> Plugin operation gate -> Manager`，防止 core 启动读取配置期间插件快照变化；未来新增绕过 HTTP 的内部入口时也必须复用该协调器。无 `includeRuleTags` 的 torrent blocker 关闭会热删除 `RW_TB_OUTBOUND_BLOCK`，不停止在线 core；健康态 `recreate-tables` 只重建 nftables，只有从 degraded firewall 恢复并使 torrent blocker 重新生效时才停止 core。webhook 接收不直接等待 operation gate，而是在内部请求的 30 秒 deadline 内等待最多 64 条的有界队列容量，再由单 worker 获取同一 gate 后执行 nft/report 副作用；容量未恢复、请求取消或服务关闭时返回 `503 + Retry-After`，不会把未接纳事件伪报为成功。collect 只在 State 锁下原子 drain 报告。nftables 初始化与 Go 对象构造分离；缺少 `CAP_NET_ADMIN` 或 nft 初始化失败时仍接受合法插件配置，但 ingress/egress/torrent 保持不可用，torrent 状态不会错误注入 Xray。reset 只替换插件快照，不丢弃 Panel 尚未 collect 的 torrent reports；recreate 重放当前已提交过滤计划，而不是错误地创建空表。
 
 Close 先设置不可逆的 mutation admission fence 并停止 webhook worker；此前已经接纳的 mutation 可以完成，新 mutation 一律拒绝。等待 gate、删除 nft 表和 join worker 共享调用方 deadline，并由服务再限制为最多 15 秒；清理失败保留已提交快照，只允许后续 Close 重试，不会重新开放业务操作。
 
@@ -135,7 +135,9 @@ systemd 与 OpenRC 均使用专用 `remnanode:remnanode` 账号，配置为 `roo
 
 ## 当前已知偏差
 
-M7 已关闭此前记录的 TLS/socket 与系统供应链偏差。当前没有已知的静态 `/node` 契约偏差；M8 仍需以真实 Panel 2.8.1 完成发行候选的端到端差分和故障恢复验收。裸机 systemd/OpenRC 部署替代官方 Docker 运行模型属于本项目明确的运维边界，不扩展 `/node` API。
+M7 已关闭此前记录的 TLS/socket 与系统供应链偏差。当前没有已知的静态 `/node` 契约 P1/P2；M8 仍需以真实 Panel 2.8.1 完成发行候选的端到端差分和故障恢复验收。裸机 systemd/OpenRC 部署替代官方 Docker 运行模型属于本项目明确的运维边界，不扩展 `/node` API。
+
+运行期 `dump-config` 是已接受的后置差异：Manager 只在 rw-core 启动期间保留完整规范配置，ready 后释放该副本并让 `CurrentConfigJSON` 返回 `{}`。这是面向 512 MiB 节点的内存取舍，不影响 `/node` 或 rw-core 启动契约；后续如恢复该诊断能力，必须采用有界方案，不能常驻第二份大配置。
 
 ## 本地验证
 

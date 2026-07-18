@@ -47,6 +47,15 @@
 
 M6/M7 的资源与发行环境数据是对应 checkpoint 的历史工程基线，不是当前 M8 候选的发布证据；冻结候选 `C` 后必须按验收协议重新执行。
 
+当前批次先集中关闭官方 `2.8.0` 静态行为差异、明确 Go bug 和代码级 512 MiB 约束，
+全部修改完成后统一回归。以下事项已记录但后置到发布或专项增强阶段，不阻塞当前代码收口：
+
+- release evidence、tag、Release 资料、真实 Panel/systemd/OpenRC 和长期 soak；
+- installer 持久 phase journal、SIGKILL/掉电后的启动恢复；
+- OpenRC `supervise-daemon` 异常退出后的残留 cgroup 与后代恢复；
+- active config 常驻副本与运行期 `dump-config` 的内存取舍；
+- P3 测试补强：`runNode` 顶层失败收敛、Unix server 活动 handler 取消，以及更完整的官方源码内容 oracle。
+
 ## 里程碑
 
 ### M0 - 自有项目基线
@@ -110,7 +119,7 @@ M6/M7 的资源与发行环境数据是对应 checkpoint 的历史工程基线�
 ### M8 - 发布验收
 
 - 完成真实 rw-core、Panel、nftables、systemd/OpenRC 集成测试。
-- 验证 `xray start/stop` 与 `plugin sync/recreate` 的外层 lifecycle gate、固定锁序、取消传播和完整并发交错矩阵。
+- 在冻结候选上复核 `xray start/stop` 与 `plugin sync/recreate` 的 shared-start/exclusive-mutation coordinator、固定锁序和取消传播。
 - 在 systemd/OpenRC 中用 wrapper + child 验证 rw-core 独立进程组、整组信号、leader 自然退出和 Node 硬崩后的后代清理。
 - 通过 `go test`、race、vet、静态检查、脚本检查和多架构构建。
 - 在目标资源限制下完成持续运行与故障恢复测试。
