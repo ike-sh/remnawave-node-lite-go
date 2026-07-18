@@ -1,7 +1,6 @@
 package xray
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/netadmin"
@@ -30,9 +29,9 @@ type preparedRuntimeConfig struct {
 func prepareRuntimeConfig(input map[string]any, hashes ConfigHash, xtlsSocket string, torrent TorrentBlockerOptions) (preparedRuntimeConfig, error) {
 	fullConfig := generateAPIConfig(input, xtlsSocket, torrent)
 	state := buildRuntimeHashState(hashes, fullConfig)
-	raw, err := json.Marshal(fullConfig)
+	raw, err := encodePreparedRuntimeConfig(fullConfig)
 	if err != nil {
-		return preparedRuntimeConfig{}, fmt.Errorf("marshal Xray config: %w", err)
+		return preparedRuntimeConfig{}, fmt.Errorf("encode Xray config: %w", err)
 	}
 	return preparedRuntimeConfig{json: raw, hashState: state}, nil
 }

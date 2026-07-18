@@ -423,7 +423,9 @@ type envelope[T any] struct {
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
 		slog.Warn("failed to write JSON response", "error", err)
 	}
 }
