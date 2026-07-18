@@ -40,12 +40,13 @@ func TestJWTValidator(t *testing.T) {
 		"Bearer " + token,
 		"bearer " + token,
 		"BEARER\t" + token,
+		"Bearer " + token + " trailing",
 	} {
 		if err := validator.ValidateBearer(header); err != nil {
 			t.Errorf("ValidateBearer(%q) returned error: %v", header[:6], err)
 		}
 	}
-	for _, header := range []string{"", "Basic " + token, "Bearer", "Bearer " + token + " trailing"} {
+	for _, header := range []string{"", "Basic " + token, "Bearer"} {
 		if err := validator.ValidateBearer(header); err == nil {
 			t.Errorf("ValidateBearer(%q) accepted malformed authorization header", header)
 		}

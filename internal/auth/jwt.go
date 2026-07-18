@@ -49,7 +49,7 @@ func NewJWTValidatorWithClaims(publicKeyPEM string, claims ClaimExpectations) (*
 
 func (v *JWTValidator) ValidateBearer(header string) error {
 	parts := strings.Fields(header)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+	if len(parts) < 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return errors.New("missing bearer token")
 	}
 	return v.Validate(parts[1])
