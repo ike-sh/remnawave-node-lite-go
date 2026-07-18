@@ -37,6 +37,7 @@ for script in scripts/*.sh; do
 done
 sh -n deploy/remnawave-node.openrc
 actionlint
+bash scripts/test-docker-packaging.sh
 bash scripts/test-install-ops.sh
 bash scripts/check-supply-chain.sh
 

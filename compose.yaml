@@ -1,0 +1,56 @@
+name: remnanode-lite
+
+services:
+  remnanode:
+    image: remnanode-lite-go:0.1.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: remnanode
+    hostname: remnanode
+    network_mode: host
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run/remnanode:rw,noexec,nosuid,nodev,size=4m,mode=0700
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    volumes:
+      - remnanode-logs:/var/log/remnanode
+    environment:
+      NODE_PORT: "${NODE_PORT:-2222}"
+      NODE_BIND_ADDR: "${NODE_BIND_ADDR:-}"
+      SECRET_KEY: "${SECRET_KEY:?set SECRET_KEY in .env}"
+      LOW_MEMORY: "${LOW_MEMORY:-1}"
+      DISABLE_HASHED_SET_CHECK: "${DISABLE_HASHED_SET_CHECK:-false}"
+      BODY_LIMIT_MB: "${BODY_LIMIT_MB:-}"
+      GOMEMLIMIT: "${GOMEMLIMIT:-}"
+    mem_limit: 448m
+    memswap_limit: 448m
+    cpus: 1.0
+    pids_limit: 256
+    stop_grace_period: 35s
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/remnanode/internal.sock && kill -0 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+volumes:
+  remnanode-logs:

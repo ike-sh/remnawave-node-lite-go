@@ -1,0 +1,14 @@
+.git
+.github
+.official-source
+.vscode
+.idea
+.env
+.env.*
+!.env.example
+dist
+coverage
+*.log
+*.out
+*.tmp
+docs

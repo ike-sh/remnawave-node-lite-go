@@ -1,8 +1,6 @@
 # Remnawave Node Lite (Go)
 
-Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安装脚本，在 Linux 服务器（systemd / OpenRC）上完成部署与运维，无需 Docker。
-
-若需容器化部署，请使用官方项目 [remnawave/node](https://github.com/remnawave/node)。
+Remnawave Panel 的轻量级 Go Node 实现：以**单一可执行文件**运行，支持 Docker Compose、systemd 与 OpenRC 部署，面向小内存 Linux 服务器。
 
 ---
 
@@ -21,7 +19,7 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 ## 系统要求
 
-- Linux（Debian / Ubuntu 等 systemd 发行版，或 Alpine + OpenRC）
+- Linux amd64/arm64（Docker Compose，或 Debian / Ubuntu 等 systemd 发行版，或 Alpine + OpenRC）
 - 生产目标：整机 `512 MiB RAM / 1 vCPU / 2 GB disk`
 - 所有变更型 installer 依赖 `util-linux` 提供的 `flock`；Alpine 新旧节点在安装、升级、卸载或独立更新 rw-core 前均须先执行 `apk add --no-cache util-linux`
 - Alpine 生产部署要求 cgroup v2 的 memory/cpu/pids controller；OpenRC 会验证 `448MiB / 0 swap / 1 CPU / 256 PID`，缺失时拒绝启动
@@ -33,6 +31,21 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 ---
 
 ## 安装
+
+### Docker Compose
+
+Docker 部署沿用官方 Node 的宿主网络与 `NET_ADMIN` 模型，并额外落实 `448 MiB / 1 CPU / 0 swap / 256 PIDs` 生产限制：
+
+```bash
+cp deploy/docker.env.example .env
+chmod 600 .env
+# 编辑 .env，填写完整 SECRET_KEY
+docker compose build --pull
+docker compose up -d --no-build
+docker compose ps
+```
+
+完整的首次部署、异机预构建、更新、日志与卸载说明见 [Docker Compose 部署](docs/deployment-docker.md)。host network 模式下不配置 `ports:`；防火墙需只对 Panel 地址开放 `NODE_PORT`。
 
 ### systemd（Debian / Ubuntu 等）
 
@@ -75,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1
 
 ## 配置说明
 
-主配置文件：`/etc/remnanode/node.env`
+原生部署主配置文件为 `/etc/remnanode/node.env`；Docker Compose 从仓库根目录 `.env` 读取同名运行变量，模板见 `deploy/docker.env.example`。
 
 ```env
 NODE_PORT=2222
@@ -147,8 +160,6 @@ remnanode-xerrors  # rw-core 错误输出
 - 流量与在线统计
 - 用户热更新（VLESS / Trojan / Shadowsocks）
 - 插件同步（nftables、torrent-blocker、AS/IP 共享列表等）
-
-未实现：Docker 镜像（项目定位为裸机轻量部署）。
 
 ---
 

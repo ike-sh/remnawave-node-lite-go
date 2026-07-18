@@ -135,7 +135,7 @@ systemd 与 OpenRC 均使用专用 `remnanode:remnanode` 账号，配置为 `roo
 
 ## 当前已知偏差
 
-M7 已关闭此前记录的 TLS/socket 与系统供应链偏差。当前没有已知的静态 `/node` 契约 P1/P2；M8 仍需以真实 Panel 2.8.1 完成发行候选的端到端差分和故障恢复验收。裸机 systemd/OpenRC 部署替代官方 Docker 运行模型属于本项目明确的运维边界，不扩展 `/node` API。
+M7 已关闭此前记录的 TLS/socket 与系统供应链偏差。当前没有已知的静态 `/node` 契约 P1/P2；M8 仍需以真实 Panel 2.8.1 完成发行候选的端到端差分和故障恢复验收。Docker Compose 与官方一样使用 host network 和 `NET_ADMIN`，同时保留低端口监听能力；Go Manager 直接拥有 rw-core 生命周期，因此无需复制官方双进程 s6 运行结构。systemd/OpenRC 继续作为等价的原生部署入口。
 
 运行期 `dump-config` 是已接受的后置差异：Manager 只在 rw-core 启动期间保留完整规范配置，ready 后释放该副本并让 `CurrentConfigJSON` 返回 `{}`。这是面向 512 MiB 节点的内存取舍，不影响 `/node` 或 rw-core 启动契约；后续如恢复该诊断能力，必须采用有界方案，不能常驻第二份大配置。
 
