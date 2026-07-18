@@ -67,7 +67,7 @@ M7 使用最终安装布局补充了两类真实发行环境快照：
 
 OpenRC 另外由 supervisor 写入 `openrc.log` 与 `openrc.err.log`。它们每 10 秒巡检并 copy-truncate，成功巡检后 `.1` 不超过 `10 MiB`，但 current 在轮询窗口内可超过阈值，不能宣称数学硬上限。因此 OpenRC 四组 current + `.1` 的阈值预算为 `80 MiB`，四个固定临时文件全部残留时为 `120 MiB`，再加两个 OpenRC current 在轮询窗口内超过各自 `10 MiB` 的增量。systemd journal 配置为每 30 秒最多接收 200 条服务日志，但字节和长期磁盘仍服从宿主机 journald 配额。M8 必须在 `2 GB` 整机磁盘下记录日志故障风暴和长期增长，不能用上述阈值替代实测。
 
-安装与升级不使用可能映射到内存的 `/tmp` 保存大资产，而使用 root-only 的 `/var/lib/remnanode-installer`。Release 归档限制为 `64 MiB` 压缩、`128 MiB` 解压和 `64` 个条目；rw-core zip、自定义 core、geo 与 ASN 分别具有下载和流式解压硬上限，本地 `GEO_ZAPRET_FILE` / `IP_ZAPRET_FILE` 各限制为 `64 MiB` 并使用同目录原子 staging。下载单次最长 `300s`，同时配置连接和低速超时；tar/unzip 操作最长 `120s`。升级先预留“现有备份 + `512 MiB`”；rw-core 下载完成并校验 zip 结构后，再按 installer、core、geo 与 ASN 的实际目标文件系统聚合真实 entry、可选 custom core/ASN、备份、目标 staging 和每个文件系统 `64 MiB` 安全余量。upgrade 调用 rw-core 安装器时由外层事务唯一持有备份，不再复制第二份相同资产；独立安装器若回滚不完整会保留 root-only 事务目录并返回失败，不会删除唯一备份。
+安装与升级不使用可能映射到内存的 `/tmp` 保存大资产，而使用 root-only 的 `/var/lib/remnanode-installer`。五个变更型入口共同持有固定的 `/run/lock/remnanode-installer.lock`；嵌套 installer 复用并验证同一 open file description，锁路径不受 `RNL_TMP_ROOT` 影响且任何退出路径都不会删除锁 inode。包管理器、文件删除和 service mutation 等同步子进程继承锁，确保父 installer 异常退出时仍串行到该变更完成；下载、归档检查、Node/rw-core 自检、状态查询和可能派生常驻服务的 OpenRC 启动链会先关闭自己的锁 FD，避免短命工具或 supervisor 在 installer 完成后继续持锁。Release 归档限制为 `64 MiB` 压缩、`128 MiB` 解压和 `64` 个条目；rw-core zip、自定义 core、geo 与 ASN 分别具有下载和流式解压硬上限，本地 `GEO_ZAPRET_FILE` / `IP_ZAPRET_FILE` 各限制为 `64 MiB` 并使用同目录原子 staging。下载单次最长 `300s`，同时配置连接和低速超时；tar/unzip 操作最长 `120s`。升级先预留“现有备份 + `512 MiB`”；rw-core 下载完成并校验 zip 结构后，再按 installer、core、geo 与 ASN 的实际目标文件系统聚合真实 entry、可选 custom core/ASN、备份、目标 staging 和每个文件系统 `64 MiB` 安全余量。upgrade 调用 rw-core 安装器时由外层事务唯一持有备份，不再复制第二份相同资产；独立安装器若回滚不完整会保留 root-only 事务目录并返回失败，不会删除唯一备份。
 
 生产 `node.env` 必须是普通非符号链接文件，Go 在设置内存软上限前最多读取 `1 MiB`，并限制为最多 `4096` 行、`256` 个赋值；单行上限同为 `1 MiB`，因此可迁移旧版最多 `256 KiB` 的内联 Secret。`node.env` 与 `SECRET_KEY_FILE` 都以 `O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC` 打开同一文件描述符，在 `fstat -> 有界读取 -> fstat` 后才消费，避免 check/open 竞态和 FIFO 阻塞。systemd 与 OpenRC 都使用固定 `REMNANODE_ENV=/etc/remnanode/node.env` 和 `/usr/bin/env -i` 启动，只保留 `PATH/HOME/USER/LOGNAME`；`GOMEMLIMIT`、contract/core version 由同一个 Go 配置解析器校验后应用，Secret 和任意未知配置不会进入 Node 或 rw-core 环境。
 
@@ -83,7 +83,7 @@ OpenRC 另外由 supervisor 写入 `openrc.log` 与 `openrc.err.log`。它们每
 - Debian 与 Alpine 安装器在 `MemTotal <= 512 MiB` 时自动写入 `LOW_MEMORY=1`。
 - OpenRC 校验 cgroup v2 的 `448 MiB` memory、零 swap、1 CPU、256 PID 以及启动 shell 的实际 cgroup 成员关系；controller 缺失或写入未生效时拒绝启动。停止后不依赖 OpenRC 0.62.6 的路径清理，而是将 `stop_post` 自身迁出、通过 `cgroup.kill` 清理精确 service cgroup、最多等待 5 秒确认 `populated=0` 后删除该目录。
 
-当前上述 OpenRC 清理保证只覆盖 init 实际执行 `stop_post` 的显式停止路径。所有 installer 入口尚未共享同一个内核 `flock`，事务也尚未具备 SIGKILL/掉电后的持久 phase journal；supervise-daemon 自身异常退出后的残留 cgroup 恢复同样未完成。这三项仍是 M8 发布阻断，不得用本节的正常路径测试替代。
+当前上述 OpenRC 清理保证只覆盖 init 实际执行 `stop_post` 的显式停止路径。installer 共享锁已经消除并发写入，但事务尚未具备 SIGKILL/掉电后的持久 phase journal 与开机恢复；supervise-daemon 自身异常退出后的残留 cgroup 恢复同样未完成。这两项仍是 M8 发布阻断，不得用本节的正常路径测试替代。
 
 任何修改请求解码、Xray 配置生命周期、RPC 消息、报告队列或依赖图的提交，都应重新执行此门禁并比较阶段峰值。
 

@@ -38,16 +38,43 @@ for invalid_tag in '../../../../../etc' '..'; do
   fi
 done
 
-for bootstrap in scripts/install-node.sh scripts/install-node-alpine.sh scripts/upgrade.sh; do
-  if RNL_TAG='../../../../../etc' bash -s -- --help <"$bootstrap" >/dev/null 2>&1; then
-    echo "$bootstrap accepted a path-like bootstrap tag" >&2
+for bootstrap in \
+  scripts/install-node.sh \
+  scripts/install-node-alpine.sh \
+  scripts/install-xray.sh \
+  scripts/upgrade.sh \
+  scripts/uninstall.sh; do
+  case "$bootstrap" in
+    scripts/install-node.sh|scripts/install-node-alpine.sh)
+      bootstrap_args=(--upgrade --yes --dry-run)
+      ;;
+    scripts/install-xray.sh)
+      bootstrap_args=(--dry-run)
+      ;;
+    scripts/upgrade.sh)
+      bootstrap_args=(--yes --dry-run)
+      ;;
+    scripts/uninstall.sh)
+      bootstrap_args=(--yes --dry-run)
+      ;;
+  esac
+  if bootstrap_output="$(RNL_TAG='../../../../../etc' \
+    bash -s -- "${bootstrap_args[@]}" <"$bootstrap" 2>&1)"; then
+    bootstrap_status=0
+  else
+    bootstrap_status=$?
+  fi
+  if [ "$bootstrap_status" -ne 2 ] \
+    || ! grep -Fq 'RNL_REPO' <<<"$bootstrap_output" \
+    || ! grep -Fq 'RNL_TAG' <<<"$bootstrap_output"; then
+    echo "$bootstrap did not reject a path-like bootstrap tag at coordinate validation" >&2
     exit 1
   fi
 done
 
 dry_run_path="$(mktemp -d)"
 trap 'rm -rf "$dry_run_path"' EXIT
-for command_name in bash curl dirname head tar timeout uname; do
+for command_name in bash curl dirname grep head stat tar timeout tr uname wc; do
   command_path="$(command -v "$command_name")"
   [ -n "$command_path" ] || {
     echo "missing command required by portable dry-run test: $command_name" >&2

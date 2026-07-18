@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Install a pinned rw-core release and verified optional ASN database.
+# shellcheck source-path=SCRIPTDIR
 set -euo pipefail
 
 PINNED_XRAY_VERSION="v26.6.27"
@@ -72,6 +73,141 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+bootstrap_helper_is_trusted() {
+  local script="$1" helper="$2" script_owner helper_owner trusted_uid
+  local logical_dir physical_dir current owner mode links size function_name
+  [ -f "$script" ] && [ ! -L "$script" ] \
+    && [ -f "$helper" ] && [ ! -L "$helper" ] || return 1
+  script_owner="$(stat -c '%u:%g' "$script" 2>/dev/null \
+    || stat -f '%u:%g' "$script" 2>/dev/null)" || return
+  helper_owner="$(stat -c '%u:%g' "$helper" 2>/dev/null \
+    || stat -f '%u:%g' "$helper" 2>/dev/null)" || return
+  trusted_uid="${script_owner%%:*}"
+  [ "${helper_owner%%:*}" = "$trusted_uid" ] || return 1
+  for current in "$script" "$helper"; do
+    mode="$(stat -c '%a' "$current" 2>/dev/null \
+      || stat -f '%Lp' "$current" 2>/dev/null)" || return
+    links="$(stat -c '%h' "$current" 2>/dev/null \
+      || stat -f '%l' "$current" 2>/dev/null)" || return
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] && [ $((8#$mode & 022)) -eq 0 ] \
+      && [ "$links" = 1 ] || return 1
+  done
+  logical_dir="$(cd "$(dirname "$helper")" && pwd -L)" || return
+  physical_dir="$(cd "$(dirname "$helper")" && pwd -P)" || return
+  [ "$logical_dir" = "$physical_dir" ] || return 1
+  current="$physical_dir"
+  while :; do
+    [ -d "$current" ] && [ ! -L "$current" ] || return 1
+    owner="$(stat -c '%u:%g' "$current" 2>/dev/null \
+      || stat -f '%u:%g' "$current" 2>/dev/null)" || return
+    mode="$(stat -c '%a' "$current" 2>/dev/null \
+      || stat -f '%Lp' "$current" 2>/dev/null)" || return
+    { [ "${owner%%:*}" = 0 ] || [ "${owner%%:*}" = "$trusted_uid" ]; } \
+      && [[ "$mode" =~ ^[0-7]{3,4}$ ]] \
+      && [ $((8#$mode & 022)) -eq 0 ] || return 1
+    [ "$current" = / ] && break
+    current="$(dirname "$current")" || return
+  done
+  size="$(wc -c <"$helper" | tr -d '[:space:]')" || return
+  [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -le 1048576 ] || return 1
+  for function_name in \
+    installer_acquire_lock installer_run_nested installer_run_without_lock; do
+    grep -Eq "^${function_name}\\(\\) [({]$" "$helper" || return 1
+  done
+}
+
+bootstrap_installed_lock_helper() {
+  local link=/usr/local/lib/remnanode/support-current target helper owner
+  [ -L "$link" ] || return 1
+  owner="$(stat -c '%u:%g' "$link" 2>/dev/null \
+    || stat -f '%u:%g' "$link" 2>/dev/null)" || return
+  [ "$owner" = 0:0 ] || return 1
+  target="$(readlink "$link")" || return
+  [ "$target" = "support/${RNL_TAG}" ] || return 1
+  helper="/usr/local/lib/remnanode/${target}/scripts/install-env-helpers.sh"
+  bootstrap_helper_is_trusted "$helper" "$helper" || return
+  printf '%s' "$helper"
+}
+
+bootstrap_run_without_installer_lock() (
+  local fd="${RNL_INSTALLER_LOCK_FD:-${INSTALLER_LOCK_FD:-}}"
+  if [[ "$fd" =~ ^[0-9]+$ ]] && [ "${#fd}" -le 6 ] && [ "$fd" -ge 10 ]; then
+    exec {fd}>&-
+  fi
+  unset RNL_INSTALLER_LOCK_FD RNL_INSTALLER_LOCK_ID
+  "$@"
+)
+
+load_installer_helpers() {
+  local helpers_dir helpers_tmp helpers_bytes installed_helper function_name
+  local -a helpers_status
+  if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    helpers_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if bootstrap_helper_is_trusted \
+      "${BASH_SOURCE[0]}" "${helpers_dir}/install-env-helpers.sh"; then
+      # shellcheck source=install-env-helpers.sh
+      source "${helpers_dir}/install-env-helpers.sh"
+      return
+    fi
+  fi
+  if installed_helper="$(bootstrap_installed_lock_helper)"; then
+    # shellcheck disable=SC1090
+    source "$installed_helper"
+    return
+  fi
+  if ! [[ "$RNL_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
+    || ! [[ "$RNL_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "invalid RNL_REPO or RNL_TAG for installer helper bootstrap" >&2
+    return 2
+  fi
+  if ! command -v curl >/dev/null 2>&1 || ! command -v head >/dev/null 2>&1; then
+    echo "curl and head are required to bootstrap installer locking" >&2
+    return 1
+  fi
+  helpers_tmp="$(mktemp -d /var/tmp/remnanode-bootstrap.XXXXXX)" || return
+  set +o pipefail
+  bootstrap_run_without_installer_lock \
+    curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+    --connect-timeout 15 --max-time 60 --speed-limit 1024 --speed-time 30 \
+    --max-filesize 1048576 \
+    "https://raw.githubusercontent.com/${RNL_REPO}/${RNL_TAG}/scripts/install-env-helpers.sh" \
+    | bootstrap_run_without_installer_lock head -c 1048577 \
+      >"${helpers_tmp}/install-env-helpers.sh"
+  helpers_status=("${PIPESTATUS[@]}")
+  set -o pipefail
+  helpers_bytes="$(wc -c <"${helpers_tmp}/install-env-helpers.sh" | tr -d '[:space:]')"
+  if [ "${helpers_status[0]:-1}" -ne 0 ] \
+    || [ "${helpers_status[1]:-1}" -ne 0 ] \
+    || [ "$helpers_bytes" -gt 1048576 ]; then
+    rm -rf "$helpers_tmp"
+    echo "installer helper bootstrap failed or exceeded 1048576 bytes" >&2
+    return 1
+  fi
+  for function_name in \
+    installer_acquire_lock installer_run_nested installer_run_without_lock; do
+    grep -Eq "^${function_name}\\(\\) [({]$" \
+      "${helpers_tmp}/install-env-helpers.sh" || {
+      rm -rf "$helpers_tmp"
+      echo "installer helper is missing lock API: ${function_name}" >&2
+      return 1
+    }
+  done
+  # shellcheck disable=SC1091
+  if ! source "${helpers_tmp}/install-env-helpers.sh"; then
+    rm -rf "$helpers_tmp"
+    return 1
+  fi
+  rm -rf "$helpers_tmp"
+}
+
+if [ "${RNL_INSTALL_XRAY_LIBRARY_ONLY:-0}" != 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "run as root: sudo bash install-xray.sh" >&2
+    exit 1
+  fi
+  load_installer_helpers
+fi
+
 require_root() {
   if [ "$DRY_RUN" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
     echo "run as root: sudo bash install-xray.sh" >&2
@@ -113,14 +249,14 @@ download_file() {
   for attempt in 1 2 3; do
     rm -f "$output"
     set +o pipefail
-    curl --fail --location --silent --show-error \
+    installer_run_without_lock curl --fail --location --silent --show-error \
       --proto '=https' --tlsv1.2 \
       --connect-timeout "$XRAY_DOWNLOAD_CONNECT_TIMEOUT_SECONDS" \
       --max-time "$XRAY_DOWNLOAD_MAX_TIME_SECONDS" \
       --speed-limit "$XRAY_DOWNLOAD_SPEED_LIMIT_BYTES" \
       --speed-time "$XRAY_DOWNLOAD_SPEED_TIME_SECONDS" \
       "$url" \
-      | head -c $((max_bytes + 1)) >"$output"
+      | installer_run_without_lock head -c $((max_bytes + 1)) >"$output"
     pipeline_status=("${PIPESTATUS[@]}")
     set -o pipefail
     curl_status="${pipeline_status[0]:-1}"
@@ -526,7 +662,7 @@ run_with_timeout() {
     echo "timeout is required for bounded archive processing" >&2
     return 1
   }
-  timeout "$seconds" "$@"
+  installer_run_without_lock timeout "$seconds" "$@"
 }
 
 running_pids_for_install_target() {
@@ -912,7 +1048,14 @@ if [ "${RNL_INSTALL_XRAY_LIBRARY_ONLY:-0}" = 1 ]; then
   return 0 2>/dev/null || exit 0
 fi
 
-require_root
+acquire_xray_installer_lock() {
+  require_root
+  if [ "$DRY_RUN" -eq 0 ]; then
+    installer_acquire_lock || return
+  fi
+}
+
+acquire_xray_installer_lock || exit $?
 case "$EXTERNAL_ASSET_ROLLBACK" in
   0|1) ;;
   *) echo "RNL_EXTERNAL_ASSET_ROLLBACK must be 0 or 1" >&2; exit 2 ;;
@@ -1002,7 +1145,7 @@ if [ -f "$TMP_DIR/custom-core" ]; then
 fi
 
 chmod 0755 "$TMP_DIR/xray"
-CORE_VERSION_OUTPUT="$("$TMP_DIR/xray" version)"
+CORE_VERSION_OUTPUT="$(installer_run_without_lock "$TMP_DIR/xray" version)"
 [ -n "$CORE_VERSION_OUTPUT" ] || { echo "rw-core version self-check returned no output" >&2; exit 1; }
 
 require_install_target_stopped /usr/local/bin/remnanode-lite
@@ -1024,7 +1167,7 @@ if [ -n "$ASN_SOURCE" ]; then
     exit 1
   fi
 fi
-if ! "$XRAY_BIN" version >/dev/null; then
+if ! installer_run_without_lock "$XRAY_BIN" version >/dev/null; then
   echo "installed rw-core failed its version self-check" >&2
   exit 1
 fi

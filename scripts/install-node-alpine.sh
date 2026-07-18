@@ -19,12 +19,57 @@ BOOTSTRAP_TAG="${RNL_TAG:-v${VERSION}}"
 RESTART_CMD="rc-service remnawave-node restart"
 export RESTART_CMD
 
+bootstrap_helper_is_trusted() {
+  local script="$1" helper="$2" script_owner helper_owner trusted_uid
+  local logical_dir physical_dir current owner mode links size function_name
+  [ -f "$script" ] && [ ! -L "$script" ] \
+    && [ -f "$helper" ] && [ ! -L "$helper" ] || return 1
+  script_owner="$(stat -c '%u:%g' "$script" 2>/dev/null \
+    || stat -f '%u:%g' "$script" 2>/dev/null)" || return
+  helper_owner="$(stat -c '%u:%g' "$helper" 2>/dev/null \
+    || stat -f '%u:%g' "$helper" 2>/dev/null)" || return
+  trusted_uid="${script_owner%%:*}"
+  [ "${helper_owner%%:*}" = "$trusted_uid" ] || return 1
+  for current in "$script" "$helper"; do
+    mode="$(stat -c '%a' "$current" 2>/dev/null \
+      || stat -f '%Lp' "$current" 2>/dev/null)" || return
+    links="$(stat -c '%h' "$current" 2>/dev/null \
+      || stat -f '%l' "$current" 2>/dev/null)" || return
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] && [ $((8#$mode & 022)) -eq 0 ] \
+      && [ "$links" = 1 ] || return 1
+  done
+  logical_dir="$(cd "$(dirname "$helper")" && pwd -L)" || return
+  physical_dir="$(cd "$(dirname "$helper")" && pwd -P)" || return
+  [ "$logical_dir" = "$physical_dir" ] || return 1
+  current="$physical_dir"
+  while :; do
+    [ -d "$current" ] && [ ! -L "$current" ] || return 1
+    owner="$(stat -c '%u:%g' "$current" 2>/dev/null \
+      || stat -f '%u:%g' "$current" 2>/dev/null)" || return
+    mode="$(stat -c '%a' "$current" 2>/dev/null \
+      || stat -f '%Lp' "$current" 2>/dev/null)" || return
+    { [ "${owner%%:*}" = 0 ] || [ "${owner%%:*}" = "$trusted_uid" ]; } \
+      && [[ "$mode" =~ ^[0-7]{3,4}$ ]] \
+      && [ $((8#$mode & 022)) -eq 0 ] || return 1
+    [ "$current" = / ] && break
+    current="$(dirname "$current")" || return
+  done
+  size="$(wc -c <"$helper" | tr -d '[:space:]')" || return
+  [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -le 1048576 ] || return 1
+  for function_name in \
+    installer_acquire_lock installer_run_nested installer_run_without_lock; do
+    grep -Eq "^${function_name}\\(\\) [({]$" "$helper" || return 1
+  done
+}
+
 if ! command -v curl >/dev/null 2>&1; then
-  echo "缺少命令：curl（Alpine: apk add --no-cache curl bash）" >&2
+  echo "缺少命令：curl（Alpine: apk add --no-cache curl bash util-linux）" >&2
   exit 1
 fi
-if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install-env-helpers.sh" ]; then
-  _HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${BASH_SOURCE[0]:-}" ] \
+  && _HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" \
+  && bootstrap_helper_is_trusted \
+    "${BASH_SOURCE[0]}" "${_HELPERS_DIR}/install-env-helpers.sh"; then
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_DIR}/install-env-helpers.sh"
 else
@@ -50,6 +95,14 @@ else
     echo "bootstrap helper 下载失败或超过 1048576 bytes 硬上限" >&2
     exit 1
   fi
+  for _HELPERS_FUNCTION in \
+    installer_acquire_lock installer_run_nested installer_run_without_lock; do
+    grep -Eq "^${_HELPERS_FUNCTION}\\(\\) [({]$" \
+      "${_HELPERS_TMP}/install-env-helpers.sh" || {
+      echo "bootstrap helper 缺少锁 API：${_HELPERS_FUNCTION}" >&2
+      exit 1
+    }
+  done
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_TMP}/install-env-helpers.sh"
   rm -rf "${_HELPERS_TMP}"
@@ -91,7 +144,7 @@ Remnawave Node Lite (Go) ${VERSION} — Alpine / OpenRC 安装 / 升级 / 卸载
   --version           版本
 
 一键入口（Alpine 无 sudo，root 下直接 bash）：
-  apk add --no-cache curl bash
+  apk add --no-cache curl bash util-linux
   curl -fsSL https://raw.githubusercontent.com/${REPO}/v${VERSION}/scripts/install-node-alpine.sh | bash
 EOF
 }
@@ -201,7 +254,7 @@ run_sibling_script() {
   local dir
   dir="$(script_dir)"
   if [ -n "$dir" ] && [ -f "${dir}/${name}" ]; then
-    bash "${dir}/${name}" "$@"
+    installer_run_nested bash "${dir}/${name}" "$@"
   else
     local support
     support="$(installed_support_file "scripts/${name}")"
@@ -209,7 +262,7 @@ run_sibling_script() {
       echo "缺少已校验 support 脚本：${support}" >&2
       return 1
     fi
-    bash "$support" "$@"
+    installer_run_nested bash "$support" "$@"
   fi
 }
 
@@ -453,11 +506,12 @@ detect_arch() {
 install_packages() {
   step "安装 Alpine 依赖包"
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] apk add --no-cache bash curl tar unzip ca-certificates libcap openrc iproute2 nftables"
+    echo "[dry-run] apk add --no-cache bash curl tar unzip ca-certificates libcap openrc iproute2 nftables util-linux"
     return 0
   fi
   require_free_bytes / 536870912 "系统依赖与安装工作区"
-  apk add --no-cache bash curl tar unzip ca-certificates libcap openrc iproute2 nftables
+  apk add --no-cache \
+    bash curl tar unzip ca-certificates libcap openrc iproute2 nftables util-linux
 }
 
 download_binary() {
@@ -480,7 +534,7 @@ install_xray() {
   local support
   support="$(installed_support_file scripts/install-xray.sh)"
   [ -f "$support" ] || { echo "缺少已校验 install-xray.sh" >&2; return 1; }
-  RNL_REPO="$REPO" RNL_TAG="$TAG" bash "$support"
+  RNL_REPO="$REPO" RNL_TAG="$TAG" installer_run_nested bash "$support"
 }
 
 setup_directories() {
@@ -617,9 +671,9 @@ start_service() {
     return 0
   fi
 
-  rc-service remnawave-node restart
+  installer_run_without_lock rc-service remnawave-node restart
   sleep 1
-  rc-service remnawave-node status || true
+  installer_run_without_lock rc-service remnawave-node status || true
 }
 
 main() {
@@ -627,6 +681,9 @@ main() {
   require_alpine
   if [ -z "$ACTION" ]; then
     show_menu
+  fi
+  if [ "$DRY_RUN" -eq 0 ]; then
+    installer_acquire_lock || return
   fi
   dispatch_action
 }

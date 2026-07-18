@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # remnawave-node-lite-go 卸载脚本（systemd / Alpine OpenRC）
+# shellcheck source-path=SCRIPTDIR
 set -Eeuo pipefail
 
 VERSION="0.1.0"
@@ -18,6 +19,8 @@ OWNED_SHARE_DIR="/usr/local/share/remnanode"
 GEO_DIR="${OWNED_SHARE_DIR}/xray"
 ASN_DIR="${OWNED_SHARE_DIR}/asn"
 XRAY_BIN="${OWNED_LIB_DIR}/rw-core"
+RNL_REPO="${RNL_REPO:-Luxiaba/remnawave-node-lite-go}"
+RNL_TAG="${RNL_TAG:-v${VERSION}}"
 
 YES=0
 DRY_RUN=0
@@ -85,6 +88,176 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+bootstrap_helper_is_trusted() {
+  local script="$1" helper="$2" script_owner helper_owner trusted_uid
+  local logical_dir physical_dir current owner mode links size function_name
+  [ -f "$script" ] && [ ! -L "$script" ] \
+    && [ -f "$helper" ] && [ ! -L "$helper" ] || return 1
+  script_owner="$(stat -c '%u:%g' "$script" 2>/dev/null \
+    || stat -f '%u:%g' "$script" 2>/dev/null)" || return
+  helper_owner="$(stat -c '%u:%g' "$helper" 2>/dev/null \
+    || stat -f '%u:%g' "$helper" 2>/dev/null)" || return
+  trusted_uid="${script_owner%%:*}"
+  [ "${helper_owner%%:*}" = "$trusted_uid" ] || return 1
+  for current in "$script" "$helper"; do
+    mode="$(stat -c '%a' "$current" 2>/dev/null \
+      || stat -f '%Lp' "$current" 2>/dev/null)" || return
+    links="$(stat -c '%h' "$current" 2>/dev/null \
+      || stat -f '%l' "$current" 2>/dev/null)" || return
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] && [ $((8#$mode & 022)) -eq 0 ] \
+      && [ "$links" = 1 ] || return 1
+  done
+  logical_dir="$(cd "$(dirname "$helper")" && pwd -L)" || return
+  physical_dir="$(cd "$(dirname "$helper")" && pwd -P)" || return
+  [ "$logical_dir" = "$physical_dir" ] || return 1
+  current="$physical_dir"
+  while :; do
+    [ -d "$current" ] && [ ! -L "$current" ] || return 1
+    owner="$(stat -c '%u:%g' "$current" 2>/dev/null \
+      || stat -f '%u:%g' "$current" 2>/dev/null)" || return
+    mode="$(stat -c '%a' "$current" 2>/dev/null \
+      || stat -f '%Lp' "$current" 2>/dev/null)" || return
+    { [ "${owner%%:*}" = 0 ] || [ "${owner%%:*}" = "$trusted_uid" ]; } \
+      && [[ "$mode" =~ ^[0-7]{3,4}$ ]] \
+      && [ $((8#$mode & 022)) -eq 0 ] || return 1
+    [ "$current" = / ] && break
+    current="$(dirname "$current")" || return
+  done
+  size="$(wc -c <"$helper" | tr -d '[:space:]')" || return
+  [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -le 1048576 ] || return 1
+  for function_name in \
+    installer_acquire_lock installer_run_nested installer_run_without_lock; do
+    grep -Eq "^${function_name}\\(\\) [({]$" "$helper" || return 1
+  done
+}
+
+bootstrap_run_without_installer_lock() (
+  local fd="${RNL_INSTALLER_LOCK_FD:-${INSTALLER_LOCK_FD:-}}"
+  if [[ "$fd" =~ ^[0-9]+$ ]] && [ "${#fd}" -le 6 ] && [ "$fd" -ge 10 ]; then
+    exec {fd}>&-
+  fi
+  unset RNL_INSTALLER_LOCK_FD RNL_INSTALLER_LOCK_ID
+  "$@"
+)
+
+bootstrap_path_owner_ids() {
+  local path="$1" owner
+  if owner="$(stat -c '%u:%g' "$path" 2>/dev/null)"; then
+    printf '%s' "$owner"
+    return 0
+  fi
+  stat -f '%u:%g' "$path" 2>/dev/null
+}
+
+bootstrap_path_mode() {
+  local path="$1" mode
+  if mode="$(stat -c '%a' "$path" 2>/dev/null)"; then
+    printf '%s' "$mode"
+    return 0
+  fi
+  stat -f '%Lp' "$path" 2>/dev/null
+}
+
+bootstrap_installed_helpers() {
+  local link=/usr/local/lib/remnanode/support-current target base component
+  local helper mode links current=/
+  local -a components
+  [ -L "$link" ] && [ "$(bootstrap_path_owner_ids "$link")" = 0:0 ] || return 1
+  target="$(readlink "$link")" || return
+  [[ "$target" =~ ^support/[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+  [ "$target" = "support/${RNL_TAG}" ] || return 1
+  base="$(dirname "$link")/$target"
+  IFS=/ read -r -a components <<<"${base#/}"
+  for component in "${components[@]}" scripts; do
+    current="${current%/}/${component}"
+    [ -d "$current" ] && [ ! -L "$current" ] \
+      && [ "$(bootstrap_path_owner_ids "$current")" = 0:0 ] || return 1
+    mode="$(bootstrap_path_mode "$current")" || return
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] && [ $((8#$mode & 022)) -eq 0 ] || return 1
+  done
+  helper="${base}/scripts/install-env-helpers.sh"
+  [ -f "$helper" ] && [ ! -L "$helper" ] \
+    && [ "$(bootstrap_path_owner_ids "$helper")" = 0:0 ] || return 1
+  if links="$(stat -c '%h' "$helper" 2>/dev/null)"; then
+    :
+  else
+    links="$(stat -f '%l' "$helper" 2>/dev/null)" || return
+  fi
+  [ "$links" = 1 ] || return 1
+  mode="$(bootstrap_path_mode "$helper")" || return
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] && [ $((8#$mode & 022)) -eq 0 ] || return 1
+  bootstrap_helper_is_trusted "$helper" "$helper" || return
+  printf '%s' "$helper"
+}
+
+load_installer_helpers() {
+  local helpers_dir helpers_tmp helpers_bytes installed_helpers function_name
+  local -a helpers_status
+  if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    helpers_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if bootstrap_helper_is_trusted \
+      "${BASH_SOURCE[0]}" "${helpers_dir}/install-env-helpers.sh"; then
+      # shellcheck source=install-env-helpers.sh
+      source "${helpers_dir}/install-env-helpers.sh"
+      return
+    fi
+  fi
+  if installed_helpers="$(bootstrap_installed_helpers)"; then
+    # shellcheck disable=SC1090
+    source "$installed_helpers"
+    return
+  fi
+  if ! [[ "$RNL_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
+    || ! [[ "$RNL_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "非法 RNL_REPO 或 RNL_TAG，拒绝下载 installer helper" >&2
+    return 2
+  fi
+  if ! command -v curl >/dev/null 2>&1 || ! command -v head >/dev/null 2>&1; then
+    echo "独立卸载脚本需要 curl 与 head 获取 installer helper" >&2
+    return 1
+  fi
+  helpers_tmp="$(mktemp -d /var/tmp/remnanode-bootstrap.XXXXXX)" || return
+  set +o pipefail
+  bootstrap_run_without_installer_lock \
+    curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+    --connect-timeout 15 --max-time 60 --speed-limit 1024 --speed-time 30 \
+    --max-filesize 1048576 \
+    "https://raw.githubusercontent.com/${RNL_REPO}/${RNL_TAG}/scripts/install-env-helpers.sh" \
+    | bootstrap_run_without_installer_lock head -c 1048577 \
+      >"${helpers_tmp}/install-env-helpers.sh"
+  helpers_status=("${PIPESTATUS[@]}")
+  set -o pipefail
+  helpers_bytes="$(wc -c <"${helpers_tmp}/install-env-helpers.sh" | tr -d '[:space:]')"
+  if [ "${helpers_status[0]:-1}" -ne 0 ] \
+    || [ "${helpers_status[1]:-1}" -ne 0 ] \
+    || [ "$helpers_bytes" -gt 1048576 ]; then
+    rm -rf "$helpers_tmp"
+    echo "installer helper 下载失败或超过 1048576 bytes 硬上限" >&2
+    return 1
+  fi
+  for function_name in \
+    installer_acquire_lock installer_run_nested installer_run_without_lock; do
+    grep -Eq "^${function_name}\\(\\) [({]$" \
+      "${helpers_tmp}/install-env-helpers.sh" || {
+      rm -rf "$helpers_tmp"
+      echo "installer helper 缺少锁 API：${function_name}" >&2
+      return 1
+    }
+  done
+  # shellcheck disable=SC1091
+  if ! source "${helpers_tmp}/install-env-helpers.sh"; then
+    rm -rf "$helpers_tmp"
+    return 1
+  fi
+  rm -rf "$helpers_tmp"
+}
+
+if [ "$DRY_RUN" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
+  echo "请使用 root 运行（Alpine 通常无 sudo）：su - 后执行 bash uninstall.sh" >&2
+  exit 1
+fi
+load_installer_helpers
 
 on_error() {
   local status="${1:-1}"
@@ -193,7 +366,7 @@ detect_install_type() {
 
 current_version() {
   if [ -x "${PREFIX}/${BIN_NAME}" ]; then
-    "${PREFIX}/${BIN_NAME}" version 2>/dev/null || echo "unknown"
+    installer_run_without_lock "${PREFIX}/${BIN_NAME}" version 2>/dev/null || echo "unknown"
   else
     echo "not installed"
   fi
@@ -235,7 +408,8 @@ probe_uninstall_service_state() {
   local platform="$1" output="" load_state="" active_state="" status
   case "$platform" in
     openrc)
-      if rc-service remnawave-node status >/dev/null 2>&1; then
+      if installer_run_without_lock \
+        rc-service remnawave-node status >/dev/null 2>&1; then
         printf 'active'
         return 0
       else
@@ -244,7 +418,7 @@ probe_uninstall_service_state() {
       [ "$status" -eq 3 ] && printf 'inactive' || printf 'error'
       ;;
     systemd)
-      if ! output="$(systemctl show --no-pager \
+      if ! output="$(installer_run_without_lock systemctl show --no-pager \
         --property=LoadState --property=ActiveState \
         remnawave-node.service)"; then
         printf 'error'
@@ -506,6 +680,9 @@ remove_xray() {
 
 main() {
   require_root
+  if [ "$DRY_RUN" -eq 0 ]; then
+    installer_acquire_lock || return
+  fi
 
   if ! installed; then
     echo "未检测到 remnawave-node-lite 安装痕迹。"

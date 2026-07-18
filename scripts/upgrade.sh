@@ -21,12 +21,58 @@ ASN_DIR="/usr/local/share/remnanode/asn"
 SUPPORT_LINK="/usr/local/lib/remnanode/support-current"
 REPO="${RNL_REPO:-Luxiaba/remnawave-node-lite-go}"
 BOOTSTRAP_TAG="${RNL_TAG:-v${VERSION}}"
+
+bootstrap_helper_is_trusted() {
+  local script="$1" helper="$2" script_owner helper_owner trusted_uid
+  local logical_dir physical_dir current owner mode links size function_name
+  [ -f "$script" ] && [ ! -L "$script" ] \
+    && [ -f "$helper" ] && [ ! -L "$helper" ] || return 1
+  script_owner="$(stat -c '%u:%g' "$script" 2>/dev/null \
+    || stat -f '%u:%g' "$script" 2>/dev/null)" || return
+  helper_owner="$(stat -c '%u:%g' "$helper" 2>/dev/null \
+    || stat -f '%u:%g' "$helper" 2>/dev/null)" || return
+  trusted_uid="${script_owner%%:*}"
+  [ "${helper_owner%%:*}" = "$trusted_uid" ] || return 1
+  for current in "$script" "$helper"; do
+    mode="$(stat -c '%a' "$current" 2>/dev/null \
+      || stat -f '%Lp' "$current" 2>/dev/null)" || return
+    links="$(stat -c '%h' "$current" 2>/dev/null \
+      || stat -f '%l' "$current" 2>/dev/null)" || return
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] && [ $((8#$mode & 022)) -eq 0 ] \
+      && [ "$links" = 1 ] || return 1
+  done
+  logical_dir="$(cd "$(dirname "$helper")" && pwd -L)" || return
+  physical_dir="$(cd "$(dirname "$helper")" && pwd -P)" || return
+  [ "$logical_dir" = "$physical_dir" ] || return 1
+  current="$physical_dir"
+  while :; do
+    [ -d "$current" ] && [ ! -L "$current" ] || return 1
+    owner="$(stat -c '%u:%g' "$current" 2>/dev/null \
+      || stat -f '%u:%g' "$current" 2>/dev/null)" || return
+    mode="$(stat -c '%a' "$current" 2>/dev/null \
+      || stat -f '%Lp' "$current" 2>/dev/null)" || return
+    { [ "${owner%%:*}" = 0 ] || [ "${owner%%:*}" = "$trusted_uid" ]; } \
+      && [[ "$mode" =~ ^[0-7]{3,4}$ ]] \
+      && [ $((8#$mode & 022)) -eq 0 ] || return 1
+    [ "$current" = / ] && break
+    current="$(dirname "$current")" || return
+  done
+  size="$(wc -c <"$helper" | tr -d '[:space:]')" || return
+  [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -le 1048576 ] || return 1
+  for function_name in \
+    installer_acquire_lock installer_run_nested installer_run_without_lock; do
+    grep -Eq "^${function_name}\\(\\) [({]$" "$helper" || return 1
+  done
+}
+
 if ! command -v curl >/dev/null 2>&1; then
   echo "缺少命令：curl" >&2
   exit 1
 fi
-if [ -n "${BASH_SOURCE[0]:-}" ]; then
-  _HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${BASH_SOURCE[0]:-}" ] \
+  && _HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" \
+  && bootstrap_helper_is_trusted \
+    "${BASH_SOURCE[0]}" "${_HELPERS_DIR}/install-env-helpers.sh"; then
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_DIR}/install-env-helpers.sh"
 else
@@ -52,6 +98,14 @@ else
     echo "bootstrap helper 下载失败或超过 1048576 bytes 硬上限" >&2
     exit 1
   fi
+  for _HELPERS_FUNCTION in \
+    installer_acquire_lock installer_run_nested installer_run_without_lock; do
+    grep -Eq "^${_HELPERS_FUNCTION}\\(\\) [({]$" \
+      "${_HELPERS_TMP}/install-env-helpers.sh" || {
+      echo "bootstrap helper 缺少锁 API：${_HELPERS_FUNCTION}" >&2
+      exit 1
+    }
+  done
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_TMP}/install-env-helpers.sh"
   rm -rf "${_HELPERS_TMP}"
@@ -204,7 +258,7 @@ detect_arch() {
 
 current_version() {
   if [ -x "${PREFIX}/${BIN_NAME}" ]; then
-    "${PREFIX}/${BIN_NAME}" version 2>/dev/null || echo "unknown"
+    installer_run_without_lock "${PREFIX}/${BIN_NAME}" version 2>/dev/null || echo "unknown"
   else
     echo "not installed"
   fi
@@ -241,7 +295,7 @@ service_is_active() {
 service_is_enabled() {
   local output status
   if is_alpine; then
-    if output="$(RC_NOCOLOR=yes rc-update show default)"; then
+    if output="$(RC_NOCOLOR=yes installer_run_without_lock rc-update show default)"; then
       if grep -Eq '^[[:space:]]*remnawave-node([[:space:]]|$)' <<<"$output"; then
         return 0
       fi
@@ -250,7 +304,8 @@ service_is_enabled() {
     return 2
   fi
 
-  if output="$(systemctl is-enabled remnawave-node.service 2>/dev/null)"; then
+  if output="$(installer_run_without_lock \
+    systemctl is-enabled remnawave-node.service 2>/dev/null)"; then
     status=0
   else
     status=$?
@@ -511,7 +566,7 @@ rollback_upgrade() {
   restore_service_enabled_state || failed=1
   if [ "$SERVICE_WAS_ACTIVE" -eq 1 ]; then
     if is_alpine; then
-      if ! rc-service remnawave-node start >/dev/null 2>&1; then
+      if ! installer_run_without_lock rc-service remnawave-node start >/dev/null 2>&1; then
         echo "回滚后 OpenRC 服务启动失败" >&2
         failed=1
       fi
@@ -582,7 +637,7 @@ upgrade_xray() {
   [ -f "$support" ] || { echo "缺少已校验 install-xray.sh" >&2; return 1; }
   RNL_REPO="$REPO" RNL_TAG="$TAG" \
     RNL_TMP_ROOT="$(installer_temp_root)" RNL_EXTERNAL_ASSET_ROLLBACK=1 \
-    bash "$support"
+    installer_run_nested bash "$support"
 }
 
 migrate_runtime_configuration() {
@@ -711,13 +766,13 @@ restart_service() {
   fi
 
   if is_alpine; then
-    rc-service remnawave-node restart
+    installer_run_without_lock rc-service remnawave-node restart
     sleep 1
-    rc-service remnawave-node status || true
+    installer_run_without_lock rc-service remnawave-node status || true
   else
     systemctl restart remnawave-node.service
     sleep 1
-    systemctl --no-pager status remnawave-node.service || true
+    installer_run_without_lock systemctl --no-pager status remnawave-node.service || true
   fi
 }
 
@@ -734,6 +789,9 @@ verify_upgrade() {
 
 main() {
   require_root
+  if [ "$DRY_RUN" -eq 0 ]; then
+    installer_acquire_lock || return
+  fi
   case "$ENSURE_SERVICE_STARTED" in
     0|1) ;;
     *) echo "RNL_ENSURE_SERVICE_STARTED must be 0 or 1" >&2; return 2 ;;

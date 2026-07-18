@@ -23,6 +23,7 @@
 - Release archive、rw-core、自定义 core 与 ASN 资产均在写盘前校验 SHA-256、结构和版本；固定 rw-core 摘要不可覆盖，GitHub Actions 固定到完整 commit SHA。
 - systemd/OpenRC 通过空环境启动，`node.env` 与 Secret 均由 Go 使用 `O_NOFOLLOW|O_NONBLOCK` 的同一文件描述符有界读取；符号链接、FIFO、device、超限或读取期间变化会在启动前失败。
 - 安装器拒绝受管路径中的不安全 owner、权限、符号链接和硬链接；日志 helper、rw-core、geo 与 ASN 使用同目录 staging 原子替换，service 更新则由外层升级事务备份和验证。
+- 安装、升级、rw-core 安装与卸载共用固定内核锁；嵌套入口复用同一锁 FD。同步包管理、文件和 service mutation 持锁到子进程结束；下载、Node/rw-core 自检、状态查询和可能派生常驻服务的 OpenRC 启动链不继承该 FD。Alpine 入口显式依赖 `util-linux`。
 
 ### 修复
 

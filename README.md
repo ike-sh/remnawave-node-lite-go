@@ -23,6 +23,7 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 - Linux（Debian / Ubuntu 等 systemd 发行版，或 Alpine + OpenRC）
 - 生产目标：整机 `512 MiB RAM / 1 vCPU / 2 GB disk`
+- 所有变更型 installer 依赖 `util-linux` 提供的 `flock`；Alpine 新旧节点在安装、升级、卸载或独立更新 rw-core 前均须先执行 `apk add --no-cache util-linux`
 - Alpine 生产部署要求 cgroup v2 的 memory/cpu/pids controller；OpenRC 会验证 `448MiB / 0 swap / 1 CPU / 256 PID`，缺失时拒绝启动
 - systemd/OpenRC 都将 `/etc/remnanode/node.env` 作为有界数据文件读取，不会把 Secret 或未知变量导出到 Node/rw-core 环境
 - Panel 下发的 `SECRET_KEY`（含 mTLS 证书与 JWT 公钥）
@@ -44,9 +45,8 @@ curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1
 ### OpenRC（Alpine）
 
 ```bash
-apk add --no-cache curl bash
-curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/install-node-alpine.sh -o /tmp/install-alpine.sh
-bash /tmp/install-alpine.sh
+apk add --no-cache curl bash util-linux
+curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/install-node-alpine.sh | bash
 ```
 
 ### 安装流程
@@ -102,7 +102,7 @@ curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1
 sudo RNL_UPGRADE_XRAY=1 bash upgrade.sh --yes
 ```
 
-旧版配置缺少 `LOW_MEMORY` 时升级器会按整机内存迁移；512MiB 节点可强制执行 `bash upgrade.sh --yes --low-memory`。安装与升级使用 `/var/lib/remnanode-installer` 作为 root-only 工作区，并在下载、解压和可用磁盘不足时提前失败。
+旧版配置缺少 `LOW_MEMORY` 时升级器会按整机内存迁移；512MiB 节点可强制执行 `bash upgrade.sh --yes --low-memory`。安装、升级、rw-core 安装与卸载通过 `/run/lock/remnanode-installer.lock` 串行执行，并发入口会立即失败而不排队；安装工作区固定为 root-only 的 `/var/lib/remnanode-installer`，并在下载、解压和可用磁盘不足时提前失败。
 
 ---
 

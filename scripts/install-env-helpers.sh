@@ -57,14 +57,14 @@ download_https_file() {
   for attempt in 1 2 3; do
     rm -f "$output"
     set +o pipefail
-    curl --fail --location --silent --show-error \
+    installer_run_without_lock curl --fail --location --silent --show-error \
       --proto '=https' --tlsv1.2 \
       --connect-timeout "$RNL_DOWNLOAD_CONNECT_TIMEOUT_SECONDS" \
       --max-time "$RNL_DOWNLOAD_MAX_TIME_SECONDS" \
       --speed-limit "$RNL_DOWNLOAD_SPEED_LIMIT_BYTES" \
       --speed-time "$RNL_DOWNLOAD_SPEED_TIME_SECONDS" \
       "$url" \
-      | head -c $((max_bytes + 1)) >"$output"
+      | installer_run_without_lock head -c $((max_bytes + 1)) >"$output"
     pipeline_status=("${PIPESTATUS[@]}")
     set -o pipefail
     curl_status="${pipeline_status[0]:-1}"
@@ -318,6 +318,337 @@ managed_ancestor_is_safe() {
   [ $((8#$mode & 022)) -eq 0 ]
 }
 
+installer_lock_path() {
+  # Tests may override this function after sourcing the helper. Production
+  # entrypoints intentionally have no environment-controlled path override.
+  printf '%s' /run/lock/remnanode-installer.lock
+}
+
+installer_lock_owner_ids() {
+  local path="$1" owner
+  if owner="$(stat -c '%u:%g' "$path" 2>/dev/null)"; then
+    printf '%s' "$owner"
+    return 0
+  fi
+  stat -f '%u:%g' "$path" 2>/dev/null
+}
+
+installer_lock_has_root_owner() {
+  [ "$(installer_lock_owner_ids "$1")" = 0:0 ]
+}
+
+installer_lock_mode() {
+  local path="$1" mode
+  if mode="$(stat -c '%a' "$path" 2>/dev/null)"; then
+    printf '%s' "$mode"
+    return 0
+  fi
+  stat -f '%Lp' "$path" 2>/dev/null
+}
+
+installer_lock_link_count() {
+  local path="$1" links
+  if links="$(stat -c '%h' "$path" 2>/dev/null)"; then
+    printf '%s' "$links"
+    return 0
+  fi
+  stat -f '%l' "$path" 2>/dev/null
+}
+
+installer_lock_file_has_security_properties() {
+  local path="$1" expected_links="$2" mode links
+  [ -f "$path" ] && [ ! -L "$path" ] || {
+    echo "installer lock is not a regular file: ${path}" >&2
+    return 1
+  }
+  installer_lock_has_root_owner "$path" || {
+    echo "installer lock must be owned by root:root: ${path}" >&2
+    return 1
+  }
+  links="$(installer_lock_link_count "$path")" || return
+  [ "$links" = "$expected_links" ] || {
+    echo "installer lock has an unexpected link count: ${path}" >&2
+    return 1
+  }
+  mode="$(installer_lock_mode "$path")" || return
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] && [ $((8#$mode)) -eq $((8#0600)) ] || {
+    echo "installer lock must have mode 0600: ${path}" >&2
+    return 1
+  }
+}
+
+installer_lock_file_is_safe() {
+  installer_lock_file_has_security_properties "$1" 1
+}
+
+installer_recover_interrupted_lock_creation() {
+  local path="$1" directory candidate path_id candidate_id match="" count=0
+  directory="$(dirname "$path")" || return
+  installer_lock_file_has_security_properties "$path" 2 || return
+  path_id="$(installer_lock_device_inode "$path")" || return
+
+  for candidate in "$directory"/.rnl-lock-stage.*; do
+    [ -e "$candidate" ] || [ -L "$candidate" ] || continue
+    installer_lock_file_has_security_properties "$candidate" 2 \
+      >/dev/null 2>&1 || continue
+    candidate_id="$(installer_lock_device_inode "$candidate")" || continue
+    [ "$candidate_id" = "$path_id" ] || continue
+    match="$candidate"
+    count=$((count + 1))
+  done
+  [ "$count" -eq 1 ] || {
+    echo "cannot uniquely recover interrupted installer lock creation: ${path}" >&2
+    return 1
+  }
+
+  rm -f -- "$match" || {
+    echo "cannot remove interrupted installer lock staging inode: ${match}" >&2
+    return 1
+  }
+  installer_lock_file_is_safe "$path"
+}
+
+installer_validate_or_recover_lock_file() {
+  local path="$1" links
+  [ -f "$path" ] && [ ! -L "$path" ] || {
+    installer_lock_file_is_safe "$path"
+    return
+  }
+  links="$(installer_lock_link_count "$path")" || return
+  if [ "$links" = 2 ]; then
+    installer_recover_interrupted_lock_creation "$path"
+  else
+    installer_lock_file_is_safe "$path"
+  fi
+}
+
+installer_lock_directory_mode_is_safe() {
+  local path="$1" mode="$2"
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  # root:root group-writable directories (notably /run/lock mode 0775 on
+  # Debian-family systems) remain root-controlled. Other-writable locations
+  # additionally require sticky replacement protection.
+  if [ $((8#$mode & 002)) -eq 0 ]; then
+    return 0
+  fi
+  # Writable lock directories are accepted only with sticky protection, so
+  # non-root group members cannot replace the root-owned lock inode.
+  [ "$path" = /run/lock ] && [ $((8#$mode & 01000)) -ne 0 ]
+}
+
+installer_lock_directory_is_safe() {
+  local path="$1" mode
+  [ -d "$path" ] && [ ! -L "$path" ] || return 1
+  installer_lock_has_root_owner "$path" || return 1
+  mode="$(installer_lock_mode "$path")" || return
+  installer_lock_directory_mode_is_safe "$path" "$mode"
+}
+
+installer_lock_device_inode() {
+  local path="$1" identity
+  if identity="$(stat -Lc '%d:%i' "$path" 2>/dev/null)"; then
+    printf '%s' "$identity"
+    return 0
+  fi
+  stat -f '%d:%i' "$path" 2>/dev/null
+}
+
+installer_lock_fd_path() {
+  local fd="$1"
+  if [ -e "/proc/$$/fd/${fd}" ] || [ -L "/proc/$$/fd/${fd}" ]; then
+    printf '/proc/%s/fd/%s' "$$" "$fd"
+    return 0
+  fi
+  if [ -e "/dev/fd/${fd}" ] || [ -L "/dev/fd/${fd}" ]; then
+    printf '/dev/fd/%s' "$fd"
+    return 0
+  fi
+  return 1
+}
+
+installer_validate_lock_directory() {
+  local path="$1" directory
+  [ "$path" = /run/lock/remnanode-installer.lock ] || {
+    # Only an in-process function override can reach this branch. It keeps the
+    # production environment contract fixed while allowing isolated tests.
+    validate_managed_absolute_path "$path" || return
+  }
+  directory="$(dirname "$path")" || return
+  if [ "$path" = /run/lock/remnanode-installer.lock ]; then
+    installer_lock_directory_is_safe /run || {
+      echo "installer lock parent is unsafe: /run" >&2
+      return 1
+    }
+  fi
+  if [ ! -e "$directory" ] && [ "$path" = /run/lock/remnanode-installer.lock ]; then
+    install -d -o root -g root -m 0755 "$directory" || return
+  fi
+  installer_lock_directory_is_safe "$directory" || {
+    echo "installer lock directory must be root-controlled: ${directory}" >&2
+    return 1
+  }
+}
+
+installer_validate_lock_fd() {
+  local fd="$1" path="$2" expected="${3:-}" fd_path path_id fd_id
+  [[ "$fd" =~ ^[0-9]+$ ]] && [ "${#fd}" -le 6 ] && [ "$fd" -ge 10 ] || {
+    echo "invalid inherited installer lock descriptor: ${fd}" >&2
+    return 1
+  }
+  installer_validate_lock_directory "$path" || return
+  installer_lock_file_is_safe "$path" || return
+  fd_path="$(installer_lock_fd_path "$fd")" || {
+    echo "inherited installer lock descriptor is closed: ${fd}" >&2
+    return 1
+  }
+  path_id="$(installer_lock_device_inode "$path")" || return
+  fd_id="$(installer_lock_device_inode "$fd_path")" || return
+  [ "$fd_id" = "$path_id" ] || {
+    echo "inherited installer lock descriptor points to a different inode" >&2
+    return 1
+  }
+  if [ -n "$expected" ] && [ "$expected" != "$path_id" ]; then
+    echo "inherited installer lock identity changed" >&2
+    return 1
+  fi
+  INSTALLER_LOCK_ID="$path_id"
+}
+
+installer_close_lock_fd() {
+  local fd="${INSTALLER_LOCK_FD:-${RNL_INSTALLER_LOCK_FD:-}}"
+  if [[ "$fd" =~ ^[0-9]+$ ]] && [ "${#fd}" -le 6 ] && [ "$fd" -ge 10 ]; then
+    exec {fd}>&-
+  fi
+  INSTALLER_LOCK_FD=""
+  INSTALLER_LOCK_ID=""
+  unset RNL_INSTALLER_LOCK_FD RNL_INSTALLER_LOCK_ID
+}
+
+installer_run_without_lock() (
+  installer_close_lock_fd
+  "$@"
+)
+
+installer_run_nested() (
+  local fd="${INSTALLER_LOCK_FD:-}" identity="${INSTALLER_LOCK_ID:-}"
+  if [ -z "$fd" ]; then
+    "$@"
+    return
+  fi
+  installer_validate_lock_fd "$fd" "$(installer_lock_path)" "$identity" || return
+  # shellcheck disable=SC2030
+  export RNL_INSTALLER_LOCK_FD="$fd"
+  # shellcheck disable=SC2030
+  export RNL_INSTALLER_LOCK_ID="$identity"
+  "$@"
+)
+
+installer_acquire_lock() {
+  local path current_fd current_id inherited_fd inherited_id old_umask
+  local fd_path path_id fd_id directory staging=""
+  export -n INSTALLER_LOCK_FD INSTALLER_LOCK_ID 2>/dev/null || true
+  path="$(installer_lock_path)" || return
+  command -v flock >/dev/null 2>&1 || {
+    echo "missing command: flock (install util-linux)" >&2
+    return 1
+  }
+  current_fd="${INSTALLER_LOCK_FD:-}"
+  current_id="${INSTALLER_LOCK_ID:-}"
+  if [ -n "$current_fd" ] || [ -n "$current_id" ]; then
+    [ -n "$current_fd" ] && [ -n "$current_id" ] || {
+      echo "incomplete current installer lock metadata" >&2
+      return 1
+    }
+    installer_validate_lock_fd "$current_fd" "$path" "$current_id" || return
+    if ! flock -n "$current_fd"; then
+      echo "current installer lock descriptor does not own the lock" >&2
+      return 1
+    fi
+    INSTALLER_LOCK_FD="$current_fd"
+    return 0
+  fi
+  # shellcheck disable=SC2031
+  inherited_fd="${RNL_INSTALLER_LOCK_FD:-}"
+  # shellcheck disable=SC2031
+  inherited_id="${RNL_INSTALLER_LOCK_ID:-}"
+  unset RNL_INSTALLER_LOCK_FD RNL_INSTALLER_LOCK_ID
+
+  if [ -n "$inherited_fd" ] || [ -n "$inherited_id" ]; then
+    [ -n "$inherited_fd" ] && [ -n "$inherited_id" ] || {
+      echo "incomplete inherited installer lock metadata" >&2
+      return 1
+    }
+    installer_validate_lock_fd "$inherited_fd" "$path" "$inherited_id" || return
+    if ! flock -n "$inherited_fd"; then
+      echo "inherited installer lock descriptor does not own the lock" >&2
+      return 1
+    fi
+    INSTALLER_LOCK_FD="$inherited_fd"
+    return 0
+  fi
+
+  installer_validate_lock_directory "$path" || return
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    installer_validate_or_recover_lock_file "$path" || return
+  else
+    directory="$(dirname "$path")" || return
+    staging="$(umask 077; mktemp "${directory}/.rnl-lock-stage.XXXXXX")" || return
+    if ! installer_lock_file_is_safe "$staging"; then
+      rm -f "$staging"
+      return 1
+    fi
+    if ln "$staging" "$path" 2>/dev/null; then
+      if ! rm -f "$staging"; then
+        echo "cannot remove installer lock staging inode: ${staging}" >&2
+        return 1
+      fi
+      staging=""
+    else
+      rm -f "$staging" || return
+      staging=""
+    fi
+    # link(2) never follows or opens a competing symlink/FIFO/device. A root
+    # installer that won the same race is accepted; every other object fails.
+    installer_lock_file_is_safe "$path" || return
+  fi
+  old_umask="$(umask)"
+  umask 077
+  if ! exec {INSTALLER_LOCK_FD}<>"$path"; then
+    umask "$old_umask"
+    echo "cannot open installer lock: ${path}" >&2
+    return 1
+  fi
+  umask "$old_umask"
+  if ! installer_validate_lock_fd "$INSTALLER_LOCK_FD" "$path"; then
+    installer_close_lock_fd
+    return 1
+  fi
+  if ! flock -n "$INSTALLER_LOCK_FD"; then
+    echo "another remnanode installer operation is already running" >&2
+    installer_close_lock_fd
+    return 1
+  fi
+  # Revalidate after flock so replacement cannot silently split contenders
+  # across different inodes. The root-controlled directory makes this stable.
+  fd_path="$(installer_lock_fd_path "$INSTALLER_LOCK_FD")" || {
+    installer_close_lock_fd
+    return 1
+  }
+  path_id="$(installer_lock_device_inode "$path")" || {
+    installer_close_lock_fd
+    return 1
+  }
+  fd_id="$(installer_lock_device_inode "$fd_path")" || {
+    installer_close_lock_fd
+    return 1
+  }
+  if [ "$path_id" != "$fd_id" ]; then
+    echo "installer lock inode changed while acquiring the lock" >&2
+    installer_close_lock_fd
+    return 1
+  fi
+}
+
 validate_managed_parent_path() {
   local path="$1" parent component current="/"
   local -a components
@@ -496,7 +827,7 @@ run_with_timeout() {
     echo "缺少命令：timeout" >&2
     return 1
   }
-  timeout "$seconds" "$@"
+  installer_run_without_lock timeout "$seconds" "$@"
 }
 
 archive_unpacked_bytes() {
@@ -684,7 +1015,7 @@ install_release_binary() (
     exit 1
   }
   chmod 0755 "$extracted"
-  version_output="$("$extracted" version)"
+  version_output="$(installer_run_without_lock "$extracted" version)"
   if ! release_binary_version_matches_tag "$version_output" "$tag"; then
     echo "Release 二进制版本与标签 ${tag} 不一致" >&2
     exit 1
@@ -727,7 +1058,7 @@ install_release_binary() (
   ln -sfn "support/$tag" "${support_link}.new.$$"
   mv -fT "${support_link}.new.$$" "$support_link"
   validate_release_support_link "$support_link"
-  "$target" version
+  installer_run_without_lock "$target" version
 )
 
 resolve_installed_support_file() {
@@ -949,7 +1280,8 @@ validate_secret_key() {
   fi
 
   validator="$(secret_validator_binary)" || return
-  if ! printf '%s' "$value" | "$validator" validate-secret; then
+  if ! printf '%s' "$value" \
+    | installer_run_without_lock "$validator" validate-secret; then
     echo "SECRET_KEY 未通过严格 JSON 校验" >&2
     return 1
   fi
@@ -958,7 +1290,8 @@ validate_secret_key() {
 read_secret_source_canonical() {
   local src="$1" output="$2" validator
   validator="$(secret_validator_binary)" || return
-  if ! "$validator" canonicalize-secret "$src" >"$output"; then
+  if ! installer_run_without_lock \
+    "$validator" canonicalize-secret "$src" >"$output"; then
     rm -f "$output"
     echo "Secret Key 输入未通过安全读取与严格校验：${src}" >&2
     return 1
@@ -971,7 +1304,8 @@ validate_secret_file() {
     return 0
   fi
   validator="$(secret_validator_binary)" || return
-  if ! "$validator" canonicalize-secret "$path" >/dev/null; then
+  if ! installer_run_without_lock \
+    "$validator" canonicalize-secret "$path" >/dev/null; then
     echo "Secret Key 文件未通过安全读取与严格校验：${path}" >&2
     return 1
   fi
@@ -1332,7 +1666,8 @@ probe_remnanode_service_state() {
   local platform="$1" output="" load_state="" active_state="" status
   case "$platform" in
     openrc)
-      if rc-service remnawave-node status >/dev/null 2>&1; then
+      if installer_run_without_lock \
+        rc-service remnawave-node status >/dev/null 2>&1; then
         printf 'active'
         return 0
       else
@@ -1345,7 +1680,7 @@ probe_remnanode_service_state() {
       fi
       ;;
     systemd)
-      if ! output="$(systemctl show --no-pager \
+      if ! output="$(installer_run_without_lock systemctl show --no-pager \
         --property=LoadState --property=ActiveState \
         remnawave-node.service)"; then
         printf 'error'
@@ -1384,8 +1719,12 @@ stop_remnanode_and_wait() {
   case "$state" in
     active)
       case "$platform" in
-        openrc) rc-service remnawave-node stop >/dev/null 2>&1 || stop_failed=1 ;;
-        systemd) systemctl stop remnawave-node.service >/dev/null 2>&1 || stop_failed=1 ;;
+        openrc)
+          rc-service remnawave-node stop >/dev/null 2>&1 || stop_failed=1
+          ;;
+        systemd)
+          systemctl stop remnawave-node.service >/dev/null 2>&1 || stop_failed=1
+          ;;
         *) return 2 ;;
       esac
       ;;
@@ -1561,7 +1900,7 @@ stop_for_fresh_reinstall() {
   fi
 
   case "$platform" in
-    openrc) rc-service remnawave-node start >/dev/null 2>&1 ;;
+    openrc) installer_run_without_lock rc-service remnawave-node start >/dev/null 2>&1 ;;
     systemd) systemctl start remnawave-node.service >/dev/null 2>&1 ;;
     *) return 1 ;;
   esac || {
@@ -1578,7 +1917,7 @@ stop_for_fresh_reinstall() {
 
 verify_installed_version_tag() {
   local binary="$1" tag="$2" output
-  output="$("$binary" version 2>/dev/null)" || return 1
+  output="$(installer_run_without_lock "$binary" version 2>/dev/null)" || return 1
   if ! release_binary_version_matches_tag "$output" "$tag"; then
     echo "运行目标版本不匹配：got=${output} want=${tag}" >&2
     return 1

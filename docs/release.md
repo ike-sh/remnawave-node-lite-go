@@ -99,8 +99,8 @@ REQUIRE_TAG_AT_HEAD=1 \
 
 ## 6. 回滚
 
-`upgrade.sh` 在替换前备份 binary、service、support、`node.env`、`secret.key` 和可选 rw-core 资产，并记录升级前的 active 状态；install 委托可能修复开机注册时还会捕获 enabled 状态。事务使用 root-only 的 `/var/lib/remnanode-installer`，并在下载、解压或任一目标文件系统的磁盘预算不足时提前失败；rw-core 子安装复用外层回滚记录，不创建第二份相同资产备份。对于升级前运行中或由 install 委托要求启动的服务，目标版本二进制必须实际持有配置端口，否则恢复旧文件、开机注册与运行状态；显式升级原本 stopped 的服务保持 stopped。回滚前若服务停止命令失败，或不能确认 Node/rw-core 全部退出，将保留备份并拒绝替换运行中的文件；任何恢复步骤失败同样保留唯一备份并以非零状态结束。
+`upgrade.sh` 在替换前备份 binary、service、support、`node.env`、`secret.key` 和可选 rw-core 资产，并记录升级前的 active 状态；install 委托可能修复开机注册时还会捕获 enabled 状态。所有变更型 installer 入口通过固定的 `/run/lock/remnanode-installer.lock` 串行执行，嵌套的 rw-core 安装继承同一锁；事务使用 root-only 的 `/var/lib/remnanode-installer`，并在下载、解压或任一目标文件系统的磁盘预算不足时提前失败。rw-core 子安装复用外层回滚记录，不创建第二份相同资产备份。对于升级前运行中或由 install 委托要求启动的服务，目标版本二进制必须实际持有配置端口，否则恢复旧文件、开机注册与运行状态；显式升级原本 stopped 的服务保持 stopped。回滚前若服务停止命令失败，或不能确认 Node/rw-core 全部退出，将保留备份并拒绝替换运行中的文件；任何恢复步骤失败同样保留唯一备份并以非零状态结束。
 
-当前事务只覆盖进程正常存活并能执行 trap 的失败路径。所有 installer 入口的共享内核 `flock`、持久 phase journal 与 SIGKILL/掉电恢复仍是冻结 `0.1.0` 候选前的发布阻断。
+共享内核 `flock` 只消除并发 installer 写入，不能恢复已经被 `SIGKILL` 或掉电中断的事务。持久 phase journal、开机 fence 与中断回滚，以及 OpenRC supervisor 异常退出后的后代清理，仍是冻结 `0.1.0` 候选前的发布阻断。
 
 版本回退只允许使用本项目确实发布过的旧 tag：`sudo RNL_TAG=vX.Y.Z bash upgrade.sh --yes`。不得使用参考仓库的历史 tag。

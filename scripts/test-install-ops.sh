@@ -20,6 +20,601 @@ BIN_NAME="remnanode-lite"
 mkdir -p "$PREFIX"
 (cd "$ROOT_DIR" && go build -o "$PREFIX/$BIN_NAME" ./cmd/remnanode-lite)
 
+# shellcheck disable=SC2016,SC2030,SC2031
+installer_lock_test_protocol() (
+  local lock_dir="$TMP_ROOT/installer-lock-protocol"
+  local lock_path="$lock_dir/remnanode-installer.lock"
+  local other_path="$lock_dir/other.lock" parent_fd parent_id other_fd closed_fd
+  mkdir -m 0700 "$lock_dir"
+
+  installer_lock_path() { printf '%s' "$lock_path"; }
+  installer_lock_directory_is_safe() { [ "$1" = "$lock_dir" ]; }
+  installer_lock_has_root_owner() { :; }
+  # macOS fdesc reports a synthetic device for /dev/fd/N. The inode still
+  # provides a stable identity for these portable protocol mocks.
+  if [ "$(uname -s)" = Darwin ]; then
+    installer_lock_device_inode() { stat -f '%i' "$1"; }
+  fi
+  flock() { :; }
+
+  installer_acquire_lock
+  parent_fd="$INSTALLER_LOCK_FD"
+  parent_id="$INSTALLER_LOCK_ID"
+  [[ "$parent_fd" =~ ^[0-9]+$ ]]
+  [ -n "$parent_id" ]
+  [ "$((8#$(installer_lock_mode "$lock_path")))" -eq "$((8#0600))" ]
+  [ "$(installer_lock_link_count "$lock_path")" -eq 1 ]
+
+  installer_run_without_lock bash -c '
+    fd="$1"
+    [ -z "${RNL_INSTALLER_LOCK_FD:-}" ]
+    [ -z "${RNL_INSTALLER_LOCK_ID:-}" ]
+    [ ! -e "/proc/self/fd/$fd" ] && [ ! -e "/dev/fd/$fd" ]
+  ' bash "$parent_fd"
+  installer_validate_lock_fd "$parent_fd" "$lock_path" "$parent_id"
+  installer_run_nested bash -c '
+    fd="${RNL_INSTALLER_LOCK_FD:?}"
+    [ -n "${RNL_INSTALLER_LOCK_ID:?}" ]
+    [ -e "/proc/self/fd/$fd" ] || [ -e "/dev/fd/$fd" ]
+  '
+
+  (
+    export RNL_INSTALLER_LOCK_FD="$parent_fd" RNL_INSTALLER_LOCK_ID="$parent_id"
+    INSTALLER_LOCK_FD=""
+    INSTALLER_LOCK_ID=""
+    installer_acquire_lock
+    [ "$INSTALLER_LOCK_FD" = "$parent_fd" ]
+    [ "$INSTALLER_LOCK_ID" = "$parent_id" ]
+  )
+
+  printf other >"$other_path"
+  chmod 0600 "$other_path"
+  exec {other_fd}<>"$other_path"
+  if (
+    export RNL_INSTALLER_LOCK_FD="$other_fd" RNL_INSTALLER_LOCK_ID="$parent_id"
+    INSTALLER_LOCK_FD=""
+    INSTALLER_LOCK_ID=""
+    installer_acquire_lock >/dev/null 2>&1
+  ); then
+    echo "installer accepted an inherited descriptor for another inode" >&2
+    exit 1
+  fi
+  exec {other_fd}>&-
+
+  exec {closed_fd}<>"$lock_path"
+  local closed_number="$closed_fd"
+  exec {closed_fd}>&-
+  if (
+    export RNL_INSTALLER_LOCK_FD="$closed_number" RNL_INSTALLER_LOCK_ID="$parent_id"
+    INSTALLER_LOCK_FD=""
+    INSTALLER_LOCK_ID=""
+    installer_acquire_lock >/dev/null 2>&1
+  ); then
+    echo "installer accepted a closed inherited descriptor" >&2
+    exit 1
+  fi
+  if (
+    export RNL_INSTALLER_LOCK_FD="$parent_fd"
+    unset RNL_INSTALLER_LOCK_ID
+    INSTALLER_LOCK_FD=""
+    INSTALLER_LOCK_ID=""
+    installer_acquire_lock >/dev/null 2>&1
+  ); then
+    echo "installer accepted incomplete inherited lock metadata" >&2
+    exit 1
+  fi
+  for invalid_fd in invalid 9 1234567; do
+    if (
+      export RNL_INSTALLER_LOCK_FD="$invalid_fd" RNL_INSTALLER_LOCK_ID="$parent_id"
+      INSTALLER_LOCK_FD=""
+      INSTALLER_LOCK_ID=""
+      installer_acquire_lock >/dev/null 2>&1
+    ); then
+      echo "installer accepted invalid inherited descriptor: $invalid_fd" >&2
+      exit 1
+    fi
+  done
+)
+installer_lock_test_protocol
+
+# shellcheck disable=SC2031
+installer_lock_test_post_flock_stat_failure() (
+  local lock_dir="$TMP_ROOT/installer-lock-post-stat"
+  local lock_path="$lock_dir/remnanode-installer.lock"
+  local counter="$lock_dir/stat-count" count
+  mkdir -m 0700 "$lock_dir"
+  : >"$counter"
+  installer_lock_path() { printf '%s' "$lock_path"; }
+  installer_lock_directory_is_safe() { [ "$1" = "$lock_dir" ]; }
+  installer_lock_has_root_owner() { :; }
+  flock() { :; }
+  installer_lock_device_inode() {
+    count="$(wc -l <"$counter" | tr -d '[:space:]')"
+    printf 'call\n' >>"$counter"
+    [ "$count" -lt 2 ] || return 71
+    printf 'same-identity'
+  }
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer ignored a post-flock identity stat failure" >&2
+    exit 1
+  fi
+  [ -z "${INSTALLER_LOCK_FD:-}" ]
+)
+installer_lock_test_post_flock_stat_failure
+
+# shellcheck disable=SC2329
+installer_lock_test_file_safety() (
+  local lock_dir="$TMP_ROOT/installer-lock-safety"
+  local lock_path="$lock_dir/remnanode-installer.lock"
+  local target="$lock_dir/target"
+  mkdir -m 0700 "$lock_dir"
+  installer_lock_path() { printf '%s' "$lock_path"; }
+  installer_lock_directory_is_safe() { [ "$1" = "$lock_dir" ]; }
+  installer_lock_has_root_owner() { :; }
+  flock() { :; }
+  if [ "$(uname -s)" = Darwin ]; then
+    installer_lock_device_inode() { stat -f '%i' "$1"; }
+  fi
+
+  printf unsafe >"$target"
+  chmod 0600 "$target"
+  ln -s "$target" "$lock_path"
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer lock followed a symlink" >&2
+    exit 1
+  fi
+  rm -f "$lock_path"
+
+  ln -s "$lock_dir/missing" "$lock_path"
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer lock followed a dangling symlink" >&2
+    exit 1
+  fi
+  rm -f "$lock_path"
+
+  mkdir "$lock_path"
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer accepted a directory as its lock file" >&2
+    exit 1
+  fi
+  rmdir "$lock_path"
+
+  printf unsafe >"$lock_path"
+  chmod 0600 "$lock_path"
+  ln "$lock_path" "$lock_dir/alias"
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer accepted a hardlinked lock file" >&2
+    exit 1
+  fi
+  rm -f "$lock_path" "$lock_dir/alias"
+
+  local interrupted_stage="$lock_dir/.rnl-lock-stage.recover1"
+  printf interrupted >"$interrupted_stage"
+  chmod 0600 "$interrupted_stage"
+  ln "$interrupted_stage" "$lock_path"
+  [ "$(installer_lock_link_count "$lock_path")" -eq 2 ]
+  installer_acquire_lock
+  [ ! -e "$interrupted_stage" ]
+  [ "$(installer_lock_link_count "$lock_path")" -eq 1 ]
+  [ "$(cat "$lock_path")" = interrupted ]
+  installer_close_lock_fd
+  rm -f "$lock_path"
+
+  local ambiguous_stage_one="$lock_dir/.rnl-lock-stage.ambiguous1"
+  local ambiguous_stage_two="$lock_dir/.rnl-lock-stage.ambiguous2"
+  printf ambiguous >"$ambiguous_stage_one"
+  chmod 0600 "$ambiguous_stage_one"
+  ln "$ambiguous_stage_one" "$lock_path"
+  ln "$ambiguous_stage_one" "$ambiguous_stage_two"
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer recovered an ambiguous staging hardlink set" >&2
+    exit 1
+  fi
+  [ -e "$ambiguous_stage_one" ]
+  [ -e "$ambiguous_stage_two" ]
+  [ -e "$lock_path" ]
+  rm -f "$lock_path" "$ambiguous_stage_one" "$ambiguous_stage_two"
+
+  printf unsafe >"$lock_path"
+  chmod 0644 "$lock_path"
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer accepted mode 0644 for its lock file" >&2
+    exit 1
+  fi
+  chmod 0400 "$lock_path"
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer accepted mode 0400 for its lock file" >&2
+    exit 1
+  fi
+  chmod 0660 "$lock_path"
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer accepted a writable lock file" >&2
+    exit 1
+  fi
+  chmod 0600 "$lock_path"
+
+  printf preserved >"$lock_path"
+  (
+    installer_acquire_lock
+    [ "$(cat "$lock_path")" = preserved ]
+  )
+  [ "$(cat "$lock_path")" = preserved ]
+
+  installer_lock_has_root_owner() { return 1; }
+  if installer_acquire_lock >/dev/null 2>&1; then
+    echo "installer accepted a non-root-owned lock file" >&2
+    exit 1
+  fi
+)
+installer_lock_test_file_safety
+
+# shellcheck disable=SC2329
+installer_lock_test_directory_modes() (
+  installer_lock_directory_mode_is_safe /run/lock 775
+  installer_lock_directory_mode_is_safe /run/lock 755
+  installer_lock_directory_mode_is_safe /run/lock 1777
+  if installer_lock_directory_mode_is_safe /run/lock 777; then
+    echo "installer accepted non-sticky other-writable /run/lock" >&2
+    exit 1
+  fi
+)
+installer_lock_test_directory_modes
+
+# shellcheck disable=SC2030,SC2031,SC2329
+if command -v flock >/dev/null 2>&1; then
+  installer_lock_test_real_ofd() (
+    local lock_dir="$TMP_ROOT/installer-lock-ofd"
+    local lock_path="$lock_dir/remnanode-installer.lock"
+    local parent_fd parent_id competing_fd
+    mkdir -m 0700 "$lock_dir"
+    installer_lock_path() { printf '%s' "$lock_path"; }
+    installer_lock_directory_is_safe() { [ "$1" = "$lock_dir" ]; }
+    installer_lock_has_root_owner() { :; }
+
+    installer_acquire_lock
+    parent_fd="$INSTALLER_LOCK_FD"
+    parent_id="$INSTALLER_LOCK_ID"
+    exec {competing_fd}<>"$lock_path"
+    if flock -n "$competing_fd"; then
+      echo "a second installer OFD acquired an already-held lock" >&2
+      exit 1
+    fi
+    if (
+      export RNL_INSTALLER_LOCK_FD="$competing_fd" RNL_INSTALLER_LOCK_ID="$parent_id"
+      INSTALLER_LOCK_FD=""
+      INSTALLER_LOCK_ID=""
+      installer_acquire_lock >/dev/null 2>&1
+    ); then
+      echo "nested installer accepted a different OFD" >&2
+      exit 1
+    fi
+    (
+      export RNL_INSTALLER_LOCK_FD="$parent_fd" RNL_INSTALLER_LOCK_ID="$parent_id"
+      INSTALLER_LOCK_FD=""
+      INSTALLER_LOCK_ID=""
+      installer_acquire_lock
+    )
+    if flock -n "$competing_fd"; then
+      echo "nested installer release dropped the outer OFD lock" >&2
+      exit 1
+    fi
+    exec {competing_fd}>&-
+  )
+  installer_lock_test_real_ofd
+
+  installer_lock_test_outer_exit_releases() {
+    local lock_dir="$TMP_ROOT/installer-lock-release"
+    local lock_path="$lock_dir/remnanode-installer.lock" contender_fd
+    mkdir -m 0700 "$lock_dir"
+    (
+      installer_lock_path() { printf '%s' "$lock_path"; }
+      installer_lock_directory_is_safe() { [ "$1" = "$lock_dir" ]; }
+      installer_lock_has_root_owner() { :; }
+      installer_acquire_lock
+    )
+    exec {contender_fd}<>"$lock_path"
+    flock -n "$contender_fd" || {
+      echo "installer lock remained held after the outer shell exited" >&2
+      return 1
+    }
+    exec {contender_fd}>&-
+  }
+  installer_lock_test_outer_exit_releases
+
+  installer_lock_test_sigkill_releases() {
+    local lock_dir="$TMP_ROOT/installer-lock-sigkill"
+    local lock_path="$lock_dir/remnanode-installer.lock"
+    local ready_file="$lock_dir/ready" release_fifo="$lock_dir/release"
+    local holder_pid contender_fd attempt
+    mkdir -m 0700 "$lock_dir"
+    mkfifo "$release_fifo"
+    (
+      installer_lock_path() { printf '%s' "$lock_path"; }
+      installer_lock_directory_is_safe() { [ "$1" = "$lock_dir" ]; }
+      installer_lock_has_root_owner() { :; }
+      installer_acquire_lock
+      : >"$ready_file"
+      read -r _ <"$release_fifo"
+    ) &
+    holder_pid=$!
+    for attempt in {1..200}; do
+      [ -e "$ready_file" ] && break
+      kill -0 "$holder_pid" 2>/dev/null || break
+      sleep 0.01
+    done
+    if [ ! -e "$ready_file" ]; then
+      kill "$holder_pid" 2>/dev/null || true
+      wait "$holder_pid" 2>/dev/null || true
+      echo "SIGKILL lock holder did not become ready" >&2
+      return 1
+    fi
+    kill -9 "$holder_pid"
+    if wait "$holder_pid" 2>/dev/null; then
+      echo "SIGKILL lock holder exited successfully" >&2
+      return 1
+    fi
+    exec {contender_fd}<>"$lock_path"
+    flock -n "$contender_fd" || {
+      echo "installer lock remained held after SIGKILL" >&2
+      return 1
+    }
+    exec {contender_fd}>&-
+  }
+  installer_lock_test_sigkill_releases
+
+  installer_lock_test_sigkill_preserves_mutation_child() (
+    local lock_dir="$TMP_ROOT/installer-lock-sigkill-child"
+    local lock_path="$lock_dir/remnanode-installer.lock"
+    local child_ready="$lock_dir/child-ready" release_child="$lock_dir/release-child"
+    local child_done="$lock_dir/child-done" child_pid_file="$lock_dir/child-pid"
+    local parent_resumed="$lock_dir/parent-resumed"
+    local holder_pid="" contender_fd="" child_pid="" attempt acquired=0
+    cleanup_sigkill_mutation_test() {
+      : >"$release_child" 2>/dev/null || true
+      if [ -s "$child_pid_file" ]; then
+        child_pid="$(cat "$child_pid_file" 2>/dev/null || true)"
+        [ -z "$child_pid" ] || kill "$child_pid" 2>/dev/null || true
+      fi
+      [ -z "$holder_pid" ] || kill "$holder_pid" 2>/dev/null || true
+      [ -z "$holder_pid" ] || wait "$holder_pid" 2>/dev/null || true
+      if [[ "$contender_fd" =~ ^[0-9]+$ ]]; then
+        exec {contender_fd}>&-
+      fi
+    }
+    trap cleanup_sigkill_mutation_test EXIT
+    mkdir -m 0700 "$lock_dir"
+    (
+      installer_lock_path() { printf '%s' "$lock_path"; }
+      installer_lock_directory_is_safe() { [ "$1" = "$lock_dir" ]; }
+      installer_lock_has_root_owner() { :; }
+      installer_acquire_lock
+      bash -c '
+        ready="$1"
+        release="$2"
+        done_file="$3"
+        pid_file="$4"
+        printf "%s" "$$" >"$pid_file"
+        : >"$ready"
+        while [ ! -e "$release" ]; do sleep 0.01; done
+        : >"$done_file"
+      ' bash "$child_ready" "$release_child" "$child_done" "$child_pid_file"
+      : >"$parent_resumed"
+    ) &
+    holder_pid=$!
+    for attempt in {1..200}; do
+      [ -e "$child_ready" ] && break
+      kill -0 "$holder_pid" 2>/dev/null || break
+      sleep 0.01
+    done
+    if [ ! -e "$child_ready" ]; then
+      echo "mutation child did not become ready" >&2
+      return 1
+    fi
+
+    kill -9 "$holder_pid"
+    if wait "$holder_pid" 2>/dev/null; then
+      echo "mutation parent exited successfully after SIGKILL" >&2
+      return 1
+    fi
+    holder_pid=""
+    [ ! -e "$parent_resumed" ] || {
+      echo "mutation parent resumed after it was killed" >&2
+      return 1
+    }
+    exec {contender_fd}<>"$lock_path"
+    if flock -n "$contender_fd"; then
+      echo "contender acquired the lock while an orphaned mutation child was active" >&2
+      return 1
+    fi
+
+    : >"$release_child"
+    for attempt in {1..200}; do
+      [ -e "$child_done" ] || sleep 0.01
+      if flock -n "$contender_fd"; then
+        acquired=1
+        break
+      fi
+      sleep 0.01
+    done
+    [ "$acquired" -eq 1 ] || {
+      echo "mutation child did not release the inherited installer lock" >&2
+      return 1
+    }
+    [ -e "$child_done" ] || {
+      echo "mutation child released the lock without completing" >&2
+      return 1
+    }
+    exec {contender_fd}>&-
+    contender_fd=""
+    trap - EXIT
+  )
+  installer_lock_test_sigkill_preserves_mutation_child
+fi
+
+installer_lock_test_entrypoint_failure() {
+  local installer_script="$1" function_name="$2"
+  local mutation_marker="$TMP_ROOT/${installer_script}.mutation"
+  # shellcheck disable=SC2034,SC2329
+  (
+    # shellcheck disable=SC1090
+    source <(sed -n "/^${function_name}() {$/,/^}$/p" \
+      "$ROOT_DIR/scripts/$installer_script")
+    DRY_RUN=0
+    ACTION=install
+    ENSURE_SERVICE_STARTED=0
+    ENSURE_SERVICE_ENABLED=0
+    require_root() { :; }
+    require_alpine() { :; }
+    installer_acquire_lock() { return 75; }
+    dispatch_action() { : >"$mutation_marker"; }
+    require_command() { : >"$mutation_marker"; }
+    installed() { : >"$mutation_marker"; }
+    if "$function_name" >/dev/null 2>&1; then
+      echo "$installer_script continued after installer lock failure" >&2
+      exit 1
+    else
+      [ "$?" -eq 75 ]
+    fi
+    [ ! -e "$mutation_marker" ]
+  )
+}
+installer_lock_test_entrypoint_failure install-node.sh main
+installer_lock_test_entrypoint_failure install-node-alpine.sh main
+installer_lock_test_entrypoint_failure upgrade.sh main
+installer_lock_test_entrypoint_failure uninstall.sh main
+installer_lock_test_entrypoint_failure install-xray.sh acquire_xray_installer_lock
+
+lock_mock_path="$TMP_ROOT/lock-mock-path"
+lock_mock_called="$TMP_ROOT/flock-called"
+mkdir "$lock_mock_path"
+# shellcheck disable=SC2016
+printf '%s\n' '#!/bin/sh' ': >"${RNL_FLOCK_CALLED:?}"' 'exit 99' \
+  >"$lock_mock_path/flock"
+chmod 0755 "$lock_mock_path/flock"
+for command_spec in \
+  'install-node.sh --upgrade --yes --dry-run' \
+  'install-node-alpine.sh --upgrade --yes --dry-run' \
+  'upgrade.sh --yes --dry-run' \
+  'install-xray.sh --dry-run' \
+  'uninstall.sh --dry-run' \
+  'install-node.sh --help' \
+  'install-node-alpine.sh --help' \
+  'upgrade.sh --help' \
+  'install-xray.sh --help' \
+  'uninstall.sh --help' \
+  'install-node.sh --version' \
+  'install-node-alpine.sh --version' \
+  'upgrade.sh --version' \
+  'uninstall.sh --version'; do
+  read -r -a command_parts <<<"$command_spec"
+  PATH="$lock_mock_path:$PATH" RNL_FLOCK_CALLED="$lock_mock_called" \
+    bash "$ROOT_DIR/scripts/${command_parts[0]}" "${command_parts[@]:1}" \
+    >/dev/null
+done
+[ ! -e "$lock_mock_called" ] || {
+  echo "a non-changing installer path invoked flock" >&2
+  exit 1
+}
+
+for installer_script in \
+  install-node.sh install-node-alpine.sh upgrade.sh install-xray.sh uninstall.sh; do
+  grep -Fq 'installer_acquire_lock' "$ROOT_DIR/scripts/$installer_script" || {
+    echo "$installer_script does not acquire the shared installer lock" >&2
+    exit 1
+  }
+done
+grep -Fxq '  printf '\''%s'\'' /run/lock/remnanode-installer.lock' \
+  "$ROOT_DIR/scripts/install-env-helpers.sh"
+if grep -ERn 'rm[^#]*remnanode-installer\.lock' "$ROOT_DIR/scripts" >/dev/null; then
+  echo "installer scripts must never unlink the shared lock file" >&2
+  exit 1
+fi
+grep -Fq 'apk add --no-cache curl bash util-linux' "$ROOT_DIR/README.md"
+grep -Fq 'util-linux' "$ROOT_DIR/scripts/install-node-alpine.sh"
+grep -Fq 'util-linux' "$ROOT_DIR/scripts/install-node.sh"
+if grep -Fq 'bootstrap_installer_lock_dependency' \
+  "$ROOT_DIR/scripts/install-node-alpine.sh"; then
+  echo "Alpine installer mutates packages before acquiring the shared lock" >&2
+  exit 1
+fi
+alpine_package_log="$TMP_ROOT/alpine-package-argv"
+(
+  # shellcheck disable=SC1090
+  source <(sed -n '/^install_packages() {$/,/^}/p' \
+    "$ROOT_DIR/scripts/install-node-alpine.sh")
+  DRY_RUN=0
+  # Called indirectly by the extracted install_packages function.
+  # shellcheck disable=SC2329
+  step() { :; }
+  # Called indirectly by the extracted install_packages function.
+  # shellcheck disable=SC2329
+  require_free_bytes() { :; }
+  # Called indirectly by the extracted install_packages function.
+  # shellcheck disable=SC2329
+  apk() { printf 'apk %s\n' "$*" >"$alpine_package_log"; }
+  install_packages
+)
+grep -Fxq \
+  'apk add --no-cache bash curl tar unzip ca-certificates libcap openrc iproute2 nftables util-linux' \
+  "$alpine_package_log"
+for installer_script in install-node.sh install-node-alpine.sh; do
+  grep -Fq 'installer_run_nested bash' "$ROOT_DIR/scripts/$installer_script"
+done
+# shellcheck disable=SC2016
+grep -Fq 'installer_run_nested bash "$support"' "$ROOT_DIR/scripts/upgrade.sh"
+for validator_function in \
+  validate_secret_key read_secret_source_canonical validate_secret_file; do
+  validator_body="$(sed -n "/^${validator_function}() {$/,/^}/p" \
+    "$ROOT_DIR/scripts/install-env-helpers.sh")"
+  grep -Fq 'installer_run_without_lock' <<<"$validator_body"
+done
+for mutation_command in apt-get apk rm; do
+  if grep -ERn \
+    "installer_run_without_lock[[:space:]]+${mutation_command}([[:space:]]|$)" \
+    "$ROOT_DIR/scripts" >/dev/null; then
+    echo "synchronous mutation command closes the shared installer lock: ${mutation_command}" >&2
+    exit 1
+  fi
+done
+if grep -ERn \
+  'installer_run_without_lock[[:space:]]+rc-update[[:space:]]+(add|del)([[:space:]]|$)' \
+  "$ROOT_DIR/scripts" >/dev/null; then
+  echo "synchronous rc-update mutation closes the shared installer lock" >&2
+  exit 1
+fi
+for standalone in install-xray.sh uninstall.sh; do
+  bash -s -- --help <"$ROOT_DIR/scripts/$standalone" >/dev/null
+done
+
+loader_order_fixture="$TMP_ROOT/loader-order"
+mkdir "$loader_order_fixture"
+sed '/^main "\$@"$/d' "$ROOT_DIR/scripts/uninstall.sh" \
+  >"$loader_order_fixture/uninstall.sh"
+cp "$ROOT_DIR/scripts/install-env-helpers.sh" \
+  "$loader_order_fixture/install-env-helpers.sh"
+bash -c '
+  set -Eeuo pipefail
+  script="$1"
+  source "$script" --dry-run
+  cleanup_body="$(declare -f cleanup_runtime)"
+  manager_body="$(declare -f service_manager_active)"
+  grep -Fq "node.env.bak." <<<"$cleanup_body"
+  grep -Fq "uninstall_service_manager_state" <<<"$manager_body"
+  ! grep -Fq "remnanode_service_platform" <<<"$manager_body"
+' bash "$loader_order_fixture/uninstall.sh"
+read -r xray_load_line xray_collision_line < <(
+  awk '
+    /^  load_installer_helpers$/ && !load { load = NR }
+    /^file_size_bytes\(\)/ && !collision { collision = NR }
+    END { print load + 0, collision + 0 }
+  ' "$ROOT_DIR/scripts/install-xray.sh"
+)
+if [ "$xray_load_line" -eq 0 ] || [ "$xray_collision_line" -eq 0 ] \
+  || [ "$xray_load_line" -ge "$xray_collision_line" ]; then
+  echo "install-xray loads shared helpers after defining colliding functions" >&2
+  exit 1
+fi
+
 if RNL_TMP_ROOT=/ ensure_installer_temp_root >/dev/null 2>&1; then
   echo "installer temp root accepted /" >&2
   exit 1
@@ -399,7 +994,9 @@ printf geo-data >"$geo_source"
 (
   # shellcheck disable=SC2030
   GEO_DIR="$TMP_ROOT/geo-target"
+  # shellcheck disable=SC2030
   GEO_ZAPRET_FILE="$geo_source"
+  # shellcheck disable=SC2030
   IP_ZAPRET_FILE=""
   install() {
     local arg target=""
@@ -489,6 +1086,7 @@ fi
 
 curl_called="$TMP_ROOT/curl-called"
 if (
+  # shellcheck disable=SC2329
   curl() { : >"$curl_called"; }
   download_https_file http://example.invalid/plaintext "$TMP_ROOT/plaintext-download" 2 2>/dev/null
 ); then
@@ -507,6 +1105,7 @@ if download_https_file https://example.invalid/huge-limit "$TMP_ROOT/huge-limit-
 fi
 
 if (
+  # shellcheck disable=SC2329
   curl() {
     printf four
   }
@@ -518,6 +1117,7 @@ fi
 [ ! -e "$TMP_ROOT/oversized-download" ]
 
 (
+  # shellcheck disable=SC2329
   curl() { printf ok; }
   download_https_file https://example.invalid/exact "$TMP_ROOT/exact-download" 2
 )
@@ -604,6 +1204,7 @@ if command -v zip >/dev/null 2>&1; then
       fi
       [ "$(cat "$xray_paths/real-parent/rw-core")" = old ]
     )
+    # shellcheck disable=SC2329
     curl() { printf four; }
     if download_file https://example.invalid/oversized "$TMP_ROOT/xray-oversized-download" 2 2>/dev/null; then
       echo "rw-core download hard limit was not enforced" >&2
@@ -1157,6 +1758,7 @@ uninstall_test_manager_error_preserves_files() {
     DRY_RUN=0
     is_alpine() { return 1; }
     require_root() { :; }
+    installer_acquire_lock() { :; }
     installed() { :; }
     interactive_options() { :; }
     confirm_uninstall() { :; }
@@ -1302,6 +1904,7 @@ mkdir -p "$installed_prefix"
   BIN_NAME=remnanode-lite
   NODE_ENV=/etc/remnanode/node.env
   require_root() { :; }
+  installer_acquire_lock() { :; }
   require_command() { :; }
   is_alpine() { return 1; }
   service_is_active() { return 0; }
@@ -1869,6 +2472,7 @@ upgrade_transaction_test_probe_error_fails_closed() {
     PREFIX="$fixture/bin"
     BIN_NAME=remnanode-lite
     require_root() { :; }
+    installer_acquire_lock() { :; }
     require_command() { :; }
     is_alpine() { return 1; }
     confirm_upgrade() { :; }
