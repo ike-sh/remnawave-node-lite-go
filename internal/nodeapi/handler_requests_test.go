@@ -55,6 +55,25 @@ func TestAddUserAcceptsEveryDiscriminatedUnionVariant(t *testing.T) {
 	}
 }
 
+func TestHandlerUUIDsMatchOfficialZodAcceptance(t *testing.T) {
+	t.Parallel()
+
+	body := `{
+		"data":[],
+		"hashData":{
+			"vlessUuid":"00000000-0000-0000-0000-000000000000",
+			"prevVlessUuid":"ffffffff-ffff-ffff-ffff-ffffffffffff"
+		}
+	}`
+	if validation := decodeHandlerRequest("/node/handler/add-user", body); validation != nil {
+		t.Fatalf("DTO rejected UUIDs accepted by official Zod: %+v", validation)
+	}
+	route, _ := contract.FindRouteByPath("/node/handler/add-user")
+	if err := route.Request.ValidateJSON([]byte(body)); err != nil {
+		t.Fatalf("contract rejected UUIDs accepted by official Zod: %v", err)
+	}
+}
+
 func TestHandlerRequestsRejectContractViolations(t *testing.T) {
 	t.Parallel()
 
@@ -69,6 +88,7 @@ func TestHandlerRequestsRejectContractViolations(t *testing.T) {
 		{name: "add user invalid cipher", path: "/node/handler/add-user", body: `{"data":[{"type":"shadowsocks","tag":"in","username":"u","password":"p","cipherType":3,"ivCheck":false}],"hashData":{"vlessUuid":"00000000-0000-4000-8000-000000000001"}}`},
 		{name: "add user missing iv check", path: "/node/handler/add-user", body: `{"data":[{"type":"shadowsocks","tag":"in","username":"u","password":"p","cipherType":5}],"hashData":{"vlessUuid":"00000000-0000-4000-8000-000000000001"}}`},
 		{name: "add user bad hash UUID", path: "/node/handler/add-user", body: `{"data":[],"hashData":{"vlessUuid":"bad"}}`},
+		{name: "add user short UUID segment", path: "/node/handler/add-user", body: `{"data":[],"hashData":{"vlessUuid":"00000000-0000-0000-0000-00000000000"}}`},
 		{name: "add user null previous UUID", path: "/node/handler/add-user", body: `{"data":[],"hashData":{"vlessUuid":"00000000-0000-4000-8000-000000000001","prevVlessUuid":null}}`},
 		{name: "remove user bad UUID", path: "/node/handler/remove-user", body: `{"username":"u","hashData":{"vlessUuid":"bad"}}`},
 		{name: "add users bad nested UUID", path: "/node/handler/add-users", body: `{"affectedInboundTags":[],"users":[{"inboundData":[],"userData":{"userId":"u","hashUuid":"bad","vlessUuid":"bad","trojanPassword":"","ssPassword":""}}]}`},

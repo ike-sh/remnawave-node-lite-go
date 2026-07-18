@@ -236,7 +236,7 @@ func (s *Schema) validateString(value any, path string) error {
 			return fmt.Errorf("%s: %q is not a UUID", path, stringValue)
 		}
 	case "ip":
-		if net.ParseIP(stringValue) == nil {
+		if !validIP(stringValue) {
 			return fmt.Errorf("%s: %q is not an IP address", path, stringValue)
 		}
 	case "date-time":
@@ -287,8 +287,18 @@ func validDateTime(value string) bool {
 }
 
 var uuidPattern = regexp.MustCompile(
-	`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
+	`^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$`,
 )
+
+// Zod 3.25.76 package/v3/types.js permits zones only through its
+// fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,} IPv6 alternation.
+var scopedIPv6Pattern = regexp.MustCompile(
+	`^fe80:(?::[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}$`,
+)
+
+func validIP(value string) bool {
+	return net.ParseIP(value) != nil || scopedIPv6Pattern.MatchString(value)
+}
 
 func schemaKindName(schema *Schema) string {
 	if len(schema.oneOf) != 0 {

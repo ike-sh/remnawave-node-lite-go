@@ -49,6 +49,45 @@ func TestPluginSyncDoesNotApplyControlArrayLimitToOpaqueConfig(t *testing.T) {
 	}
 }
 
+func TestPluginFormatsMatchOfficialZodAcceptance(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "nil UUID",
+			path: "/node/plugin/sync",
+			body: `{"plugin":{"config":{},"uuid":"00000000-0000-0000-0000-000000000000","name":"p"}}`,
+		},
+		{
+			name: "block scoped IPv6",
+			path: "/node/plugin/nftables/block-ips",
+			body: `{"ips":[{"ip":"fe80::1%eth0","timeout":60}]}`,
+		},
+		{
+			name: "unblock scoped IPv6",
+			path: "/node/plugin/nftables/unblock-ips",
+			body: `{"ips":["fe80::1%eth0"]}`,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if validation := decodePluginRequest(test.path, test.body); validation != nil {
+				t.Fatalf("DTO rejected official request: %+v", validation)
+			}
+			route, _ := contract.FindRouteByPath(test.path)
+			if err := route.Request.ValidateJSON([]byte(test.body)); err != nil {
+				t.Fatalf("contract rejected official request: %v", err)
+			}
+		})
+	}
+}
+
 func TestPluginRequestsRejectContractViolations(t *testing.T) {
 	t.Parallel()
 
@@ -61,6 +100,9 @@ func TestPluginRequestsRejectContractViolations(t *testing.T) {
 		{name: "sync bad UUID", path: "/node/plugin/sync", body: `{"plugin":{"config":{},"uuid":"bad","name":"p"}}`},
 		{name: "sync missing name", path: "/node/plugin/sync", body: `{"plugin":{"config":{},"uuid":"00000000-0000-4000-8000-000000000001"}}`},
 		{name: "block invalid IP", path: "/node/plugin/nftables/block-ips", body: `{"ips":[{"ip":"bad","timeout":60}]}`},
+		{name: "block scoped global IPv6", path: "/node/plugin/nftables/block-ips", body: `{"ips":[{"ip":"2001:db8::1%eth0","timeout":60}]}`},
+		{name: "block uppercase scoped prefix", path: "/node/plugin/nftables/block-ips", body: `{"ips":[{"ip":"FE80::1%eth0","timeout":60}]}`},
+		{name: "block invalid zone", path: "/node/plugin/nftables/block-ips", body: `{"ips":[{"ip":"fe80::1%eth-0","timeout":60}]}`},
 		{name: "block missing timeout", path: "/node/plugin/nftables/block-ips", body: `{"ips":[{"ip":"203.0.113.10"}]}`},
 		{name: "unblock invalid IP", path: "/node/plugin/nftables/unblock-ips", body: `{"ips":["bad"]}`},
 	}
