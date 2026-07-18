@@ -73,7 +73,7 @@ func prepareNodeJSONBody(w http.ResponseWriter, r *http.Request) (parseJSON, sup
 			Reader: transform.NewReader(r.Body, decoder),
 			Closer: r.Body,
 		}
-		r.Body = http.MaxBytesReader(w, transcoded, bodylimit.MaxBytesLimit())
+		r.Body = http.MaxBytesReader(w, transcoded, bodylimit.RequestLimit(r))
 		r.ContentLength = -1
 	}
 	return true, true

@@ -120,6 +120,66 @@ func TestNodeTransportReturns413AtEveryBodyExpansionLayer(t *testing.T) {
 			if response.Code != http.StatusRequestEntityTooLarge || calls.Load() != 0 {
 				t.Fatalf("response = %d calls=%d body=%s", response.Code, calls.Load(), response.Body.String())
 			}
+			if retryAfter := response.Header().Get("Retry-After"); retryAfter != "" {
+				t.Fatalf("413 response unexpectedly marked retryable: Retry-After=%q", retryAfter)
+			}
+		})
+	}
+}
+
+func TestSmallRouteBudgetAppliesAtEveryBodyExpansionLayer(t *testing.T) {
+	if err := bodylimit.Configure(false, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	largeUTF8 := `{"reset":false,"ignored":"` + strings.Repeat("x", 128<<10) + `"}`
+	largeTranscoded := `{"reset":false,"ignored":"` + strings.Repeat("汉", 30_000) + `"}`
+	utf16Body, _, err := transform.Bytes(
+		unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM).NewEncoder(),
+		[]byte(largeTranscoded),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoder, err := zstd.NewWriter(nil, zstd.WithWindowSize(128<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zstdBody := encoder.EncodeAll([]byte(largeUTF8), nil)
+	encoder.Close()
+
+	for _, test := range []struct {
+		name            string
+		body            []byte
+		contentEncoding string
+		charset         string
+	}{
+		{name: "identity", body: []byte(largeUTF8)},
+		{name: "decompressed", body: zstdBody, contentEncoding: "zstd"},
+		{name: "transcoded", body: utf16Body, charset: "utf-16le"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int64
+			server := &Server{statsService: stats.NewService(countingStatsProvider{calls: &calls}, nil)}
+			handler := withNodeRequestBodyLimit(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes))))
+			request := httptest.NewRequest(http.MethodPost, "/node/stats/get-users-stats", bytes.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			if test.contentEncoding != "" {
+				request.Header.Set("Content-Encoding", test.contentEncoding)
+			}
+			if test.charset != "" {
+				request.Header.Set("Content-Type", "application/json; charset="+test.charset)
+			}
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusRequestEntityTooLarge || calls.Load() != 0 {
+				t.Fatalf("response = %d calls=%d body=%s", response.Code, calls.Load(), response.Body.String())
+			}
+			if retryAfter := response.Header().Get("Retry-After"); retryAfter != "" {
+				t.Fatalf("route-budget 413 unexpectedly marked retryable: Retry-After=%q", retryAfter)
+			}
 		})
 	}
 }
@@ -129,7 +189,7 @@ func TestUnknownContentEncodingPrecedesNoDTOHandler(t *testing.T) {
 
 	var calls atomic.Int64
 	server := &Server{statsService: stats.NewService(countingStatsProvider{calls: &calls}, nil)}
-	handler := bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes)))
+	handler := withNodeRequestBodyLimit(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes))))
 	request := httptest.NewRequest(http.MethodGet, "/node/stats/get-system-stats", strings.NewReader(`{}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Content-Encoding", "snappy")
@@ -152,7 +212,7 @@ func TestDTOParsingAcceptsDecompressedBodyWithUnknownLength(t *testing.T) {
 
 	var calls atomic.Int64
 	server := &Server{statsService: stats.NewService(countingStatsProvider{calls: &calls}, nil)}
-	handler := bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes)))
+	handler := withNodeRequestBodyLimit(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes))))
 	request := newJSONRequest(
 		http.MethodPost,
 		"/node/stats/get-users-stats",

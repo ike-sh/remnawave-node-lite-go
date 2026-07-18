@@ -13,6 +13,20 @@ type NodeRoute struct {
 
 type nodeRouteID uint8
 
+type nodeRequestBodyClass uint8
+
+const (
+	nodeRequestBodySmall nodeRequestBodyClass = iota + 1
+	nodeRequestBodyMedium
+	nodeRequestBodyBulk
+)
+
+const (
+	smallRequestBodyBytes  int64 = 64 << 10
+	mediumRequestBodyBytes int64 = 256 << 10
+	bulkRequestBodyBytes   int64 = 16 << 20
+)
+
 const (
 	routeXrayStart nodeRouteID = iota + 1
 	routeXrayStop
@@ -128,7 +142,7 @@ func nodeRouteHasRequestDTO(route nodeRouteID) bool {
 	}
 }
 
-func nodeRouteHasHeavyRequestBody(route nodeRouteID) bool {
+func nodeRouteRequestBodyClass(route nodeRouteID) nodeRequestBodyClass {
 	switch route {
 	case routeXrayStart,
 		routeHandlerAddUsers,
@@ -136,10 +150,47 @@ func nodeRouteHasHeavyRequestBody(route nodeRouteID) bool {
 		routeHandlerDropUsersConnections,
 		routeHandlerDropIPs,
 		routePluginSync:
-		return true
+		return nodeRequestBodyBulk
+	case routeHandlerAddUser,
+		routePluginBlockIPs,
+		routePluginUnblockIPs:
+		return nodeRequestBodyMedium
+	case routeXrayStop,
+		routeXrayHealthcheck,
+		routeStatsGetUserOnlineStatus,
+		routeStatsGetUsersStats,
+		routeStatsGetSystemStats,
+		routeStatsGetInboundStats,
+		routeStatsGetOutboundStats,
+		routeStatsGetAllOutboundsStats,
+		routeStatsGetAllInboundsStats,
+		routeStatsGetCombinedStats,
+		routeStatsGetUserIPList,
+		routeStatsGetUsersIPList,
+		routeHandlerRemoveUser,
+		routeHandlerGetInboundUsersCount,
+		routeHandlerGetInboundUsers,
+		routePluginCollectTorrentReports,
+		routePluginRecreateTables:
+		return nodeRequestBodySmall
 	default:
-		return false
+		return nodeRequestBodySmall
 	}
+}
+
+func nodeRouteRequestBodyLimit(route nodeRouteID) int64 {
+	switch nodeRouteRequestBodyClass(route) {
+	case nodeRequestBodyMedium:
+		return mediumRequestBodyBytes
+	case nodeRequestBodyBulk:
+		return bulkRequestBodyBytes
+	default:
+		return smallRequestBodyBytes
+	}
+}
+
+func nodeRouteHasBulkRequestBody(route nodeRouteID) bool {
+	return nodeRouteRequestBodyClass(route) == nodeRequestBodyBulk
 }
 
 func nodeRouteIsReadOnly(route nodeRouteID) bool {

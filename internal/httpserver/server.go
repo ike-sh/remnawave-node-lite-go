@@ -43,7 +43,7 @@ const (
 	defaultMaxHandlers    = 32
 	lowMemoryConnections  = 16
 	lowMemoryHandlers     = 4
-	maxHeavyHandlers      = 1
+	maxBulkHandlers       = 1
 	maxRequestDuration    = 5 * time.Minute
 )
 
@@ -77,10 +77,10 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 	}
 
 	maxConnections, maxHandlers := serverCapacity(cfg.LowMemory)
-	nodeRoutes := bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes)))
+	nodeRoutes := withNodeRequestBodyLimit(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes))))
 	limited := limitActiveHandlers(maxHandlers, nodeRoutes)
-	heavyLimited := limitHeavyNodeRoutes(maxHeavyHandlers, limited)
-	protected := requireJWT(validator, requireKnownNodeRoute(withRequestTimeout(maxRequestDuration, heavyLimited)))
+	bulkLimited := limitBulkNodeRoutes(maxBulkHandlers, limited)
+	protected := requireJWT(validator, requireKnownNodeRoute(withRequestTimeout(maxRequestDuration, bulkLimited)))
 
 	server.maxConnections = maxConnections
 	server.httpServer = &http.Server{
@@ -127,6 +127,16 @@ func requireKnownNodeRoute(next http.Handler) http.Handler {
 	})
 }
 
+func withNodeRequestBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		route, known := lookupNodeRoute(r.Method, r.URL.Path)
+		if !known {
+			route = 0
+		}
+		next.ServeHTTP(w, bodylimit.WithRequestLimit(r, nodeRouteRequestBodyLimit(route)))
+	})
+}
+
 func (s *Server) ListenAndServeTLS(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -166,11 +176,13 @@ func limitActiveHandlers(maxActive int, next http.Handler) http.Handler {
 		readOnly := known && nodeRouteIsReadOnly(route)
 		if readOnly {
 			if !acquireRequestSlot(r.Context(), readSlots) {
+				handleRequestWaitFailure(w, r)
 				return
 			}
 			defer func() { <-readSlots }()
 		}
 		if !acquireRequestSlot(r.Context(), totalSlots) {
+			handleRequestWaitFailure(w, r)
 			return
 		}
 		defer func() { <-totalSlots }()
@@ -178,24 +190,23 @@ func limitActiveHandlers(maxActive int, next http.Handler) http.Handler {
 	})
 }
 
-func limitHeavyNodeRoutes(maxActive int, next http.Handler) http.Handler {
+func limitBulkNodeRoutes(maxActive int, next http.Handler) http.Handler {
 	if maxActive <= 0 {
 		maxActive = 1
 	}
 	slots := make(chan struct{}, maxActive)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		route, known := lookupNodeRoute(r.Method, r.URL.Path)
-		if !known || !nodeRouteHasHeavyRequestBody(route) {
+		if !known || !nodeRouteHasBulkRequestBody(route) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		select {
-		case slots <- struct{}{}:
-			defer func() { <-slots }()
-			next.ServeHTTP(w, r)
-		case <-r.Context().Done():
+		if !acquireRequestSlot(r.Context(), slots) {
+			handleRequestWaitFailure(w, r)
 			return
 		}
+		defer func() { <-slots }()
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -212,11 +223,68 @@ func acquireRequestSlot(ctx context.Context, slots chan struct{}) bool {
 	}
 }
 
+func handleRequestWaitFailure(w http.ResponseWriter, r *http.Request) {
+	if errors.Is(r.Context().Err(), context.Canceled) {
+		panic(http.ErrAbortHandler)
+	}
+	writeRetryableServiceUnavailable(w, r)
+}
+
+func writeRetryableServiceUnavailable(w http.ResponseWriter, r *http.Request) {
+	r.Close = true
+	w.Header().Set("Connection", "close")
+	w.Header().Set("Retry-After", "1")
+	writeJSON(w, http.StatusServiceUnavailable, struct {
+		StatusCode int    `json:"statusCode"`
+		Message    string `json:"message"`
+		Error      string `json:"error"`
+	}{
+		StatusCode: http.StatusServiceUnavailable,
+		Message:    "request capacity unavailable",
+		Error:      http.StatusText(http.StatusServiceUnavailable),
+	})
+}
+
+type responseWriteTracker struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *responseWriteTracker) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *responseWriteTracker) WriteHeader(status int) {
+	if w.wrote {
+		return
+	}
+	w.wrote = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *responseWriteTracker) Write(body []byte) (int, error) {
+	if !w.wrote {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+
 func withRequestTimeout(timeout time.Duration, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		parentContext := r.Context()
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
-		next.ServeHTTP(w, r.WithContext(ctx))
+		tracked := &responseWriteTracker{ResponseWriter: w}
+		next.ServeHTTP(tracked, r.WithContext(ctx))
+		if tracked.wrote {
+			return
+		}
+		if errors.Is(parentContext.Err(), context.Canceled) {
+			panic(http.ErrAbortHandler)
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			writeRetryableServiceUnavailable(tracked, r)
+		}
 	})
 }
 
@@ -261,7 +329,8 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, envelope[xray.HealthResponse]{Response: s.manager.Health()})
 	case routeXrayStop:
 		if !s.acquireXrayLifecycle(r.Context()) {
-			panic(http.ErrAbortHandler)
+			handleRequestWaitFailure(w, r)
+			return
 		}
 		defer s.releaseXrayLifecycle()
 		response := s.manager.Stop()

@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -128,7 +129,7 @@ func TestLimitActiveHandlersWaitsForCapacity(t *testing.T) {
 	}
 }
 
-func TestHeavyRouteLimiterWaitsBeforeReadingBody(t *testing.T) {
+func TestBulkRouteLimiterWaitsBeforeReadingBody(t *testing.T) {
 	t.Parallel()
 
 	entered := make(chan int, 2)
@@ -136,7 +137,7 @@ func TestHeavyRouteLimiterWaitsBeforeReadingBody(t *testing.T) {
 	var releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 	var calls atomic.Int64
-	handler := limitHeavyNodeRoutes(1, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	handler := limitBulkNodeRoutes(1, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		call := int(calls.Add(1))
 		entered <- call
 		if call == 1 {
@@ -246,12 +247,25 @@ func TestHandlerAdmissionStopsWaitingWhenRequestIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	request := httptest.NewRequest(http.MethodPost, "/node/handler/add-user", nil).WithContext(ctx)
-	done := make(chan struct{})
+	response := httptest.NewRecorder()
+	done := make(chan any, 1)
 	go func() {
-		handler.ServeHTTP(httptest.NewRecorder(), request)
-		close(done)
+		var panicValue any
+		defer func() { done <- panicValue }()
+		defer func() { panicValue = recover() }()
+		handler.ServeHTTP(response, request)
 	}()
-	awaitTestSignal(t, done, "canceled admission")
+	select {
+	case panicValue := <-done:
+		if panicValue != http.ErrAbortHandler {
+			t.Fatalf("canceled admission panic = %#v, want http.ErrAbortHandler", panicValue)
+		}
+		if response.Body.Len() != 0 {
+			t.Fatalf("canceled admission wrote response %q", response.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled admission")
+	}
 }
 
 func signalForCall(c <-chan int, want int) <-chan struct{} {
@@ -272,17 +286,149 @@ func TestLowMemoryServerCapacityIsConservative(t *testing.T) {
 	}
 }
 
-func TestRequestTimeoutCancelsHandlerContext(t *testing.T) {
+func TestRequestTimeoutReturnsRetryableServiceUnavailable(t *testing.T) {
 	t.Parallel()
-	handler := withRequestTimeout(20*time.Millisecond, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := withRequestTimeout(20*time.Millisecond, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
-		w.WriteHeader(http.StatusNoContent)
 	}))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("status = %d", response.Code)
+	assertRetryableServiceUnavailable(t, response)
+}
+
+func TestResponseWriteTrackerHandlesImplicitAndDuplicateStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fresh recorder is still unwritten", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		tracked := &responseWriteTracker{ResponseWriter: response}
+		if tracked.wrote {
+			t.Fatal("fresh response was marked written")
+		}
+	})
+
+	t.Run("implicit success", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		tracked := &responseWriteTracker{ResponseWriter: response}
+		if _, err := tracked.Write([]byte("ok")); err != nil {
+			t.Fatal(err)
+		}
+		if !tracked.wrote || response.Code != http.StatusOK || response.Body.String() != "ok" {
+			t.Fatalf("tracked=%v status=%d body=%q", tracked.wrote, response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("first explicit status wins", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		tracked := &responseWriteTracker{ResponseWriter: response}
+		tracked.WriteHeader(http.StatusNoContent)
+		tracked.WriteHeader(http.StatusInternalServerError)
+		if !tracked.wrote || response.Code != http.StatusNoContent {
+			t.Fatalf("tracked=%v status=%d", tracked.wrote, response.Code)
+		}
+	})
+}
+
+func TestAdmissionDeadlinesReturnRetryableServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		build         func(http.Handler) http.Handler
+		occupyingPath string
+		waitingPath   string
+	}{
+		{
+			name: "active handler gate",
+			build: func(next http.Handler) http.Handler {
+				return limitActiveHandlers(1, next)
+			},
+			occupyingPath: "/node/xray/healthcheck",
+			waitingPath:   "/node/handler/add-user",
+		},
+		{
+			name: "bulk body gate",
+			build: func(next http.Handler) http.Handler {
+				return limitBulkNodeRoutes(1, next)
+			},
+			occupyingPath: "/node/xray/start",
+			waitingPath:   "/node/plugin/sync",
+		},
 	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			entered := make(chan struct{}, 1)
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+			limited := test.build(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				entered <- struct{}{}
+				<-release
+			}))
+
+			firstDone := make(chan struct{})
+			go func() {
+				limited.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, test.occupyingPath, nil))
+				close(firstDone)
+			}()
+			awaitTestSignal(t, entered, "occupying request")
+
+			response := httptest.NewRecorder()
+			withRequestTimeout(20*time.Millisecond, limited).ServeHTTP(
+				response,
+				httptest.NewRequest(http.MethodPost, test.waitingPath, nil),
+			)
+			assertRetryableServiceUnavailable(t, response)
+			select {
+			case <-entered:
+				t.Fatal("timed-out request reached downstream handler")
+			default:
+			}
+
+			releaseOnce.Do(func() { close(release) })
+			awaitTestSignal(t, firstDone, "occupying request completion")
+		})
+	}
+}
+
+func assertRetryableServiceUnavailable(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "1" {
+		t.Fatalf("response = %d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	if response.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("Content-Type = %q", response.Header().Get("Content-Type"))
+	}
+	var body struct {
+		StatusCode int    `json:"statusCode"`
+		Message    string `json:"message"`
+		Error      string `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body: %v; body=%s", err, response.Body.String())
+	}
+	if body.StatusCode != http.StatusServiceUnavailable || body.Message == "" || body.Error != http.StatusText(http.StatusServiceUnavailable) {
+		t.Fatalf("response body = %+v", body)
+	}
+}
+
+func TestLifecycleGateDeadlineReturnsRetryableServiceUnavailable(t *testing.T) {
+	t.Parallel()
+
+	server := &Server{}
+	if !server.acquireXrayLifecycle(context.Background()) {
+		t.Fatal("failed to occupy lifecycle gate")
+	}
+	defer server.releaseXrayLifecycle()
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, "/node/xray/stop", nil).WithContext(ctx)
+	response := httptest.NewRecorder()
+	server.handleNodeRoutes(response, request)
+	assertRetryableServiceUnavailable(t, response)
 }
 
 func TestUnknownRouteAbortsBeforeSaturatedLimiter(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -108,6 +109,100 @@ func TestConfiguredBodyLimitValidation(t *testing.T) {
 	}
 }
 
+func TestLowMemoryRejectsConfiguredLimitAboveMemoryEnvelope(t *testing.T) {
+	if err := Configure(false, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = Configure(false, 0) })
+
+	if err := Configure(true, lowMemoryMaxBytes>>20); err != nil {
+		t.Fatalf("configure low-memory ceiling: %v", err)
+	}
+	if err := Configure(true, (lowMemoryMaxBytes>>20)+1); err == nil {
+		t.Fatal("LOW_MEMORY=1 accepted BODY_LIMIT_MB above 16 MiB")
+	}
+	if got := MaxBytesLimit(); got != lowMemoryMaxBytes {
+		t.Fatalf("invalid configuration changed limit to %d", got)
+	}
+}
+
+func TestRequestLimitUsesSmallerRouteOrConfiguredCeiling(t *testing.T) {
+	previous := maxBytes.Swap(128 << 10)
+	t.Cleanup(func() { maxBytes.Store(previous) })
+
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	for _, test := range []struct {
+		name       string
+		routeLimit int64
+		want       int64
+	}{
+		{name: "route is smaller", routeLimit: 64 << 10, want: 64 << 10},
+		{name: "configured ceiling is smaller", routeLimit: 256 << 10, want: 128 << 10},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			limited := WithRequestLimit(request, test.routeLimit)
+			if got := RequestLimit(limited); got != test.want {
+				t.Fatalf("RequestLimit() = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestZstdWindowLimitTracksRequestBudget(t *testing.T) {
+	for _, test := range []struct {
+		requestLimit int64
+		want         int64
+	}{
+		{requestLimit: 64 << 10, want: 64 << 10},
+		{requestLimit: 256 << 10, want: 256 << 10},
+		{requestLimit: 16 << 20, want: 16 << 20},
+		{requestLimit: 64 << 20, want: maxZstdWindowBytes},
+	} {
+		if got := zstdWindowLimit(test.requestLimit); got != test.want {
+			t.Errorf("zstdWindowLimit(%d) = %d, want %d", test.requestLimit, got, test.want)
+		}
+	}
+}
+
+func TestZstdDecoderAcceptsLegal64KiBWindow(t *testing.T) {
+	original := bytes.Repeat([]byte("a"), 64<<10)
+	encoder, err := zstd.NewWriter(
+		nil,
+		zstd.WithWindowSize(64<<10),
+		zstd.WithSingleSegment(false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := encoder.EncodeAll(original, nil)
+	encoder.Close()
+	var header zstd.Header
+	if err := header.Decode(compressed); err != nil {
+		t.Fatalf("decode zstd header: %v", err)
+	}
+	if header.SingleSegment || header.WindowSize != 64<<10 {
+		t.Fatalf("zstd frame singleSegment=%v window=%d, want false/65536", header.SingleSegment, header.WindowSize)
+	}
+
+	var got []byte
+	handler := DecompressMiddleware(LimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got, err = io.ReadAll(r.Body)
+	})))
+	request := WithRequestLimit(
+		httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(compressed)),
+		64<<10,
+	)
+	request.Header.Set("Content-Encoding", "zstd")
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+
+	if err != nil {
+		t.Fatalf("decode legal 64 KiB window: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("decoded body = %q, want %q", got, original)
+	}
+}
+
 func TestDecoderSlotsAreBoundedAndCancelable(t *testing.T) {
 	releaseFirst, err := acquireDecoder(context.Background())
 	if err != nil {
@@ -153,9 +248,9 @@ func TestDecompressMiddlewareRejectsUnknownEncoding(t *testing.T) {
 }
 
 func TestDecompressMiddlewareBoundsDecodedBytesForEveryEncoding(t *testing.T) {
-	previous := maxBytes.Swap(64)
+	previous := maxBytes.Swap(64 << 10)
 	t.Cleanup(func() { maxBytes.Store(previous) })
-	original := bytes.Repeat([]byte("a"), 4<<10)
+	original := bytes.Repeat([]byte("a"), 128<<10)
 
 	for _, encoding := range []string{"gzip", "deflate", "br", "zstd"} {
 		t.Run(encoding, func(t *testing.T) {
@@ -173,6 +268,73 @@ func TestDecompressMiddlewareBoundsDecodedBytesForEveryEncoding(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecompressMiddlewareReturnsRetryable503OnDeadline(t *testing.T) {
+	releaseFirst, err := acquireDecoder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseFirst()
+	releaseSecond, err := acquireDecoder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseSecond()
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	request := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(encodeBody(t, "gzip", []byte("body")))).WithContext(ctx)
+	request.Header.Set("Content-Encoding", "gzip")
+	response := httptest.NewRecorder()
+	DecompressMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("deadline-exceeded request reached downstream handler")
+	})).ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "1" {
+		t.Fatalf("response = %d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	var body struct {
+		StatusCode int    `json:"statusCode"`
+		Message    string `json:"message"`
+		Error      string `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.StatusCode != http.StatusServiceUnavailable || body.Error != http.StatusText(http.StatusServiceUnavailable) {
+		t.Fatalf("response body = %+v", body)
+	}
+}
+
+func TestDecompressMiddlewareAbortsSilentlyOnClientCancellation(t *testing.T) {
+	releaseFirst, err := acquireDecoder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseFirst()
+	releaseSecond, err := acquireDecoder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseSecond()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(encodeBody(t, "gzip", []byte("body")))).WithContext(ctx)
+	request.Header.Set("Content-Encoding", "gzip")
+	response := httptest.NewRecorder()
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("panic = %#v, want http.ErrAbortHandler", recovered)
+		}
+		if response.Body.Len() != 0 {
+			t.Fatalf("client cancellation wrote response %q", response.Body.String())
+		}
+	}()
+	DecompressMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("canceled request reached downstream handler")
+	})).ServeHTTP(response, request)
 }
 
 func TestDecompressMiddlewareWaitsForDecoderCapacity(t *testing.T) {

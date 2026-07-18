@@ -22,7 +22,8 @@ func (s *Server) handlePluginSync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !s.acquireXrayLifecycle(r.Context()) {
-		panic(http.ErrAbortHandler)
+		handleRequestWaitFailure(w, r)
+		return
 	}
 	defer s.releaseXrayLifecycle()
 	writeNodeResponse(w, s.pluginService.SyncContext(r.Context(), command))
@@ -54,7 +55,8 @@ func (s *Server) handlePluginUnblockIPs(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handlePluginRecreateTables(w http.ResponseWriter, r *http.Request) {
 	if !s.acquireXrayLifecycle(r.Context()) {
-		panic(http.ErrAbortHandler)
+		handleRequestWaitFailure(w, r)
+		return
 	}
 	defer s.releaseXrayLifecycle()
 	writeNodeResponse(w, s.pluginService.RecreateTablesContext(r.Context()))
