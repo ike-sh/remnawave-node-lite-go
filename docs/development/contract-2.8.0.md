@@ -56,7 +56,7 @@ Go manager 使用单一显式状态，而不是多个可形成非法组合的布
 
 M4 以官方 `plugin.service.ts`、`nft.service.ts`、`plugin-state.service.ts`、torrent blocker state/webhook handler，以及 `@remnawave/node-plugins@0.4.5` 为行为依据。每次变更先从已校验配置构建不可变 plan，一次完成 shared list/ASN 展开、connection-drop whitelist、torrent effective state 和 firewall plan；随后严格执行 `firewall apply -> Xray reconcile -> state commit`。firewall 或 Xray 失败时不发布新状态，并尽力重放上一份 firewall plan，使同一 Panel 请求可以安全重试。
 
-Initialize、sync、reset、block、unblock 与 recreate 通过容量为 1、支持 context 取消的 operation gate 串行化。HTTP 应用层还使用同一个 Xray lifecycle gate 串行化 `plugin sync/recreate` 与 `xray start/stop`，固定锁序为 `Xray lifecycle gate -> Plugin operation gate -> Manager`，防止 core 启动读取配置期间插件快照变化；未来新增绕过 HTTP 的内部入口时也必须复用该协调器。webhook 接收不等待 gate，而是非阻塞写入最多 64 条的有界队列，再由单 worker 获取同一 gate 后执行 nft/report 副作用；collect 只在 State 锁下原子 drain 报告。nftables 初始化与 Go 对象构造分离；缺少 `CAP_NET_ADMIN` 或 nft 初始化失败时仍接受合法插件配置，但 ingress/egress/torrent 保持不可用，torrent 状态不会错误注入 Xray。reset 只替换插件快照，不丢弃 Panel 尚未 collect 的 torrent reports；recreate 重放当前已提交过滤计划，而不是错误地创建空表。
+Initialize、sync、reset、block、unblock 与 recreate 通过容量为 1、支持 context 取消的 operation gate 串行化。HTTP 应用层还使用同一个 Xray lifecycle gate 串行化 `plugin sync/recreate` 与 `xray start/stop`，固定锁序为 `Xray lifecycle gate -> Plugin operation gate -> Manager`，防止 core 启动读取配置期间插件快照变化；未来新增绕过 HTTP 的内部入口时也必须复用该协调器。webhook 接收不直接等待 operation gate，而是在内部请求的 30 秒 deadline 内等待最多 64 条的有界队列容量，再由单 worker 获取同一 gate 后执行 nft/report 副作用；容量未恢复、请求取消或服务关闭时返回 `503 + Retry-After`，不会把未接纳事件伪报为成功。collect 只在 State 锁下原子 drain 报告。nftables 初始化与 Go 对象构造分离；缺少 `CAP_NET_ADMIN` 或 nft 初始化失败时仍接受合法插件配置，但 ingress/egress/torrent 保持不可用，torrent 状态不会错误注入 Xray。reset 只替换插件快照，不丢弃 Panel 尚未 collect 的 torrent reports；recreate 重放当前已提交过滤计划，而不是错误地创建空表。
 
 Close 先设置不可逆的 mutation admission fence 并停止 webhook worker；此前已经接纳的 mutation 可以完成，新 mutation 一律拒绝。等待 gate、删除 nft 表和 join worker 共享调用方 deadline，并由服务再限制为最多 15 秒；清理失败保留已提交快照，只允许后续 Close 重试，不会重新开放业务操作。
 
@@ -66,7 +66,7 @@ nft backend 在单个 `nft -f` 原子事务内替换 IPv4/IPv6 私有表和过�
 
 M5 将所有用户 mutation 放入可取消的串行 gate。每次 add/remove 先完成 rw-core Handler RPC，只有 RPC 成功且 Xray generation 未变化时才更新本地 inbound hash；清理失败时不继续为该用户添加新账号，批量请求的任一失败都会返回 `success=false` 和首个明确错误。多个远端 RPC 不能形成真正的跨调用事务，已经成功的前序操作不会伪装成回滚，但本地状态不会领先于 rw-core，同一 Panel 请求可以安全重试。
 
-连接踢除会先规范化和去重 IP，跳过白名单，并拒绝非法地址、unspecified、loopback、link-local、multicast、IPv4 广播和本机接口地址。每个目标的 `ss -K` 同时检查 source/destination，最长执行 3 秒；缺少 `CAP_NET_ADMIN`、用户 IP 查询失败或任一命令失败都会返回真实的 `success=false`。CI 在独立 Linux network namespace 中建立真实 TCP 连接并验证 socket 被关闭；M5 checkpoint 已在 Linux arm64 6.8 内核上通过该门禁。
+连接踢除会先规范化和去重 IP，跳过白名单，并拒绝非法地址、unspecified、loopback、link-local、multicast、IPv4 广播和本机接口地址。每批通过 `NETLINK_SOCK_DIAG` 分别枚举 IPv4/IPv6 socket，并逐条校验 `SOCK_DESTROY` ACK；仅 `ENOENT` 作为幂等成功，缺少 `CAP_NET_ADMIN`、用户 IP 查询失败或任一销毁失败都会返回真实的 `success=false`。CI 在独立 Linux network namespace 中建立真实 TCP 连接并验证 socket 被关闭；M5 checkpoint 已在 Linux arm64 6.8 内核上通过该门禁。
 
 `get-users-ip-list` 优先使用 rw-core 的单次 `GetUsersStats` 扩展 RPC；旧 core 返回 `UNIMPLEMENTED` 后会缓存 capability 并降级为最多 8 个固定 worker，不再为每个在线用户创建 goroutine。所有 Handler/Stats unary RPC 默认共享最多 5 秒 deadline，健康探测为 3 秒，调用方已有的更早 deadline 和取消信号保持生效；legacy 批量查询使用单一总预算，不会为每个用户重新续期。
 
@@ -74,7 +74,7 @@ M5 将所有用户 mutation 放入可取消的串行 gate。每次 add/remove �
 
 M6 在不改变官方 HTTP 契约的前提下收紧资源边界。Xray 配置仅在启动阶段保留解码树和规范 JSON，rw-core ready 后只留下 hash、inbound tag 与运行状态；torrent reports 使用 1024 条有界环形队列；zstd decoder、窗口、并发、请求体和 gRPC 响应均有明确上限。完整 Xray Go module 已由与官方生成类型校准的最小 protobuf wire client 替代，五种账号、Handler 请求、Stats 消息和确定性 wire golden 共同固定兼容性。
 
-`LOW_MEMORY=1` 时默认请求体上限为 16 MiB，Go heap 软上限为 180 MiB。显式 `BODY_LIMIT_MB` 允许 `1..1024`，非法、负数或溢出值会使进程启动失败，而不是静默回退。Debian 与 Alpine 安装器在整机内存不超过 512 MiB 时自动启用该模式。
+`LOW_MEMORY=1` 时默认请求体上限为 16 MiB，Go heap 软上限为 180 MiB。显式 `BODY_LIMIT_MB` 允许 `1..1024`，非法、负数或溢出值会使进程启动失败，而不是静默回退。Debian 与 Alpine 安装器在整机内存不超过 512 MiB 时自动启用该模式。生产 init 固定读取 `/etc/remnanode/node.env`，不回退到 service-writable working directory；配置必须是普通非符号链接文件，总计不超过 1 MiB、4096 行和 256 个赋值。配置与 Secret 都通过同一 `O_NOFOLLOW|O_NONBLOCK` 文件描述符完成检查和有界读取。systemd/OpenRC 均不导出整份配置环境，`GOMEMLIMIT` 与版本 override 由同一个 Go 解析器验证后应用。
 
 真实 rw-core `v26.6.27` 的 1 CPU / 448 MiB / no-swap 门禁覆盖 1k 用户启动、无变化同步、50k 用户重启、热增删与统计 RPC，实测 cgroup 峰值为 143.9 MiB。复现条件和阶段数据见 [`resource-budget.md`](resource-budget.md)。
 

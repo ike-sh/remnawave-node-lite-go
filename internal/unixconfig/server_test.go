@@ -3,8 +3,11 @@ package unixconfig
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +42,245 @@ func (p staticProvider) CurrentConfigJSON() []byte {
 		return []byte("{}")
 	}
 	return raw
+}
+
+func TestListenAndServeRejectsLiveSocketWithoutRemovingIt(t *testing.T) {
+	path := unixSocketTestPath(t)
+	existing, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatalf("listen on existing socket: %v", err)
+	}
+	existing.SetUnlinkOnClose(false)
+	t.Cleanup(func() {
+		_ = existing.Close()
+		_ = os.Remove(path)
+	})
+	before, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("stat existing socket: %v", err)
+	}
+
+	server := &Server{Path: path, Token: "token", Provider: staticProvider{}}
+	err = server.ListenAndServe(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "already accepting connections") {
+		t.Fatalf("ListenAndServe() error = %v", err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("live socket was removed: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("live socket was replaced")
+	}
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		t.Fatalf("dial original live socket: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestListenAndServeReplacesStableStaleSocket(t *testing.T) {
+	path := unixSocketTestPath(t)
+	stale := leaveStaleUnixSocket(t, path)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	server := &Server{Path: path, Token: "token", Provider: staticProvider{}}
+	go func() { done <- server.ListenAndServe(ctx) }()
+
+	current := waitForLiveUnixSocket(t, path, stale)
+	if current.Mode().Perm() != 0o600 {
+		t.Fatalf("socket permissions = %o, want 600", current.Mode().Perm())
+	}
+	cancel()
+	if err := waitForUnixServer(t, done); err != nil {
+		t.Fatalf("ListenAndServe() = %v", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("owned socket remained after shutdown: %v", err)
+	}
+}
+
+func TestListenAndServeDoesNotRemoveReplacementSocket(t *testing.T) {
+	path := unixSocketTestPath(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	server := &Server{Path: path, Token: "token", Provider: staticProvider{}}
+	go func() { done <- server.ListenAndServe(ctx) }()
+	waitForLiveUnixSocket(t, path, nil)
+
+	displaced := path + ".owned"
+	if err := os.Rename(path, displaced); err != nil {
+		cancel()
+		t.Fatalf("move owned socket: %v", err)
+	}
+	replacement, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		cancel()
+		t.Fatalf("bind replacement socket: %v", err)
+	}
+	replacement.SetUnlinkOnClose(false)
+	t.Cleanup(func() {
+		_ = replacement.Close()
+		_ = os.Remove(path)
+		_ = os.Remove(displaced)
+	})
+	replacementInfo, err := os.Lstat(path)
+	if err != nil {
+		cancel()
+		t.Fatalf("stat replacement socket: %v", err)
+	}
+
+	cancel()
+	if err := waitForUnixServer(t, done); err != nil {
+		t.Fatalf("ListenAndServe() = %v", err)
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("replacement socket was removed: %v", err)
+	}
+	if !os.SameFile(replacementInfo, current) {
+		t.Fatal("replacement socket path changed during original server cleanup")
+	}
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		t.Fatalf("dial replacement socket: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestConcurrentStaleSocketStartsKeepWinnerReachable(t *testing.T) {
+	path := unixSocketTestPath(t)
+	stale := leaveStaleUnixSocket(t, path)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	start := make(chan struct{})
+	type serverResult struct {
+		id  int
+		err error
+	}
+	results := make(chan serverResult, 2)
+	for id := 1; id <= 2; id++ {
+		id := id
+		server := &Server{Path: path, Token: "token", Provider: staticProvider{}}
+		go func() {
+			<-start
+			results <- serverResult{id: id, err: server.ListenAndServe(ctx)}
+		}()
+	}
+	close(start)
+
+	var loser serverResult
+	select {
+	case loser = <-results:
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent loser did not fail its non-blocking directory lock")
+	}
+	if loser.err == nil || !strings.Contains(loser.err.Error(), "lock unix socket directory") {
+		t.Fatalf("server %d result = %v, want directory lock failure", loser.id, loser.err)
+	}
+	waitForLiveUnixSocket(t, path, stale)
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		t.Fatalf("dial winning server socket: %v", err)
+	}
+	_ = conn.Close()
+
+	cancel()
+	select {
+	case winner := <-results:
+		if winner.id == loser.id || winner.err != nil {
+			t.Fatalf("winning server result = %#v, loser = %#v", winner, loser)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("winning unix server did not stop")
+	}
+}
+
+func TestListenAndServeRejectsNonSocketAndSymlinkPaths(t *testing.T) {
+	for _, kind := range []string{"file", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			path := unixSocketTestPath(t)
+			if kind == "file" {
+				if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+					t.Fatalf("write sentinel: %v", err)
+				}
+			} else {
+				target := path + ".target"
+				if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+					t.Fatalf("write symlink target: %v", err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatalf("create symlink: %v", err)
+				}
+			}
+
+			server := &Server{Path: path, Token: "token", Provider: staticProvider{}}
+			if err := server.ListenAndServe(context.Background()); err == nil || !strings.Contains(err.Error(), "refusing to replace") {
+				t.Fatalf("ListenAndServe() error = %v", err)
+			}
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("sentinel path was removed: %v", err)
+			}
+		})
+	}
+}
+
+func unixSocketTestPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "rnl-unix-")
+	if err != nil {
+		t.Fatalf("create unix socket test directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "s")
+}
+
+func leaveStaleUnixSocket(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatalf("bind stale socket: %v", err)
+	}
+	listener.SetUnlinkOnClose(false)
+	info, err := os.Lstat(path)
+	if err != nil {
+		_ = listener.Close()
+		t.Fatalf("stat stale socket: %v", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close stale socket: %v", err)
+	}
+	return info
+}
+
+func waitForLiveUnixSocket(t *testing.T, path string, previous os.FileInfo) os.FileInfo {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		info, err := os.Lstat(path)
+		if err == nil && info.Mode()&os.ModeSocket != 0 && (previous == nil || !os.SameFile(previous, info)) {
+			conn, dialErr := net.DialTimeout("unix", path, 20*time.Millisecond)
+			if dialErr == nil {
+				_ = conn.Close()
+				return info
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("unix socket %q did not become ready", path)
+	return nil
+}
+
+func waitForUnixServer(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatal("unix server did not stop")
+		return nil
+	}
 }
 
 func TestGetConfigRejectsInvalidToken(t *testing.T) {

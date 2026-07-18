@@ -26,6 +26,7 @@ PURGE_LOGS=0
 PURGE_DATA=0
 PURGE_XRAY=0
 STAGE="初始化"
+CONFIGURED_XRAY_BIN="$XRAY_BIN"
 
 usage() {
   cat <<EOF
@@ -135,6 +136,7 @@ read_tty() {
 cleanup_runtime() {
   step "清理本项目运行时"
   run rm -rf /run/remnanode 2>/dev/null || true
+  run rm -f /run/remnawave-node-supervise.pid 2>/dev/null || true
   run rm -f /run/remnawave-internal-*.sock 2>/dev/null || true
   if [ "$PURGE_CONFIG" -eq 1 ]; then
     run rm -f "${ETC_DIR}/node.env.bak."* 2>/dev/null || true
@@ -146,8 +148,16 @@ cleanup_firewall() {
   if ! command -v nft >/dev/null 2>&1; then
     return 0
   fi
-  run nft delete table ip remnanode 2>/dev/null || true
-  run nft delete table ip6 remnanode6 2>/dev/null || true
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 删除存在的 ip/remnanode 与 ip6/remnanode6"
+    return 0
+  fi
+  if nft list table ip remnanode >/dev/null 2>&1; then
+    nft delete table ip remnanode
+  fi
+  if nft list table ip6 remnanode6 >/dev/null 2>&1; then
+    nft delete table ip6 remnanode6
+  fi
 }
 
 is_alpine() {
@@ -187,6 +197,144 @@ current_version() {
   else
     echo "not installed"
   fi
+}
+
+read_env_value() {
+  local key="$1" file="$2" line value
+  [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 2
+  [ -f "$file" ] || return 0
+  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$file" 2>/dev/null | tail -n 1 || true)"
+  [ -n "$line" ] || return 0
+  value="${line#*=}"
+  value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  case "$value" in
+    \"*\") value=${value#\"}; value=${value%\"} ;;
+    \'*\') value=${value#\'}; value=${value%\'} ;;
+  esac
+  printf '%s' "$value"
+}
+
+running_pids_for_binary() {
+  local binary="$1" exe pid target
+  for exe in /proc/[0-9]*/exe; do
+    [ -e "$exe" ] || [ -L "$exe" ] || continue
+    pid="${exe%/exe}"
+    pid="${pid##*/}"
+    if [ -e "$binary" ] && [ "$exe" -ef "$binary" ]; then
+      printf '%s\n' "$pid"
+      continue
+    fi
+    target="$(readlink "$exe" 2>/dev/null || true)"
+    if [ "$target" = "$binary" ] || [ "$target" = "$binary (deleted)" ]; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
+probe_uninstall_service_state() {
+  local platform="$1" output="" load_state="" active_state="" status
+  case "$platform" in
+    openrc)
+      if rc-service remnawave-node status >/dev/null 2>&1; then
+        printf 'active'
+        return 0
+      else
+        status=$?
+      fi
+      [ "$status" -eq 3 ] && printf 'inactive' || printf 'error'
+      ;;
+    systemd)
+      if ! output="$(systemctl show --no-pager \
+        --property=LoadState --property=ActiveState \
+        remnawave-node.service)"; then
+        printf 'error'
+        return 0
+      fi
+      while IFS='=' read -r property value; do
+        case "$property" in
+          LoadState) load_state="$value" ;;
+          ActiveState) active_state="$value" ;;
+        esac
+      done <<<"$output"
+      case "$load_state:$active_state" in
+        loaded:active|loaded:reloading|masked:active|masked:reloading|not-found:active|not-found:reloading)
+          printf 'active'
+          ;;
+        loaded:inactive|loaded:failed|masked:inactive|masked:failed|not-found:inactive|not-found:failed)
+          printf 'inactive'
+          ;;
+        *) printf 'error' ;;
+      esac
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+uninstall_service_manager_state() {
+  local state aggregate=inactive
+  if is_alpine || [ -f "$OPENRC_SVC" ]; then
+    state="$(probe_uninstall_service_state openrc)" || return
+    case "$state" in
+      error) printf 'error'; return 0 ;;
+      active) aggregate=active ;;
+      inactive) ;;
+      *) printf 'error'; return 0 ;;
+    esac
+  fi
+  if [ -f "$UNIT" ]; then
+    state="$(probe_uninstall_service_state systemd)" || return
+    case "$state" in
+      error) printf 'error'; return 0 ;;
+      active) aggregate=active ;;
+      inactive) ;;
+      *) printf 'error'; return 0 ;;
+    esac
+  fi
+  printf '%s' "$aggregate"
+}
+
+service_manager_active() {
+  local state
+  state="$(uninstall_service_manager_state)" || return 2
+  case "$state" in
+    active) return 0 ;;
+    inactive) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+wait_for_stop_confirmation() {
+  local i=0 pids binary running manager_state
+  while [ "$i" -lt 35 ]; do
+    running=0
+    manager_state="$(uninstall_service_manager_state)" || return
+    case "$manager_state" in
+      active) running=1 ;;
+      inactive) ;;
+      *)
+        echo "无法可靠探测 remnawave-node 状态，拒绝确认停止" >&2
+        return 1
+        ;;
+    esac
+    for binary in "${PREFIX}/${BIN_NAME}" "$CONFIGURED_XRAY_BIN"; do
+      pids="$(running_pids_for_binary "$binary")"
+      [ -z "$pids" ] || running=1
+    done
+    [ "$running" -eq 0 ] && return 0
+    sleep 1
+    i=$((i + 1))
+  done
+  manager_state="$(uninstall_service_manager_state)" || return
+  case "$manager_state" in
+    active) echo "服务管理器仍报告 remnawave-node 运行中" >&2 ;;
+    inactive) ;;
+    *) echo "停止后无法可靠确认 remnawave-node 状态" >&2 ;;
+  esac
+  for binary in "${PREFIX}/${BIN_NAME}" "$CONFIGURED_XRAY_BIN"; do
+    pids="$(running_pids_for_binary "$binary")"
+    [ -z "$pids" ] || echo "仍有进程使用 ${binary}: ${pids//$'\n'/,}" >&2
+  done
+  return 1
 }
 
 prompt_yes_no() {
@@ -258,14 +406,51 @@ confirm_uninstall() {
 }
 
 stop_service() {
+  local stop_failed=0 openrc_state=inactive systemd_state=inactive
   step "停止服务"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 停止服务并确认 remnanode-lite/rw-core 全部退出"
+    return 0
+  fi
   if is_alpine || [ -f "$OPENRC_SVC" ]; then
-    run rc-service remnawave-node stop 2>/dev/null || true
-    run rc-update del remnawave-node default 2>/dev/null || true
+    command -v rc-service >/dev/null 2>&1 || {
+      echo "存在 OpenRC 服务文件但缺少 rc-service，拒绝继续卸载" >&2
+      return 1
+    }
+    openrc_state="$(probe_uninstall_service_state openrc)" || return
   fi
   if [ -f "$UNIT" ]; then
-    run systemctl stop remnawave-node.service 2>/dev/null || true
-    run systemctl disable remnawave-node.service 2>/dev/null || true
+    command -v systemctl >/dev/null 2>&1 || {
+      echo "存在 systemd unit 但缺少 systemctl，拒绝继续卸载" >&2
+      return 1
+    }
+    systemd_state="$(probe_uninstall_service_state systemd)" || return
+  fi
+  if [ "$openrc_state" = error ] || [ "$systemd_state" = error ]; then
+    echo "无法可靠探测 remnawave-node 状态；保留全部文件与数据" >&2
+    return 1
+  fi
+  [ "$openrc_state" = inactive ] || [ "$openrc_state" = active ] || return 1
+  [ "$systemd_state" = inactive ] || [ "$systemd_state" = active ] || return 1
+  if [ "$openrc_state" = active ]; then
+    rc-service remnawave-node stop >/dev/null 2>&1 || stop_failed=1
+  fi
+  if [ "$systemd_state" = active ]; then
+    systemctl stop remnawave-node.service >/dev/null 2>&1 || stop_failed=1
+  fi
+  if ! wait_for_stop_confirmation; then
+    echo "未确认服务与 rw-core 停止；保留防火墙、服务文件和全部数据" >&2
+    return 1
+  fi
+  if [ "$stop_failed" -ne 0 ]; then
+    echo "服务停止命令失败；保留防火墙、服务文件和全部数据" >&2
+    return 1
+  fi
+  if is_alpine || [ -f "$OPENRC_SVC" ]; then
+    rc-update del remnawave-node default 2>/dev/null || true
+  fi
+  if [ -f "$UNIT" ]; then
+    systemctl disable remnawave-node.service >/dev/null 2>&1 || true
   fi
 }
 
@@ -330,6 +515,10 @@ main() {
   interactive_options
   confirm_uninstall
   print_plan
+
+  CONFIGURED_XRAY_BIN="$(read_env_value XRAY_BIN "${ETC_DIR}/node.env")"
+  [ -n "$CONFIGURED_XRAY_BIN" ] || CONFIGURED_XRAY_BIN="$XRAY_BIN"
+  CONFIGURED_XRAY_BIN="$(readlink -f "$CONFIGURED_XRAY_BIN" 2>/dev/null || printf '%s' "$CONFIGURED_XRAY_BIN")"
 
   stop_service
   cleanup_runtime

@@ -47,7 +47,7 @@ done
 
 dry_run_path="$(mktemp -d)"
 trap 'rm -rf "$dry_run_path"' EXIT
-for command_name in bash curl dirname uname; do
+for command_name in bash curl dirname head tar timeout uname; do
   command_path="$(command -v "$command_name")"
   [ -n "$command_path" ] || {
     echo "missing command required by portable dry-run test: $command_name" >&2

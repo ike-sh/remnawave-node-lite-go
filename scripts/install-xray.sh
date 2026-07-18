@@ -25,6 +25,24 @@ TMP_DIR=""
 ASN_SOURCE=""
 ASN_TRANSACTIONAL=0
 INSTALL_ARMED=0
+EXTERNAL_ASSET_ROLLBACK="${RNL_EXTERNAL_ASSET_ROLLBACK:-0}"
+
+readonly XRAY_ARCHIVE_MAX_BYTES=134217728
+readonly XRAY_CORE_MAX_BYTES=134217728
+readonly XRAY_GEO_FILE_MAX_BYTES=67108864
+readonly XRAY_ASN_MAX_BYTES=67108864
+readonly XRAY_INITIAL_WORK_BYTES=402653184
+readonly XRAY_SPACE_SAFETY_BYTES=67108864
+readonly XRAY_ARCHIVE_MAX_ENTRIES=64
+readonly XRAY_DOWNLOAD_CONNECT_TIMEOUT_SECONDS=15
+readonly XRAY_DOWNLOAD_MAX_TIME_SECONDS=300
+readonly XRAY_DOWNLOAD_SPEED_LIMIT_BYTES=1024
+readonly XRAY_DOWNLOAD_SPEED_TIME_SECONDS=60
+readonly XRAY_ARCHIVE_TIMEOUT_SECONDS=120
+
+XRAY_SPACE_DEVICE_IDS=()
+XRAY_SPACE_PATHS=()
+XRAY_SPACE_REQUIRED=()
 
 usage() {
   cat <<'EOF'
@@ -65,28 +83,602 @@ load_env_var() {
   local key="$1" file="$2" line value
   [ -z "${!key:-}" ] || return 0
   [ -f "$file" ] || return 0
-  line="$(grep -E "^[[:space:]]*${key}=" "$file" 2>/dev/null | head -n 1 || true)"
+  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$file" 2>/dev/null | tail -n 1 || true)"
   [ -n "$line" ] || return 0
   value="${line#*=}"
-  value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+  value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  case "$value" in
+    \"*\") value=${value#\"}; value=${value%\"} ;;
+    \'*\') value=${value#\'}; value=${value%\'} ;;
+  esac
   [ -n "$value" ] || return 0
   printf -v "$key" '%s' "$value"
 }
 
 download_file() {
-  local url="$1" output="$2"
-  if command -v curl >/dev/null 2>&1; then
+  local url="$1" output="$2" max_bytes="${3:?download size limit is required}"
+  local attempt size curl_status head_status
+  local -a pipeline_status
+  case "$url" in https://*) ;; *) echo "download URL must use HTTPS: $url" >&2; return 1 ;; esac
+  if ! [[ "$max_bytes" =~ ^[1-9][0-9]*$ ]] \
+    || [ "${#max_bytes}" -gt 10 ] || [ "$max_bytes" -gt 1073741824 ]; then
+    echo "invalid download size limit: $max_bytes" >&2
+    return 2
+  fi
+  command -v curl >/dev/null 2>&1 || {
+    echo "curl is required for size-bounded HTTPS downloads" >&2
+    return 1
+  }
+
+  for attempt in 1 2 3; do
+    rm -f "$output"
+    set +o pipefail
     curl --fail --location --silent --show-error \
-      --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
-      "$url" --output "$output"
-    return
-  fi
-  if command -v wget >/dev/null 2>&1; then
-    wget --https-only --tries=3 --output-document="$output" "$url"
-    return
-  fi
-  echo "curl or wget is required" >&2
+      --proto '=https' --tlsv1.2 \
+      --connect-timeout "$XRAY_DOWNLOAD_CONNECT_TIMEOUT_SECONDS" \
+      --max-time "$XRAY_DOWNLOAD_MAX_TIME_SECONDS" \
+      --speed-limit "$XRAY_DOWNLOAD_SPEED_LIMIT_BYTES" \
+      --speed-time "$XRAY_DOWNLOAD_SPEED_TIME_SECONDS" \
+      "$url" \
+      | head -c $((max_bytes + 1)) >"$output"
+    pipeline_status=("${PIPESTATUS[@]}")
+    set -o pipefail
+    curl_status="${pipeline_status[0]:-1}"
+    head_status="${pipeline_status[1]:-1}"
+    size="$(file_size_bytes "$output")"
+
+    if ! [[ "$size" =~ ^[0-9]+$ ]] || [ "$size" -gt "$max_bytes" ]; then
+      rm -f "$output"
+      echo "download exceeds hard limit: ${size:-unknown} > $max_bytes bytes" >&2
+      return 1
+    fi
+    if [ "$curl_status" -eq 0 ] && [ "$head_status" -eq 0 ]; then
+      return 0
+    fi
+    rm -f "$output"
+    [ "$attempt" -eq 3 ] || sleep "$attempt"
+  done
   return 1
+}
+
+file_size_bytes() {
+  wc -c <"$1" | tr -d '[:space:]'
+}
+
+require_file_size_at_most() {
+  local file="$1" max_bytes="$2" label="$3" size
+  [ -f "$file" ] || { echo "$label is missing: $file" >&2; return 1; }
+  size="$(file_size_bytes "$file")"
+  if ! [[ "$size" =~ ^[0-9]+$ ]] || [ "$size" -gt "$max_bytes" ]; then
+    echo "$label exceeds hard limit: ${size:-unknown} > $max_bytes bytes" >&2
+    return 1
+  fi
+}
+
+installer_temp_root() {
+  printf '%s' "${RNL_TMP_ROOT:-/var/lib/remnanode-installer}"
+}
+
+validate_installer_temp_root_path() {
+  local root="$1" component current="/"
+  local -a components
+  case "$root" in
+    /) echo "refusing / as RNL_TMP_ROOT" >&2; return 1 ;;
+    /*) ;;
+    *) echo "RNL_TMP_ROOT must be absolute: $root" >&2; return 2 ;;
+  esac
+  if [[ "$root" == */ ]] || [[ "$root" == *//* ]] \
+    || [[ "$root" == *$'\n'* ]] || [[ "$root" == *$'\r'* ]]; then
+    echo "RNL_TMP_ROOT is not a normalized path: $root" >&2
+    return 2
+  fi
+
+  if ! installer_ancestor_is_safe /; then
+    echo "RNL_TMP_ROOT ancestor is not root-owned and non-writable: /" >&2
+    return 1
+  fi
+  IFS=/ read -r -a components <<<"${root#/}"
+  for component in "${components[@]}"; do
+    case "$component" in
+      ''|.|..) echo "RNL_TMP_ROOT has an unsafe path component: $root" >&2; return 2 ;;
+    esac
+    current="${current%/}/${component}"
+    if [ -L "$current" ]; then
+      echo "RNL_TMP_ROOT has a symlink component: $current" >&2
+      return 1
+    fi
+    if [ -e "$current" ] && [ ! -d "$current" ]; then
+      echo "RNL_TMP_ROOT ancestor is not a directory: $current" >&2
+      return 1
+    fi
+    if [ -e "$current" ] && ! installer_ancestor_is_safe "$current"; then
+      echo "RNL_TMP_ROOT ancestor is not root-owned and non-writable: $current" >&2
+      return 1
+    fi
+  done
+}
+
+installer_path_owner_ids() {
+  local path="$1" owner
+  if owner="$(stat -c '%u:%g' "$path" 2>/dev/null)"; then
+    printf '%s' "$owner"
+    return 0
+  fi
+  stat -f '%u:%g' "$path" 2>/dev/null
+}
+
+installer_path_has_root_owner() {
+  [ "$(installer_path_owner_ids "$1")" = "0:0" ]
+}
+
+installer_path_mode() {
+  local path="$1" mode
+  if mode="$(stat -c '%a' "$path" 2>/dev/null)"; then
+    printf '%s' "$mode"
+    return 0
+  fi
+  stat -f '%Lp' "$path" 2>/dev/null
+}
+
+installer_path_link_count() {
+  local path="$1" count
+  if count="$(stat -c '%h' "$path" 2>/dev/null)"; then
+    printf '%s' "$count"
+    return 0
+  fi
+  stat -f '%l' "$path" 2>/dev/null
+}
+
+installer_ancestor_is_safe() {
+  local path="$1" mode
+  installer_path_has_root_owner "$path" || return 1
+  mode="$(installer_path_mode "$path")" || return 1
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  [ $((8#$mode & 022)) -eq 0 ]
+}
+
+installer_temp_root_is_empty() {
+  local root="$1" entry
+  entry="$(find "$root" -mindepth 1 -maxdepth 1 -print -quit)" || return 1
+  [ -z "$entry" ]
+}
+
+validate_installer_temp_root_marker() {
+  local root="$1" marker="${1}/.remnanode-installer-root"
+  local expected="remnanode-installer-root-v1" size mode links
+  installer_ancestor_is_safe "$root" || {
+    echo "RNL_TMP_ROOT must be root-owned and non-writable before marker use: $root" >&2
+    return 1
+  }
+  [ -f "$marker" ] && [ ! -L "$marker" ] || {
+    echo "non-empty RNL_TMP_ROOT lacks a regular marker: $marker" >&2
+    return 1
+  }
+  if ! installer_path_has_root_owner "$marker"; then
+    echo "RNL_TMP_ROOT marker must be owned by root:root: $marker" >&2
+    return 1
+  fi
+  links="$(installer_path_link_count "$marker")" || return 1
+  [ "$links" = 1 ] || { echo "RNL_TMP_ROOT marker has hard links: $marker" >&2; return 1; }
+  mode="$(installer_path_mode "$marker")" || return 1
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] && [ $((8#$mode & 022)) -eq 0 ] || {
+    echo "RNL_TMP_ROOT marker is group/other-writable: $marker" >&2
+    return 1
+  }
+  size="$(file_size_bytes "$marker")"
+  if [ "$size" -ne $((${#expected} + 1)) ] || [ "$(cat "$marker")" != "$expected" ]; then
+    echo "invalid RNL_TMP_ROOT marker contents: $marker" >&2
+    return 1
+  fi
+}
+
+ensure_installer_temp_root() {
+  local root marker expected="remnanode-installer-root-v1"
+  root="$(installer_temp_root)"
+  validate_installer_temp_root_path "$root" || return
+  if [ ! -e "$root" ]; then
+    (umask 077; mkdir -p "$root") || return
+  fi
+  validate_installer_temp_root_path "$root" || return
+  [ -d "$root" ] || { echo "RNL_TMP_ROOT is not a directory: $root" >&2; return 1; }
+  if ! installer_path_has_root_owner "$root"; then
+    echo "RNL_TMP_ROOT must be owned by root:root before use: $root" >&2
+    return 1
+  fi
+
+  marker="${root}/.remnanode-installer-root"
+  if installer_temp_root_is_empty "$root"; then
+    if ! (umask 077; set -o noclobber; printf '%s\n' "$expected" >"$marker") 2>/dev/null; then
+      echo "failed to atomically create RNL_TMP_ROOT marker: $marker" >&2
+      return 1
+    fi
+  fi
+  validate_installer_temp_root_marker "$root" || return
+
+  chmod 0700 "$root" || return
+  chmod 0600 "$marker" || return
+  validate_installer_temp_root_path "$root" || return
+  validate_installer_temp_root_marker "$root"
+}
+
+make_temp_dir() {
+  local root
+  ensure_installer_temp_root || return
+  root="$(installer_temp_root)"
+  mktemp -d "${root}/xray.XXXXXX"
+}
+
+path_disk_bytes() {
+  local path="$1" kilobytes
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    if ! kilobytes="$(du -sk "$path" 2>/dev/null | awk 'NR == 1 { print $1; exit }')" \
+      || ! [[ "$kilobytes" =~ ^[0-9]+$ ]]; then
+      echo "cannot determine disk usage for $path" >&2
+      return 1
+    fi
+    printf '%s' "$((kilobytes * 1024))"
+  else
+    printf '0'
+  fi
+}
+
+require_free_space() {
+  local path="$1" required="$2" available_kb available
+  available_kb="$(df -Pk "$path" | awk 'NR == 2 { print $4; exit }')"
+  [[ "$available_kb" =~ ^[0-9]+$ ]] || { echo "cannot determine free disk space for $path" >&2; return 1; }
+  available=$((available_kb * 1024))
+  if [ "$available" -lt "$required" ]; then
+    echo "insufficient disk space: available=$available required=$required path=$path" >&2
+    return 1
+  fi
+}
+
+existing_parent() {
+  local path="$1" parent="$1"
+  while [ ! -e "$parent" ]; do
+    [ "$parent" != / ] || break
+    parent="$(dirname "$parent")"
+  done
+  printf '%s' "$parent"
+}
+
+filesystem_device_id() {
+  local path="$1" device
+  if device="$(stat -c '%d' "$path" 2>/dev/null)"; then
+    printf '%s' "$device"
+    return 0
+  fi
+  if device="$(stat -f '%d' "$path" 2>/dev/null)"; then
+    printf '%s' "$device"
+    return 0
+  fi
+  echo "cannot determine filesystem device for $path" >&2
+  return 1
+}
+
+reset_space_budget() {
+  XRAY_SPACE_DEVICE_IDS=()
+  XRAY_SPACE_PATHS=()
+  XRAY_SPACE_REQUIRED=()
+}
+
+add_space_budget() {
+  local target="$1" additional="$2" path device current total i
+  if ! [[ "$additional" =~ ^[0-9]+$ ]]; then
+    echo "invalid disk space budget for $target: $additional" >&2
+    return 1
+  fi
+  path="$(existing_parent "$target")" || return
+  device="$(filesystem_device_id "$path")" || return
+  for ((i = 0; i < ${#XRAY_SPACE_DEVICE_IDS[@]}; i++)); do
+    if [ "${XRAY_SPACE_DEVICE_IDS[$i]}" = "$device" ]; then
+      current="${XRAY_SPACE_REQUIRED[$i]}"
+      total=$((current + additional))
+      if [ "$total" -lt "$current" ]; then
+        echo "disk space budget overflow for $target" >&2
+        return 1
+      fi
+      XRAY_SPACE_REQUIRED[i]="$total"
+      return 0
+    fi
+  done
+  XRAY_SPACE_DEVICE_IDS+=("$device")
+  XRAY_SPACE_PATHS+=("$path")
+  XRAY_SPACE_REQUIRED+=("$additional")
+}
+
+require_space_budget() {
+  local required total i
+  for ((i = 0; i < ${#XRAY_SPACE_DEVICE_IDS[@]}; i++)); do
+    required="${XRAY_SPACE_REQUIRED[$i]}"
+    total=$((required + XRAY_SPACE_SAFETY_BYTES))
+    if [ "$total" -lt "$required" ]; then
+      echo "disk space budget overflow for ${XRAY_SPACE_PATHS[$i]}" >&2
+      return 1
+    fi
+    if ! require_free_space "${XRAY_SPACE_PATHS[$i]}" "$total"; then
+      return 1
+    fi
+  done
+}
+
+asset_backup_bytes() {
+  local include_asn="$1" bytes size target
+  bytes=0
+  for target in "$XRAY_BIN" "$GEO_DIR/geoip.dat" "$GEO_DIR/geosite.dat"; do
+    size="$(path_disk_bytes "$target")" || return
+    bytes=$((bytes + size))
+  done
+  if [ "$include_asn" -eq 1 ]; then
+    size="$(path_disk_bytes "$ASN_DB_PATH")" || return
+    bytes=$((bytes + size))
+  fi
+  printf '%s' "$bytes"
+}
+
+xray_validate_absolute_path() {
+  local path="$1"
+  case "$path" in
+    /|'') echo "refusing an empty path or / as an install target" >&2; return 1 ;;
+    /*) ;;
+    *) echo "install target must be absolute: $path" >&2; return 2 ;;
+  esac
+  if [[ "$path" == */ ]] || [[ "$path" == *//* ]] \
+    || [[ "$path" == *$'\n'* ]] || [[ "$path" == *$'\r'* ]] \
+    || [[ "/${path#/}/" == */./* ]] || [[ "/${path#/}/" == */../* ]]; then
+    echo "install target is not a normalized path: $path" >&2
+    return 2
+  fi
+}
+
+xray_root_directory_is_safe() {
+  local path="$1" mode
+  [ -d "$path" ] && [ ! -L "$path" ] || return 1
+  installer_path_has_root_owner "$path" || return 1
+  mode="$(installer_path_mode "$path")" || return 1
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+  [ $((8#$mode & 022)) -eq 0 ]
+}
+
+xray_validate_parent_path() {
+  local path="$1" parent component current="/"
+  local -a components
+  xray_validate_absolute_path "$path" || return
+  parent="$(dirname "$path")"
+  xray_root_directory_is_safe / || {
+    echo "install target ancestor is not root-owned and non-writable: /" >&2
+    return 1
+  }
+  [ "$parent" = / ] && return 0
+
+  IFS=/ read -r -a components <<<"${parent#/}"
+  for component in "${components[@]}"; do
+    current="${current%/}/${component}"
+    if [ -L "$current" ]; then
+      echo "install target has a symlink ancestor: $current" >&2
+      return 1
+    fi
+    if [ -e "$current" ] && ! xray_root_directory_is_safe "$current"; then
+      echo "install target ancestor is not root-owned and non-writable: $current" >&2
+      return 1
+    fi
+  done
+}
+
+xray_validate_existing_directory() {
+  local path="$1"
+  xray_validate_parent_path "$path" || return
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    return 0
+  fi
+  xray_root_directory_is_safe "$path" || {
+    echo "install target directory is unsafe or a symlink: $path" >&2
+    return 1
+  }
+}
+
+xray_ensure_root_directory() {
+  local path="$1" mode="${2:-0755}"
+  xray_validate_existing_directory "$path" || return
+  if [ ! -d "$path" ]; then
+    install -d -o root -g root -m "$mode" "$path" || return
+  fi
+  xray_validate_existing_directory "$path"
+}
+
+xray_validate_existing_file() {
+  local path="$1" mode links
+  xray_validate_parent_path "$path" || return
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    return 0
+  fi
+  [ -f "$path" ] && [ ! -L "$path" ] || {
+    echo "install target is not a regular file or is a symlink: $path" >&2
+    return 1
+  }
+  installer_path_has_root_owner "$path" || {
+    echo "install target must be owned by root:root: $path" >&2
+    return 1
+  }
+  links="$(installer_path_link_count "$path")" || return 1
+  [ "$links" = 1 ] || { echo "install target has hard links: $path" >&2; return 1; }
+  mode="$(installer_path_mode "$path")" || return 1
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] && [ $((8#$mode & 022)) -eq 0 ] || {
+    echo "install target is group/other-writable: $path" >&2
+    return 1
+  }
+}
+
+validate_xray_install_layout() {
+  xray_validate_existing_directory "$(dirname "$XRAY_BIN")" || return
+  xray_validate_existing_directory "$GEO_DIR" || return
+  xray_validate_existing_directory "$(dirname "$ASN_DB_PATH")" || return
+  xray_validate_existing_file "$XRAY_BIN" || return
+  xray_validate_existing_file "$GEO_DIR/geoip.dat" || return
+  xray_validate_existing_file "$GEO_DIR/geosite.dat" || return
+  xray_validate_existing_file "$ASN_DB_PATH"
+}
+
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  command -v timeout >/dev/null 2>&1 || {
+    echo "timeout is required for bounded archive processing" >&2
+    return 1
+  }
+  timeout "$seconds" "$@"
+}
+
+running_pids_for_install_target() {
+  local binary="$1" proc_root="${RNL_PROC_ROOT:-/proc}" exe pid target
+  for exe in "$proc_root"/[0-9]*/exe; do
+    [ -e "$exe" ] || [ -L "$exe" ] || continue
+    pid="${exe%/exe}"
+    pid="${pid##*/}"
+    if [ -e "$binary" ] && [ "$exe" -ef "$binary" ]; then
+      printf '%s\n' "$pid"
+      continue
+    fi
+    target="$(readlink "$exe" 2>/dev/null || true)"
+    if [ "$target" = "$binary" ] || [ "$target" = "$binary (deleted)" ]; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
+require_install_target_stopped() {
+  local binary="$1" pids
+  pids="$(running_pids_for_install_target "$binary")"
+  if [ -n "$pids" ]; then
+    echo "refusing to replace running binary $binary: ${pids//$'\n'/,}" >&2
+    return 1
+  fi
+}
+
+preflight_disk_space() {
+  local root temp_required backup_bytes=0 include_asn=0
+  validate_xray_install_layout || return
+  root="$(installer_temp_root)"
+  ensure_installer_temp_root || return
+  if [ "$RNL_INSTALL_ASN" != 0 ]; then
+    include_asn=1
+  fi
+  if [ "$EXTERNAL_ASSET_ROLLBACK" != 1 ]; then
+    backup_bytes="$(asset_backup_bytes "$include_asn")" || return
+  fi
+  temp_required=$((backup_bytes + XRAY_INITIAL_WORK_BYTES))
+  if [ -n "$CUSTOM_CORE_URL" ]; then
+    temp_required=$((temp_required + XRAY_CORE_MAX_BYTES))
+  fi
+  if [ "$include_asn" -eq 1 ]; then
+    temp_required=$((temp_required + XRAY_ASN_MAX_BYTES + 1048576))
+  fi
+
+  reset_space_budget
+  add_space_budget "$root" "$temp_required" || return
+  add_space_budget "$(dirname "$XRAY_BIN")" "$XRAY_CORE_MAX_BYTES" || return
+  add_space_budget "$GEO_DIR" "$XRAY_GEO_FILE_MAX_BYTES" || return
+  add_space_budget "$GEO_DIR" "$XRAY_GEO_FILE_MAX_BYTES" || return
+  if [ "$include_asn" -eq 1 ]; then
+    add_space_budget "$(dirname "$ASN_DB_PATH")" "$XRAY_ASN_MAX_BYTES" || return
+  fi
+  require_space_budget
+}
+
+validate_zip_structure() {
+  local archive="$1" count item matches
+  count="$(run_with_timeout "$XRAY_ARCHIVE_TIMEOUT_SECONDS" unzip -Z -1 "$archive" \
+    | awk 'END { print NR + 0 }')"
+  [ "$count" -le "$XRAY_ARCHIVE_MAX_ENTRIES" ] || {
+    echo "rw-core archive has too many entries: $count" >&2
+    return 1
+  }
+  for item in xray geoip.dat geosite.dat; do
+    matches="$(run_with_timeout "$XRAY_ARCHIVE_TIMEOUT_SECONDS" unzip -Z -1 "$archive" \
+      | awk -v wanted="$item" '$0 == wanted { count++ } END { print count + 0 }')"
+    [ "$matches" -eq 1 ] || {
+      echo "rw-core archive must contain exactly one root entry named $item" >&2
+      return 1
+    }
+  done
+}
+
+zip_entry_size() {
+  local archive="$1" item="$2"
+  run_with_timeout "$XRAY_ARCHIVE_TIMEOUT_SECONDS" unzip -l "$archive" "$item" \
+    | awk -v wanted="$item" '
+    $4 == wanted && $1 ~ /^[0-9]+$/ { size = $1; count++ }
+    END { if (count != 1) exit 1; print size }
+  '
+}
+
+preflight_asset_space() {
+  local archive="$1" root zip_core geoip geosite custom_size=0 asn_size=0
+  local selected_core temp_growth backup_bytes=0
+  validate_xray_install_layout || return
+  root="$(installer_temp_root)"
+  zip_core="$(zip_entry_size "$archive" xray)"
+  geoip="$(zip_entry_size "$archive" geoip.dat)"
+  geosite="$(zip_entry_size "$archive" geosite.dat)"
+  [ "$zip_core" -le "$XRAY_CORE_MAX_BYTES" ] || {
+    echo "xray exceeds extraction hard limit: $XRAY_CORE_MAX_BYTES bytes" >&2
+    return 1
+  }
+  [ "$geoip" -le "$XRAY_GEO_FILE_MAX_BYTES" ] \
+    && [ "$geosite" -le "$XRAY_GEO_FILE_MAX_BYTES" ] || {
+      echo "geo asset exceeds extraction hard limit: $XRAY_GEO_FILE_MAX_BYTES bytes" >&2
+      return 1
+    }
+  if [ -f "$TMP_DIR/custom-core" ]; then
+    custom_size="$(file_size_bytes "$TMP_DIR/custom-core")"
+    selected_core=$custom_size
+  else
+    selected_core=$zip_core
+  fi
+  if [ -n "$ASN_SOURCE" ]; then
+    asn_size="$(file_size_bytes "$ASN_SOURCE")"
+  fi
+  if [ "$EXTERNAL_ASSET_ROLLBACK" != 1 ]; then
+    if [ -n "$ASN_SOURCE" ]; then
+      backup_bytes="$(asset_backup_bytes 1)" || return
+    else
+      backup_bytes="$(asset_backup_bytes 0)" || return
+    fi
+  fi
+
+  # The archive, optional custom core, and ASN source already consume space at
+  # this point. Only extraction, backups, and target staging remain as growth.
+  temp_growth=$((zip_core + geoip + geosite + backup_bytes))
+  reset_space_budget
+  add_space_budget "$root" "$temp_growth" || return
+  add_space_budget "$(dirname "$XRAY_BIN")" "$selected_core" || return
+  add_space_budget "$GEO_DIR" "$geoip" || return
+  add_space_budget "$GEO_DIR" "$geosite" || return
+  if [ -n "$ASN_SOURCE" ]; then
+    add_space_budget "$(dirname "$ASN_DB_PATH")" "$asn_size" || return
+  fi
+  require_space_budget
+}
+
+extract_zip_entry_limited() {
+  local archive="$1" item="$2" output="$3" max_bytes="$4" unzip_status size
+  set +o pipefail
+  run_with_timeout "$XRAY_ARCHIVE_TIMEOUT_SECONDS" unzip -p "$archive" "$item" \
+    | head -c $((max_bytes + 1)) >"$output"
+  unzip_status=${PIPESTATUS[0]}
+  set -o pipefail
+  size="$(file_size_bytes "$output")"
+  if [ "$size" -gt "$max_bytes" ]; then
+    rm -f "$output"
+    echo "$item exceeds extraction hard limit: $max_bytes bytes" >&2
+    return 1
+  fi
+  if [ "$unzip_status" -ne 0 ]; then
+    rm -f "$output"
+    echo "failed to extract $item from verified archive" >&2
+    return 1
+  fi
+  [ "$size" -gt 0 ] || { rm -f "$output"; echo "empty archive entry: $item" >&2; return 1; }
 }
 
 verify_sha256() {
@@ -107,50 +699,118 @@ verify_sha256() {
 }
 
 atomic_install() {
-  local source="$1" target="$2" mode="$3" staged
-  install -d -o root -g root -m 0755 "$(dirname "$target")"
+  local source="$1" target="$2" mode="$3" staged parent
+  parent="$(dirname "$target")"
+  xray_ensure_root_directory "$parent" 0755 || return
+  xray_validate_existing_file "$target" || return
   staged="${target}.new.$$"
-  rm -f "$staged"
+  if ! rm -f "$staged"; then
+    echo "failed to clear stale install staging file: $staged" >&2
+    return 1
+  fi
   if ! install -o root -g root -m "$mode" "$source" "$staged"; then
-    rm -f "$staged"
+    if ! rm -f "$staged"; then
+      echo "failed to remove incomplete install staging file: $staged" >&2
+    fi
     return 1
   fi
   if ! mv -f "$staged" "$target"; then
-    rm -f "$staged"
+    if ! rm -f "$staged"; then
+      echo "failed to remove rejected install staging file: $staged" >&2
+    fi
     return 1
   fi
+  xray_validate_existing_file "$target"
 }
 
 backup_asset() {
   local target="$1" name="$2"
+  xray_validate_existing_file "$target" || return
   if [ -e "$target" ] || [ -L "$target" ]; then
-    cp -a "$target" "$TMP_DIR/backup/$name"
+    if ! cp -a "$target" "$TMP_DIR/backup/$name"; then
+      echo "failed to back up asset: $target" >&2
+      return 1
+    fi
   else
-    : >"$TMP_DIR/backup/$name.absent"
+    if ! : >"$TMP_DIR/backup/$name.absent"; then
+      echo "failed to record absent asset: $target" >&2
+      return 1
+    fi
   fi
 }
 
 restore_asset() {
-  local name="$1" target="$2"
-  rm -f "$target" "${target}.new.$$"
-  if [ -e "$TMP_DIR/backup/$name" ] || [ -L "$TMP_DIR/backup/$name" ]; then
-    install -d -o root -g root -m 0755 "$(dirname "$target")"
-    cp -a "$TMP_DIR/backup/$name" "$target"
-  elif [ -f "$TMP_DIR/backup/$name.absent" ]; then
+  local name="$1" target="$2" parent backup absent staged
+  parent="$(dirname "$target")"
+  backup="$TMP_DIR/backup/$name"
+  absent="$TMP_DIR/backup/$name.absent"
+  staged="${target}.rollback.$$"
+  xray_ensure_root_directory "$parent" 0755 || return
+  xray_validate_existing_file "$target" || return
+
+  if [ -e "$backup" ] || [ -L "$backup" ]; then
+    xray_validate_existing_file "$backup" || {
+      echo "unsafe rollback backup for $target: $backup" >&2
+      return 1
+    }
+    if ! rm -f "$staged"; then
+      echo "failed to clear rollback staging file: $staged" >&2
+      return 1
+    fi
+    if ! cp -a "$backup" "$staged"; then
+      echo "failed to stage rollback backup for $target" >&2
+      return 1
+    fi
+    if ! xray_validate_existing_file "$staged"; then
+      echo "staged rollback asset failed validation: $staged" >&2
+      if ! rm -f "$staged"; then
+        echo "failed to remove invalid rollback staging file: $staged" >&2
+      fi
+      return 1
+    fi
+    if ! mv -f "$staged" "$target"; then
+      echo "failed to atomically restore asset: $target" >&2
+      return 1
+    fi
+  elif [ -f "$absent" ] && [ ! -L "$absent" ]; then
+    if ! rm -f "$staged" "$target"; then
+      echo "failed to restore absent asset state: $target" >&2
+      return 1
+    fi
+    if [ -e "$target" ] || [ -L "$target" ]; then
+      echo "asset remained after absent-state rollback: $target" >&2
+      return 1
+    fi
     return 0
   else
     echo "missing rollback record for $target" >&2
     return 1
   fi
+  if ! xray_validate_existing_file "$target"; then
+    echo "restored asset failed validation: $target" >&2
+    return 1
+  fi
 }
 
 begin_asset_transaction() {
-  mkdir -p "$TMP_DIR/backup"
-  backup_asset "$XRAY_BIN" rw-core
-  backup_asset "$GEO_DIR/geoip.dat" geoip.dat
-  backup_asset "$GEO_DIR/geosite.dat" geosite.dat
+  validate_xray_install_layout || return
+  if [ "$EXTERNAL_ASSET_ROLLBACK" = 1 ]; then
+    # upgrade.sh has already backed up the complete rw-core/geo/ASN trees and
+    # owns rollback. A nested backup would consume the same constrained disk
+    # twice and could race the outer transaction's recovery policy.
+    echo "using caller-owned asset rollback; skipping nested asset backup"
+    INSTALL_ARMED=0
+    return 0
+  fi
+  if ! mkdir -m 0700 "$TMP_DIR/backup"; then
+    echo "failed to create asset backup directory: $TMP_DIR/backup" >&2
+    return 1
+  fi
+  backup_asset "$XRAY_BIN" rw-core || return
+  backup_asset "$GEO_DIR/geoip.dat" geoip.dat || return
+  backup_asset "$GEO_DIR/geosite.dat" geosite.dat || return
   if [ -n "$ASN_SOURCE" ]; then
-    backup_asset "$ASN_DB_PATH" asn-prefixes.bin
+    backup_asset "$ASN_DB_PATH" asn-prefixes.bin || return
     ASN_TRANSACTIONAL=1
   fi
   INSTALL_ARMED=1
@@ -165,20 +825,29 @@ rollback_asset_transaction() {
   if [ "$ASN_TRANSACTIONAL" -eq 1 ]; then
     restore_asset asn-prefixes.bin "$ASN_DB_PATH" || failed=1
   fi
+  if [ "$failed" -ne 0 ]; then
+    return 1
+  fi
   INSTALL_ARMED=0
-  [ "$failed" -eq 0 ]
 }
 
 cleanup() {
-  local status="$?"
+  local status="$?" rollback_failed=0
   trap - EXIT
   if [ "$status" -ne 0 ] && [ "$INSTALL_ARMED" -eq 1 ]; then
     if ! rollback_asset_transaction; then
       echo "rw-core rollback was incomplete" >&2
+      echo "rollback artifacts preserved at: $TMP_DIR" >&2
+      rollback_failed=1
       status=1
     fi
   fi
-  [ -z "$TMP_DIR" ] || rm -rf "$TMP_DIR"
+  if [ "$rollback_failed" -eq 0 ] && [ -n "$TMP_DIR" ]; then
+    if ! rm -rf "$TMP_DIR"; then
+      echo "failed to clean installer transaction directory: $TMP_DIR" >&2
+      status=1
+    fi
+  fi
   exit "$status"
 }
 
@@ -221,7 +890,7 @@ prepare_asn_database() {
   if [ -z "$ASN_DB_SHA256" ] && [ "$default_source" -eq 1 ]; then
     download_file \
       "https://github.com/${RNL_REPO}/releases/download/${RNL_TAG}/SHA256SUMS" \
-      "$TMP_DIR/SHA256SUMS"
+      "$TMP_DIR/SHA256SUMS" 1048576
     ASN_DB_SHA256="$(awk '$2 == "asn-prefixes.bin" || $2 == "*asn-prefixes.bin" { print $1; exit }' "$TMP_DIR/SHA256SUMS")"
   fi
   if [ -z "$ASN_DB_SHA256" ]; then
@@ -229,7 +898,7 @@ prepare_asn_database() {
     return 1
   fi
   ASN_SOURCE="$TMP_DIR/asn-prefixes.bin"
-  download_file "$ASN_DB_URL" "$ASN_SOURCE"
+  download_file "$ASN_DB_URL" "$ASN_SOURCE" "$XRAY_ASN_MAX_BYTES"
   verify_sha256 "$ASN_SOURCE" "$ASN_DB_SHA256"
   if [ "$(od -An -tx1 -N8 "$ASN_SOURCE" | tr -d ' \n')" != "525741534e444201" ]; then
     echo "ASN database has invalid RWASNDB header" >&2
@@ -237,7 +906,21 @@ prepare_asn_database() {
   fi
 }
 
+# Pure helper tests source this file without performing privileged work.
+if [ "${RNL_INSTALL_XRAY_LIBRARY_ONLY:-0}" = 1 ]; then
+  # shellcheck disable=SC2317
+  return 0 2>/dev/null || exit 0
+fi
+
 require_root
+case "$EXTERNAL_ASSET_ROLLBACK" in
+  0|1) ;;
+  *) echo "RNL_EXTERNAL_ASSET_ROLLBACK must be 0 or 1" >&2; exit 2 ;;
+esac
+case "$RNL_INSTALL_ASN" in
+  0|1) ;;
+  *) echo "RNL_INSTALL_ASN must be 0 or 1" >&2; exit 2 ;;
+esac
 if ! [[ "$RNL_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
   || ! [[ "$RNL_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "invalid RNL_REPO or RNL_TAG" >&2
@@ -287,40 +970,64 @@ if ! command -v unzip >/dev/null 2>&1; then
   echo "unzip is required" >&2
   exit 1
 fi
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "timeout is required for bounded archive processing" >&2
+  exit 1
+fi
 
-TMP_DIR="$(mktemp -d)"
+preflight_disk_space
+TMP_DIR="$(make_temp_dir)"
 trap cleanup EXIT
 
-download_file "$XRAY_URL" "$TMP_DIR/xray.zip"
+download_file "$XRAY_URL" "$TMP_DIR/xray.zip" "$XRAY_ARCHIVE_MAX_BYTES"
 verify_sha256 "$TMP_DIR/xray.zip" "$XRAY_CORE_SHA256"
-for item in xray geoip.dat geosite.dat; do
-  unzip -p "$TMP_DIR/xray.zip" "$item" >"$TMP_DIR/$item"
-  [ -s "$TMP_DIR/$item" ] || { echo "missing $item in verified archive" >&2; exit 1; }
-done
+validate_zip_structure "$TMP_DIR/xray.zip"
 
 if [ -n "$CUSTOM_CORE_URL" ]; then
   if [ -z "$CUSTOM_CORE_SHA256" ]; then
     echo "CUSTOM_CORE_SHA256 is required with CUSTOM_CORE_URL" >&2
     exit 1
   fi
-  download_file "$CUSTOM_CORE_URL" "$TMP_DIR/custom-core"
+  download_file "$CUSTOM_CORE_URL" "$TMP_DIR/custom-core" "$XRAY_CORE_MAX_BYTES"
   verify_sha256 "$TMP_DIR/custom-core" "$CUSTOM_CORE_SHA256"
+fi
+prepare_asn_database
+preflight_asset_space "$TMP_DIR/xray.zip"
+
+extract_zip_entry_limited "$TMP_DIR/xray.zip" xray "$TMP_DIR/xray" "$XRAY_CORE_MAX_BYTES"
+extract_zip_entry_limited "$TMP_DIR/xray.zip" geoip.dat "$TMP_DIR/geoip.dat" "$XRAY_GEO_FILE_MAX_BYTES"
+extract_zip_entry_limited "$TMP_DIR/xray.zip" geosite.dat "$TMP_DIR/geosite.dat" "$XRAY_GEO_FILE_MAX_BYTES"
+if [ -f "$TMP_DIR/custom-core" ]; then
   mv "$TMP_DIR/custom-core" "$TMP_DIR/xray"
 fi
 
 chmod 0755 "$TMP_DIR/xray"
 CORE_VERSION_OUTPUT="$("$TMP_DIR/xray" version)"
 [ -n "$CORE_VERSION_OUTPUT" ] || { echo "rw-core version self-check returned no output" >&2; exit 1; }
-prepare_asn_database
 
-begin_asset_transaction
-atomic_install "$TMP_DIR/xray" "$XRAY_BIN" 0755
-atomic_install "$TMP_DIR/geoip.dat" "$GEO_DIR/geoip.dat" 0644
-atomic_install "$TMP_DIR/geosite.dat" "$GEO_DIR/geosite.dat" 0644
-if [ -n "$ASN_SOURCE" ]; then
-  atomic_install "$ASN_SOURCE" "$ASN_DB_PATH" 0644
+require_install_target_stopped /usr/local/bin/remnanode-lite
+require_install_target_stopped "$XRAY_BIN"
+if ! begin_asset_transaction; then
+  exit 1
 fi
-"$XRAY_BIN" version >/dev/null
+if ! atomic_install "$TMP_DIR/xray" "$XRAY_BIN" 0755; then
+  exit 1
+fi
+if ! atomic_install "$TMP_DIR/geoip.dat" "$GEO_DIR/geoip.dat" 0644; then
+  exit 1
+fi
+if ! atomic_install "$TMP_DIR/geosite.dat" "$GEO_DIR/geosite.dat" 0644; then
+  exit 1
+fi
+if [ -n "$ASN_SOURCE" ]; then
+  if ! atomic_install "$ASN_SOURCE" "$ASN_DB_PATH" 0644; then
+    exit 1
+  fi
+fi
+if ! "$XRAY_BIN" version >/dev/null; then
+  echo "installed rw-core failed its version self-check" >&2
+  exit 1
+fi
 INSTALL_ARMED=0
 if [ -n "$ASN_SOURCE" ]; then
   echo "ASN database installed: $ASN_DB_PATH"

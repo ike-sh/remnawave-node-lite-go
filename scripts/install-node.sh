@@ -30,13 +30,27 @@ else
     echo "非法 RNL_REPO 或 RNL_TAG，拒绝下载 bootstrap helper" >&2
     exit 2
   fi
-  _HELPERS_TMP="$(mktemp -d)"
+  _HELPERS_TMP="$(mktemp -d /var/tmp/remnanode-bootstrap.XXXXXX)"
+  trap 'rm -rf "${_HELPERS_TMP:-}"' EXIT
+  set +o pipefail
   curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+    --connect-timeout 15 --max-time 60 --speed-limit 1024 --speed-time 30 \
+    --max-filesize 1048576 \
     "https://raw.githubusercontent.com/${REPO}/${BOOTSTRAP_TAG}/scripts/install-env-helpers.sh" \
-    -o "${_HELPERS_TMP}/install-env-helpers.sh"
+    | head -c 1048577 >"${_HELPERS_TMP}/install-env-helpers.sh"
+  _HELPERS_DOWNLOAD_STATUS=("${PIPESTATUS[@]}")
+  set -o pipefail
+  _HELPERS_DOWNLOAD_BYTES="$(wc -c <"${_HELPERS_TMP}/install-env-helpers.sh" | tr -d '[:space:]')"
+  if [ "${_HELPERS_DOWNLOAD_STATUS[0]:-1}" -ne 0 ] \
+    || [ "${_HELPERS_DOWNLOAD_STATUS[1]:-1}" -ne 0 ] \
+    || [ "$_HELPERS_DOWNLOAD_BYTES" -gt 1048576 ]; then
+    echo "bootstrap helper 下载失败或超过 1048576 bytes 硬上限" >&2
+    exit 1
+  fi
   # shellcheck source=install-env-helpers.sh
   source "${_HELPERS_TMP}/install-env-helpers.sh"
   rm -rf "${_HELPERS_TMP}"
+  trap - EXIT
 fi
 TAG="$(resolve_install_tag "$REPO" "v${VERSION}")"
 INSTALL_XRAY="${RNL_INSTALL_XRAY:-1}"
@@ -204,9 +218,13 @@ run_upgrade_transaction() {
   if [ "$DRY_RUN" -eq 1 ]; then
     args+=(--dry-run)
   fi
+  if [ "$LOW_MEMORY" -eq 1 ]; then
+    args+=(--low-memory)
+  fi
 
   echo "检测到完整安装，交由 upgrade.sh 执行可回滚升级。"
   RNL_REPO="$REPO" RNL_TAG="$TAG" RNL_UPGRADE_XRAY="$upgrade_xray" \
+    RNL_ENSURE_SERVICE_STARTED=1 RNL_ENSURE_SERVICE_ENABLED=1 \
     run_sibling_script upgrade.sh "${args[@]}"
 }
 
@@ -214,6 +232,9 @@ run_explicit_upgrade() {
   local -a args=(--yes)
   if [ "$DRY_RUN" -eq 1 ]; then
     args+=(--dry-run)
+  fi
+  if [ "$LOW_MEMORY" -eq 1 ]; then
+    args+=(--low-memory)
   fi
   RNL_REPO="$REPO" RNL_TAG="$TAG" RNL_UPGRADE_XRAY=0 \
     run_sibling_script upgrade.sh "${args[@]}"
@@ -334,11 +355,13 @@ effective_node_port() {
 }
 
 configured_node_port() {
-  if [ -f "$NODE_ENV" ] && grep -q '^NODE_PORT=' "$NODE_ENV" 2>/dev/null; then
-    grep '^NODE_PORT=' "$NODE_ENV" | head -n 1 | cut -d= -f2-
-  else
-    effective_node_port
+  local configured
+  configured="$(read_env_value NODE_PORT "$NODE_ENV")"
+  if [ -n "$configured" ]; then
+    printf '%s\n' "$configured"
+    return 0
   fi
+  effective_node_port
 }
 
 prompt_node_port() {
@@ -357,12 +380,16 @@ prompt_node_port() {
 }
 
 confirm_install() {
-  if [ ! -x "${PREFIX}/${BIN_NAME}" ] || [ ! -f "$NODE_ENV" ]; then
+  if [ ! -x "${PREFIX}/${BIN_NAME}" ] || [ ! -f "$NODE_ENV" ] \
+    || [ ! -f "$UNIT" ] || [ -L "$UNIT" ]; then
+    if [ -x "${PREFIX}/${BIN_NAME}" ] || [ -f "$NODE_ENV" ] || [ -e "$UNIT" ]; then
+      echo "检测到未完成的安装，继续执行安装恢复而不是委托 stopped-state 升级。"
+    fi
     return 0
   fi
 
-  if [ "$PORT_EXPLICIT" -eq 1 ] || [ -n "$SECRET_FILE_ARG" ] || [ "$LOW_MEMORY" -eq 1 ]; then
-    echo "已有安装的事务升级不接受 --port / --secret-file / --low-memory；请先升级，再单独修改 ${NODE_ENV}。" >&2
+  if [ "$PORT_EXPLICIT" -eq 1 ] || [ -n "$SECRET_FILE_ARG" ]; then
+    echo "已有安装的事务升级不接受 --port / --secret-file；请先升级，再单独修改 ${NODE_ENV}。" >&2
     return 1
   fi
 
@@ -386,7 +413,13 @@ confirm_install() {
       if [ "$DRY_RUN" -eq 1 ]; then
         echo "[dry-run] 删除 ${ETC_DIR} ${LOG_DIR} ${DATA_DIR}"
       else
-        systemctl stop remnawave-node.service 2>/dev/null || true
+        local configured_xray previous_port
+        configured_xray="$(read_env_value XRAY_BIN "$NODE_ENV")" || return
+        [ -n "$configured_xray" ] || configured_xray=/usr/local/lib/remnanode/rw-core
+        configured_xray="$(canonical_binary_path "$configured_xray")" || return
+        previous_port="$(configured_node_port)" || return
+        stop_for_fresh_reinstall systemd "${PREFIX}/${BIN_NAME}" \
+          "$configured_xray" "$previous_port" || return
         rm -rf "$ETC_DIR" "$LOG_DIR" "$DATA_DIR"
         cleanup_runtime
         rm -f "${ETC_DIR}.bak."* 2>/dev/null || true
@@ -407,11 +440,7 @@ update_node_port_in_env() {
     echo "[dry-run] 更新 ${NODE_ENV} NODE_PORT=${port}"
     return 0
   fi
-  if grep -q '^NODE_PORT=' "$NODE_ENV"; then
-    sed -i "s/^NODE_PORT=.*/NODE_PORT=${port}/" "$NODE_ENV"
-  else
-    echo "NODE_PORT=${port}" >>"$NODE_ENV"
-  fi
+  set_env_value NODE_PORT "$port"
   echo "已设置 NODE_PORT=${port}"
 }
 
@@ -432,10 +461,12 @@ install_packages() {
     echo "[dry-run] apt-get install ca-certificates curl tar unzip iproute2 nftables"
     return 0
   fi
+  require_free_bytes / 536870912 "系统依赖与安装工作区"
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
       ca-certificates curl tar unzip iproute2 nftables
+    apt-get clean
     return 0
   fi
   for command in curl tar unzip ss nft; do
@@ -483,6 +514,10 @@ setup_env_file() {
     else
       echo "保留现有配置：${NODE_ENV}（NODE_PORT=$(configured_node_port)）"
     fi
+    if [ "$LOW_MEMORY" -eq 1 ]; then
+      set_env_value LOW_MEMORY 1
+      echo "已启用 LOW_MEMORY=1"
+    fi
     return 0
   fi
 
@@ -504,7 +539,12 @@ setup_env_file() {
 setup_secret_file() {
   step "配置 Secret Key"
 
+  migrate_inline_secret_to_file
+
   if secret_configured; then
+    if [ -s "$SECRET_FILE" ]; then
+      validate_secret_file "$SECRET_FILE"
+    fi
     if secret_from_env_file; then
       echo "保留现有 SECRET_KEY（${NODE_ENV}）"
     else
@@ -535,13 +575,36 @@ install_systemd() {
   fi
 
   local support
-  support="$(installed_support_file deploy/remnawave-node.service)"
+  support="$(installed_support_file deploy/remnawave-node.service)" || return
   [ -f "$support" ] || { echo "缺少已校验 systemd unit" >&2; return 1; }
-  install -m 0644 "$support" "$UNIT"
+  install_managed_file "$support" "$UNIT" 0644 || return
 
-  systemctl daemon-reload
-  systemctl enable remnawave-node.service
+  systemctl daemon-reload || return
+  systemctl enable remnawave-node.service || return
 }
+
+install_log_helper_command() (
+  local target="$1" log_file="$2" tmp=""
+
+  validate_managed_parent_path "$target" || return
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    validate_managed_regular_file "$target" || return
+  fi
+
+  tmp="$(mktemp "$(dirname "$target")/.$(basename "$target").XXXXXX")" || return
+  trap 'if [ -n "${tmp:-}" ]; then rm -f -- "$tmp"; fi' EXIT
+  [ -f "$tmp" ] && [ ! -L "$tmp" ] || {
+    echo "日志辅助命令 staging 不是普通文件：${tmp}" >&2
+    return 1
+  }
+  printf '%s\n' '#!/bin/sh' "exec tail -n +1 -f ${log_file}" >"$tmp" || return
+  chmod 0755 "$tmp" || return
+  chown root:root "$tmp" || return
+  validate_managed_regular_file "$tmp" || return
+  mv -f -- "$tmp" "$target" || return
+  tmp=""
+  validate_managed_regular_file "$target"
+)
 
 install_helpers() {
   step "安装日志辅助命令"
@@ -550,21 +613,16 @@ install_helpers() {
     return 0
   fi
 
-  cat >/usr/local/bin/remnanode-xlogs <<'EOF'
-#!/bin/sh
-exec tail -n +1 -f /var/log/remnanode/xray.out.log
-EOF
-  cat >/usr/local/bin/remnanode-xerrors <<'EOF'
-#!/bin/sh
-exec tail -n +1 -f /var/log/remnanode/xray.err.log
-EOF
-  chmod 0755 /usr/local/bin/remnanode-xlogs /usr/local/bin/remnanode-xerrors
+  install_log_helper_command "${PREFIX}/remnanode-xlogs" \
+    /var/log/remnanode/xray.out.log || return
+  install_log_helper_command "${PREFIX}/remnanode-xerrors" \
+    /var/log/remnanode/xray.err.log || return
 }
 
 start_service() {
   if ! secret_configured; then
     echo "⚠ Secret Key 未配置，跳过启动服务。"
-    echo "  请编辑 ${NODE_ENV} 填入 NODE_PORT 与 SECRET_KEY 后：systemctl restart remnawave-node"
+    echo "  请将 Secret Key 写入 ${SECRET_FILE} 并确认 ${NODE_ENV} 中的 NODE_PORT 后：systemctl restart remnawave-node"
     return 0
   fi
 
@@ -615,12 +673,16 @@ do_install() {
 	local arch
 	arch="$(detect_arch)"
 	install_packages
+	require_command head
+	require_command tar
+	require_command timeout
 	ensure_service_account
   setup_directories
   print_pre_install_panel_hint
   download_binary "$arch"
   prompt_node_port
   setup_env_file
+  normalize_runtime_environment
   ensure_internal_socket_in_env
   setup_secret_file
   install_xray
@@ -640,7 +702,7 @@ do_install() {
   echo "  二进制：  ${PREFIX}/${BIN_NAME}"
   echo "  环境配置：${NODE_ENV}"
   echo "  监听端口：$(configured_node_port)（Panel 须填相同端口）"
-  echo "  配置文件：${NODE_ENV}（NODE_PORT + SECRET_KEY）"
+  echo "  配置文件：${NODE_ENV}（NODE_PORT + SECRET_KEY_FILE）"
   echo "  日志：    journalctl -u remnawave-node -f"
   echo "  Xray：    remnanode-xlogs / remnanode-xerrors"
   echo "  管理：    再次运行 install-node.sh 可升级或卸载"

@@ -23,9 +23,11 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 - Linux（Debian / Ubuntu 等 systemd 发行版，或 Alpine + OpenRC）
 - 生产目标：整机 `512 MiB RAM / 1 vCPU / 2 GB disk`
+- Alpine 生产部署要求 cgroup v2 的 memory/cpu/pids controller；OpenRC 会验证 `448MiB / 0 swap / 1 CPU / 256 PID`，缺失时拒绝启动
+- systemd/OpenRC 都将 `/etc/remnanode/node.env` 作为有界数据文件读取，不会把 Secret 或未知变量导出到 Node/rw-core 环境
 - Panel 下发的 `SECRET_KEY`（含 mTLS 证书与 JWT 公钥）
 - [rw-core](https://github.com/XTLS/Xray-core) **≥ v26.6.27**（2.8.0 抽象套接字 API 的硬性要求；安装脚本固定安装并校验该版本）
-- 可选：`nft`、`ss`（插件 IP 封禁与连接踢除，需 `CAP_NET_ADMIN`）
+- `CAP_NET_ADMIN` 用于 nftables 插件规则与 `NETLINK_SOCK_DIAG` socket destroy；安装器使用 iproute2 的 `ss` 复核监听端口确由目标进程持有
 
 ---
 
@@ -51,12 +53,12 @@ bash /tmp/install-alpine.sh
 
 1. 在 Panel 创建节点并复制 `SECRET_KEY`
 2. 在本机运行安装脚本并粘贴 Secret Key
-3. 看到 `OK: TCP :2222 已监听` 后，在 Panel 启用节点（若已启用，约 10s 内自动上线）
+3. 看到目标 `remnanode-lite` 进程正在监听 `TCP :2222` 后，在 Panel 启用节点（若已启用，约 10s 内自动上线）
 4. 防火墙仅对 Panel 地址开放 `NODE_PORT`
 
 手动配置（非交互安装未带 `SECRET_KEY` 时）：
 
-1. 编辑 `/etc/remnanode/node.env`，填写 `NODE_PORT` 与 `SECRET_KEY`
+1. 编辑 `/etc/remnanode/node.env` 确认 `NODE_PORT`，将 Secret Key 写入 `/etc/remnanode/secret.key`（单行 base64、`root:remnanode 0640`）
 2. 重启服务：`systemctl restart remnawave-node`（Alpine：`rc-service remnawave-node restart`）
 3. 在 Panel 中启用节点，端口须与 `NODE_PORT` 一致（默认 `2222`）
 
@@ -67,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1
   | sudo env SECRET_KEY='eyJ...' NODE_PORT=2222 bash -s -- --install --yes
 ```
 
-配置模板见 [deploy/node.env.example](deploy/node.env.example)。密钥过长时可改用 `SECRET_KEY_FILE`。
+配置模板见 [deploy/node.env.example](deploy/node.env.example)。安装器接收 `SECRET_KEY` 输入后会验证并写入受限的 `SECRET_KEY_FILE`，不会将密钥内联留在 `node.env`。
 
 ---
 
@@ -77,7 +79,8 @@ curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1
 
 ```env
 NODE_PORT=2222
-SECRET_KEY="eyJ..."
+SECRET_KEY=
+SECRET_KEY_FILE=/etc/remnanode/secret.key
 XRAY_BIN=/usr/local/lib/remnanode/rw-core
 GEO_DIR=/usr/local/share/remnanode/xray
 LOG_DIR=/var/log/remnanode
@@ -93,11 +96,13 @@ LOG_DIR=/var/log/remnanode
 curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1.0/scripts/upgrade.sh | sudo bash -s -- --yes
 ```
 
-升级会校验 Release 摘要和二进制版本，并在替换前备份 binary、service、support 与 `node.env`；启动或监听验证失败时自动恢复。默认保留 rw-core，同步升级 rw-core：
+升级会校验 Release 摘要和二进制版本，并在替换前备份 binary、service、support、`node.env` 与 `secret.key`。升级前运行中或由 install 委托要求启动的服务，只有目标二进制进程实际持有监听端口才提交事务；显式升级原本 stopped 的服务则保持 stopped。默认保留 rw-core，同步升级 rw-core：
 
 ```bash
 sudo RNL_UPGRADE_XRAY=1 bash upgrade.sh --yes
 ```
+
+旧版配置缺少 `LOW_MEMORY` 时升级器会按整机内存迁移；512MiB 节点可强制执行 `bash upgrade.sh --yes --low-memory`。安装与升级使用 `/var/lib/remnanode-installer` 作为 root-only 工作区，并在下载、解压和可用磁盘不足时提前失败。
 
 ---
 

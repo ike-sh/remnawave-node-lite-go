@@ -28,9 +28,11 @@ git commit -m "chore(release): freeze 0.1.0 candidate"
 
 C="$(git rev-parse HEAD)"
 git rev-parse "${C}^{tree}"
+CANDIDATE_TAG="checkpoint-m08-code-candidate-$(git rev-parse --short=12 "$C")"
+git tag -a "$CANDIDATE_TAG" -m "checkpoint M8 code candidate $C"
 ```
 
-此时可以记录本地辅助 tag `checkpoint-m08-code-candidate`，但不得创建 `v0.1.0`。
+候选 tag 包含 commit 短 SHA，因此每次重新冻结都会创建唯一且不可变的本地 tag。历史 `checkpoint-m08-code-candidate` 已指向早期审计基线，不得移动或复用。此阶段不得创建 `v0.1.0`。
 
 ## 2. 执行 M8 真实验收
 
@@ -40,7 +42,7 @@ git rev-parse "${C}^{tree}"
 - Panel `2.8.1` 在 systemd 与 OpenRC 节点上的完整生命周期、统计、用户和插件流程。
 - 并发交错 `xray start/stop` 与 `plugin sync/recreate`，确认共用外层 lifecycle gate、固定锁序和取消传播。
 - Ubuntu 24.04/systemd 与 Alpine 3.22/OpenRC；两者架构并集覆盖 amd64、arm64。
-- rw-core `v26.6.27`、nftables、socket kill、安装、重复安装、升级、坏版本回滚、reboot 和卸载隔离；两种 init 环境都用 wrapper + child 验证独立进程组及后代清理。
+- rw-core `v26.6.27`、nftables、`NETLINK_SOCK_DIAG` socket destroy、安装、重复安装、升级、坏版本回滚、reboot 和卸载隔离；两种 init 环境都用 wrapper + child 验证独立进程组及后代清理。
 - 整机 `512 MiB / 1 CPU / 2 GiB / no swap`、50k 用户、至少 24 小时持续运行及故障恢复。
 
 证据写入 `docs/development/acceptance/v0.1.0/`。不得记录 JWT、证书、私钥、Secret Key、IP、hostname 或原始响应 body。
@@ -97,6 +99,8 @@ REQUIRE_TAG_AT_HEAD=1 \
 
 ## 6. 回滚
 
-`upgrade.sh` 在替换前备份 binary、service、support、`node.env` 和可选 rw-core 资产。新服务未启动或未监听配置端口时会恢复旧文件与运行状态；失败日志保留事务目录供检查。
+`upgrade.sh` 在替换前备份 binary、service、support、`node.env`、`secret.key` 和可选 rw-core 资产，并记录升级前的 active 状态；install 委托可能修复开机注册时还会捕获 enabled 状态。事务使用 root-only 的 `/var/lib/remnanode-installer`，并在下载、解压或任一目标文件系统的磁盘预算不足时提前失败；rw-core 子安装复用外层回滚记录，不创建第二份相同资产备份。对于升级前运行中或由 install 委托要求启动的服务，目标版本二进制必须实际持有配置端口，否则恢复旧文件、开机注册与运行状态；显式升级原本 stopped 的服务保持 stopped。回滚前若服务停止命令失败，或不能确认 Node/rw-core 全部退出，将保留备份并拒绝替换运行中的文件；任何恢复步骤失败同样保留唯一备份并以非零状态结束。
+
+当前事务只覆盖进程正常存活并能执行 trap 的失败路径。所有 installer 入口的共享内核 `flock`、持久 phase journal 与 SIGKILL/掉电恢复仍是冻结 `0.1.0` 候选前的发布阻断。
 
 版本回退只允许使用本项目确实发布过的旧 tag：`sudo RNL_TAG=vX.Y.Z bash upgrade.sh --yes`。不得使用参考仓库的历史 tag。

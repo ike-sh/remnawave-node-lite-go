@@ -37,6 +37,7 @@ for script in scripts/*.sh; do
 done
 sh -n deploy/remnawave-node.openrc
 actionlint
+bash scripts/test-install-ops.sh
 bash scripts/check-supply-chain.sh
 
 if command -v govulncheck >/dev/null 2>&1; then

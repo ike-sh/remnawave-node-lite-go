@@ -3,16 +3,19 @@ package unixconfig
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/Luxiaba/remnawave-node-lite-go/internal/xraywebhook"
 	"golang.org/x/net/netutil"
+	"golang.org/x/sys/unix"
 )
 
 // InternalTokenHeader is the preferred auth channel (not visible in process argv).
@@ -26,6 +29,7 @@ const (
 	maxUnixConnections        = 8
 	maxConcurrentUnixHandlers = 4
 	maxUnixHeaderBytes        = 8 << 10
+	unixSocketProbeTimeout    = 250 * time.Millisecond
 )
 
 type Provider interface {
@@ -65,16 +69,29 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 	}
 
-	_ = os.Remove(s.Path)
-	listener, err := net.Listen("unix", s.Path)
+	dirLock, err := lockUnixSocketDirectory(s.Path)
 	if err != nil {
 		return err
 	}
-	if err := os.Chmod(s.Path, 0o600); err != nil {
-		_ = listener.Close()
+	defer func() {
+		if err := dirLock.Close(); err != nil {
+			slog.Warn("failed to release unix config socket directory lock", "path", s.Path, "error", err)
+		}
+	}()
+
+	if err := prepareUnixSocketPath(s.Path); err != nil {
 		return err
 	}
-	defer os.Remove(s.Path)
+	unixListener, socketInfo, err := listenUnixSocket(s.Path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := removeOwnedUnixSocket(s.Path, socketInfo); err != nil {
+			slog.Warn("failed to clean up unix config socket", "path", s.Path, "error", err)
+		}
+	}()
+	listener := net.Listener(unixListener)
 	listener = netutil.LimitListener(listener, maxUnixConnections)
 
 	mux := http.NewServeMux()
@@ -111,6 +128,137 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+type unixSocketDirectoryLock struct {
+	fd   int
+	path string
+}
+
+func lockUnixSocketDirectory(socketPath string) (*unixSocketDirectoryLock, error) {
+	dir := filepath.Dir(socketPath)
+	if dir == "" {
+		dir = "."
+	}
+	fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open unix socket directory %q for locking: %w", dir, err)
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("lock unix socket directory %q: %w", dir, err)
+	}
+	return &unixSocketDirectoryLock{fd: fd, path: dir}, nil
+}
+
+func (l *unixSocketDirectoryLock) Close() error {
+	if l == nil || l.fd < 0 {
+		return nil
+	}
+	fd := l.fd
+	l.fd = -1
+	unlockErr := unix.Flock(fd, unix.LOCK_UN)
+	closeErr := unix.Close(fd)
+	if unlockErr != nil {
+		unlockErr = fmt.Errorf("unlock unix socket directory %q: %w", l.path, unlockErr)
+	}
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close unix socket directory %q: %w", l.path, closeErr)
+	}
+	return errors.Join(unlockErr, closeErr)
+}
+
+func prepareUnixSocketPath(path string) error {
+	before, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect existing unix socket %q: %w", path, err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to replace symlink at unix socket path %q", path)
+	}
+	if before.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("refusing to replace non-socket at unix socket path %q", path)
+	}
+
+	conn, dialErr := net.DialTimeout("unix", path, unixSocketProbeTimeout)
+	if dialErr == nil {
+		_ = conn.Close()
+		return fmt.Errorf("unix socket %q is already accepting connections", path)
+	}
+	if !errors.Is(dialErr, syscall.ECONNREFUSED) {
+		return fmt.Errorf("probe existing unix socket %q: %w", path, dialErr)
+	}
+
+	after, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("reinspect stale unix socket %q: %w", path, err)
+	}
+	if !sameUnixSocket(before, after) {
+		return fmt.Errorf("unix socket %q changed while checking whether it was stale", path)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove stale unix socket %q: %w", path, err)
+	}
+	return nil
+}
+
+func listenUnixSocket(path string) (*net.UnixListener, os.FileInfo, error) {
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen on unix socket %q: %w", path, err)
+	}
+	// Go otherwise unlinks Path from UnixListener.Close without checking that
+	// the directory entry still belongs to this listener.
+	listener.SetUnlinkOnClose(false)
+
+	socketInfo, err := os.Lstat(path)
+	if err != nil {
+		_ = listener.Close()
+		return nil, nil, fmt.Errorf("inspect newly bound unix socket %q: %w", path, err)
+	}
+	if socketInfo.Mode()&os.ModeSocket == 0 || socketInfo.Mode()&os.ModeSymlink != 0 {
+		_ = listener.Close()
+		return nil, nil, fmt.Errorf("newly bound unix socket path %q was replaced", path)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = listener.Close()
+		_ = removeOwnedUnixSocket(path, socketInfo)
+		return nil, nil, fmt.Errorf("set unix socket permissions %q: %w", path, err)
+	}
+	current, err := os.Lstat(path)
+	if err != nil || !sameUnixSocket(socketInfo, current) {
+		_ = listener.Close()
+		_ = removeOwnedUnixSocket(path, socketInfo)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reinspect newly bound unix socket %q: %w", path, err)
+		}
+		return nil, nil, fmt.Errorf("newly bound unix socket path %q changed while setting permissions", path)
+	}
+	return listener, socketInfo, nil
+}
+
+func removeOwnedUnixSocket(path string, owned os.FileInfo) error {
+	current, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !sameUnixSocket(owned, current) {
+		return nil
+	}
+	return os.Remove(path)
+}
+
+func sameUnixSocket(first, second os.FileInfo) bool {
+	return first != nil && second != nil &&
+		first.Mode()&os.ModeSocket != 0 && second.Mode()&os.ModeSocket != 0 &&
+		first.Mode()&os.ModeSymlink == 0 && second.Mode()&os.ModeSymlink == 0 &&
+		os.SameFile(first, second)
 }
 
 func limitUnixHandlers(maxActive int, next http.Handler) http.Handler {

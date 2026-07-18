@@ -60,7 +60,7 @@ func Run(args []string) int {
 		results = append(results, checkGeoFiles(cfg.GeoDir)...)
 		results = append(results, checkASNDatabase(cfg.ASNDBPath)...)
 		results = append(results, checkCommand("nft", "nftables 命令行（插件 IP 封禁）")...)
-		results = append(results, checkCommand("ss", "ss 命令（踢连接 drop-ips）")...)
+		results = append(results, checkCommand("ss", "ss 命令（部署监听端口归属检查）")...)
 	}
 
 	exitCode := 0
@@ -105,7 +105,7 @@ func checkCapNetAdmin() result {
 	return result{
 		level:   "WARN",
 		title:   "CAP_NET_ADMIN",
-		detail:  "当前进程未具备（nftables / ss -K 不可用）",
+		detail:  "当前进程未具备（nftables / NETLINK_SOCK_DIAG socket destroy 不可用）",
 		fixHint: "通过 systemd 启动：确认 unit 含 AmbientCapabilities=CAP_NET_ADMIN，然后 systemctl daemon-reload && systemctl restart remnawave-node",
 	}
 }

@@ -9,11 +9,10 @@ Type=simple
 User=remnanode
 Group=remnanode
 UMask=0077
-EnvironmentFile=/etc/remnanode/node.env
-# 内存上限由进程按 LOW_MEMORY=1 自动设置（180MiB 软上限）；
-# 需覆盖时在 node.env 中显式设置 GOMEMLIMIT（大节点请勿设置）
+# remnanode-lite 将 node.env 作为有界数据文件自行解析。禁止 systemd
+# 导出整份文件，避免兼容的内联 SECRET_KEY 或未知变量进入进程环境。
 WorkingDirectory=/var/lib/remnanode
-ExecStart=/usr/local/bin/remnanode-lite
+ExecStart=/usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/var/lib/remnanode USER=remnanode LOGNAME=remnanode REMNANODE_ENV=/etc/remnanode/node.env /usr/local/bin/remnanode-lite
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -26,7 +25,8 @@ CPUQuota=100%
 MemoryMax=448M
 MemorySwapMax=0
 
-# nftables/ss -K 需要 NET_ADMIN；rw-core 监听 1-1023 端口需要 NET_BIND_SERVICE。
+# nftables 与 NETLINK_SOCK_DIAG socket destroy 需要 NET_ADMIN；
+# rw-core 监听 1-1023 端口需要 NET_BIND_SERVICE。
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true

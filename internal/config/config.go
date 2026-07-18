@@ -2,14 +2,19 @@ package config
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/secret"
 )
 
 const (
@@ -19,6 +24,9 @@ const (
 	defaultLogDir             = "/var/log/remnanode"
 	defaultInternalSocketPath = "/run/remnanode/internal.sock"
 	defaultASNDBPath          = "/usr/local/share/remnanode/asn/asn-prefixes.bin"
+	maxDotEnvBytes            = 1 << 20
+	maxDotEnvLines            = 4096
+	maxDotEnvAssignments      = 256
 )
 
 // ResolveEnvPath returns the first existing env file path, preferring production default.
@@ -44,7 +52,16 @@ type Config struct {
 	DisableHashedSetCheck bool
 	LowMemory             bool
 	BodyLimitMB           int
+	GoMemoryLimitBytes    int64
+	GoMemoryLimitSet      bool
+	NodeContractVersion   string
+	XrayCoreVersion       string
 }
+
+var (
+	nodeContractVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$`)
+	xrayCoreVersionPattern     = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$`)
+)
 
 func Load(dotenvPath string) (Config, error) {
 	values := map[string]string{}
@@ -72,6 +89,9 @@ func Load(dotenvPath string) (Config, error) {
 		"DISABLE_HASHED_SET_CHECK",
 		"LOW_MEMORY",
 		"BODY_LIMIT_MB",
+		"GOMEMLIMIT",
+		"NODE_CONTRACT_VERSION",
+		"XRAY_CORE_VERSION",
 	} {
 		if value, ok := os.LookupEnv(key); ok && strings.TrimSpace(value) != "" {
 			values[key] = value
@@ -115,6 +135,18 @@ func Load(dotenvPath string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	goMemoryLimitBytes, goMemoryLimitSet, err := optionalMemoryLimit(values, "GOMEMLIMIT")
+	if err != nil {
+		return Config{}, err
+	}
+	nodeContractVersion, err := optionalRuntimeVersion(values, "NODE_CONTRACT_VERSION", nodeContractVersionPattern)
+	if err != nil {
+		return Config{}, err
+	}
+	xrayCoreVersion, err := optionalRuntimeVersion(values, "XRAY_CORE_VERSION", xrayCoreVersionPattern)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		NodePort:              nodePort,
@@ -129,6 +161,10 @@ func Load(dotenvPath string) (Config, error) {
 		DisableHashedSetCheck: disableHashedSetCheck,
 		LowMemory:             lowMemory,
 		BodyLimitMB:           bodyLimitMB,
+		GoMemoryLimitBytes:    goMemoryLimitBytes,
+		GoMemoryLimitSet:      goMemoryLimitSet,
+		NodeContractVersion:   nodeContractVersion,
+		XrayCoreVersion:       xrayCoreVersion,
 	}, nil
 }
 
@@ -141,20 +177,24 @@ func (c Config) HTTPAddr() string {
 }
 
 func parseDotEnv(path string) (map[string]string, error) {
-	file, err := os.Open(path)
+	raw, err := readStableRegularFile(path, maxDotEnvBytes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return map[string]string{}, nil
 		}
-		return nil, fmt.Errorf("open %s: %w", path, err)
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	defer file.Close()
 
-	values := map[string]string{}
-	scanner := bufio.NewScanner(file)
+	values := make(map[string]string, 32)
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 64<<10), maxDotEnvBytes)
 	lineNo := 0
+	assignments := 0
 	for scanner.Scan() {
 		lineNo++
+		if lineNo > maxDotEnvLines {
+			return nil, fmt.Errorf("%s contains more than %d lines", path, maxDotEnvLines)
+		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -168,6 +208,10 @@ func parseDotEnv(path string) (map[string]string, error) {
 		value := strings.TrimSpace(parts[1])
 		if key == "" {
 			return nil, fmt.Errorf("%s:%d empty .env key", path, lineNo)
+		}
+		assignments++
+		if assignments > maxDotEnvAssignments {
+			return nil, fmt.Errorf("%s contains more than %d assignments", path, maxDotEnvAssignments)
 		}
 		values[key] = unquote(value)
 	}
@@ -234,16 +278,149 @@ func optionalIntDefault(values map[string]string, key string, fallback int) (int
 	return value, nil
 }
 
+func optionalMemoryLimit(values map[string]string, key string) (int64, bool, error) {
+	raw := strings.TrimSpace(values[key])
+	if raw == "" {
+		return 0, false, nil
+	}
+	if raw == "off" {
+		return int64(^uint64(0) >> 1), true, nil
+	}
+
+	multiplier := int64(1)
+	number := raw
+	for _, unit := range []struct {
+		suffix     string
+		multiplier int64
+	}{
+		{suffix: "TiB", multiplier: 1 << 40},
+		{suffix: "GiB", multiplier: 1 << 30},
+		{suffix: "MiB", multiplier: 1 << 20},
+		{suffix: "KiB", multiplier: 1 << 10},
+		{suffix: "B", multiplier: 1},
+	} {
+		if strings.HasSuffix(raw, unit.suffix) {
+			number = strings.TrimSuffix(raw, unit.suffix)
+			multiplier = unit.multiplier
+			break
+		}
+	}
+	if len(number) < 1 || len(number) > 19 {
+		return 0, false, fmt.Errorf("%s must be off or a non-negative byte count with an optional B/KiB/MiB/GiB/TiB suffix", key)
+	}
+	for _, char := range number {
+		if char < '0' || char > '9' {
+			return 0, false, fmt.Errorf("%s must be off or a non-negative byte count with an optional B/KiB/MiB/GiB/TiB suffix", key)
+		}
+	}
+	value, err := strconv.ParseInt(number, 10, 64)
+	if err != nil || value > int64(^uint64(0)>>1)/multiplier {
+		return 0, false, fmt.Errorf("%s is outside the supported byte range", key)
+	}
+	return value * multiplier, true, nil
+}
+
+func optionalRuntimeVersion(values map[string]string, key string, pattern *regexp.Regexp) (string, error) {
+	raw := strings.TrimSpace(values[key])
+	if raw == "" {
+		return "", nil
+	}
+	if len(raw) > 64 || !pattern.MatchString(raw) {
+		return "", fmt.Errorf("%s has an invalid version value", key)
+	}
+	return raw, nil
+}
+
 func loadSecretFromFile(values map[string]string) (string, error) {
 	path := strings.TrimSpace(values["SECRET_KEY_FILE"])
 	if path == "" {
 		return "", nil
 	}
-	raw, err := os.ReadFile(path)
+
+	canonical, err := ReadSecretFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read SECRET_KEY_FILE %s: %w", path, err)
 	}
-	return strings.TrimSpace(string(raw)), nil
+	return canonical, nil
+}
+
+// ReadSecretFile safely reads and canonicalizes a bounded Secret Key file.
+func ReadSecretFile(path string) (string, error) {
+	maxFileBytes := int64(secret.MaxEncodedBytes + 2)
+	raw, err := readStableRegularFile(path, maxFileBytes)
+	if err != nil {
+		return "", err
+	}
+	return canonicalSecretFile(raw)
+}
+
+// CanonicalizeSecretFileContent accepts one optional LF or CRLF suffix.
+func CanonicalizeSecretFileContent(raw []byte) (string, error) {
+	return canonicalSecretFile(raw)
+}
+
+func readStableRegularFile(path string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, errors.New("file size limit must be positive")
+	}
+	file, err := openReadOnlyNoFollow(path)
+	if err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened file: %w", err)
+	}
+	if !opened.Mode().IsRegular() {
+		return nil, errors.New("file must be a regular non-symlink file")
+	}
+	if opened.Size() > maxBytes {
+		return nil, fmt.Errorf("file exceeds %d bytes", maxBytes)
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("file exceeds %d bytes", maxBytes)
+	}
+	final, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("reinspect file: %w", err)
+	}
+	if !final.Mode().IsRegular() || final.Size() > maxBytes ||
+		opened.Size() != final.Size() || final.Size() != int64(len(raw)) ||
+		!opened.ModTime().Equal(final.ModTime()) || !os.SameFile(opened, final) {
+		return nil, errors.New("file changed while reading")
+	}
+	return raw, nil
+}
+
+func canonicalSecretFile(raw []byte) (string, error) {
+	if len(raw) > secret.MaxEncodedBytes+2 {
+		return "", fmt.Errorf("content exceeds %d bytes plus optional CRLF", secret.MaxEncodedBytes)
+	}
+	if len(raw) >= 2 && raw[len(raw)-2] == '\r' && raw[len(raw)-1] == '\n' {
+		raw = raw[:len(raw)-2]
+	} else if len(raw) >= 1 && raw[len(raw)-1] == '\n' {
+		raw = raw[:len(raw)-1]
+	} else if len(raw) >= 1 && raw[len(raw)-1] == '\r' {
+		return "", errors.New("content must have no newline or one LF/CRLF suffix")
+	}
+	if len(raw) == 0 || len(raw) > secret.MaxEncodedBytes {
+		return "", fmt.Errorf("canonical content must contain 1..%d bytes", secret.MaxEncodedBytes)
+	}
+	for _, char := range raw {
+		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') ||
+			(char >= '0' && char <= '9') || char == '+' || char == '/' ||
+			char == '-' || char == '_' || char == '=' {
+			continue
+		}
+		return "", errors.New("content contains non-base64 bytes or internal whitespace")
+	}
+	return string(raw), nil
 }
 
 func randomToken(byteLen int) (string, error) {

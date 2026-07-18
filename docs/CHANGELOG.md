@@ -21,6 +21,8 @@
 - 外部传输最低版本收敛为 TLS 1.3，并禁用 HTTP/2；无效 JWT、未知路由和错误 method 与官方一致地直接销毁连接。
 - systemd/OpenRC 改用专用 `remnanode` 用户，只保留 `CAP_NET_ADMIN` 与 `CAP_NET_BIND_SERVICE`；systemd 同时启用 capability bounding、sandbox、448 MiB/no-swap/1 CPU/256 tasks 限额。
 - Release archive、rw-core、自定义 core 与 ASN 资产均在写盘前校验 SHA-256、结构和版本；固定 rw-core 摘要不可覆盖，GitHub Actions 固定到完整 commit SHA。
+- systemd/OpenRC 通过空环境启动，`node.env` 与 Secret 均由 Go 使用 `O_NOFOLLOW|O_NONBLOCK` 的同一文件描述符有界读取；符号链接、FIFO、device、超限或读取期间变化会在启动前失败。
+- 安装器拒绝受管路径中的不安全 owner、权限、符号链接和硬链接；日志 helper、rw-core、geo 与 ASN 使用同目录 staging 原子替换，service 更新则由外层升级事务备份和验证。
 
 ### 修复
 
@@ -37,13 +39,15 @@
 - nft 不可用时合法配置仍按官方语义接受，但 torrent effective state 保持禁用；reset 不再丢弃未 collect reports，ASN/shared list 降级会写入明确日志。
 - listener 异常不再从 goroutine 调用 `log.Fatalf` 跳过清理；统一关闭路径先停止 rw-core，再删除本项目 nftables 表。
 - 用户热更新改为可取消的串行 mutation；只有 rw-core RPC 成功且 Xray generation 未变化时才提交 inbound hash，清理失败不再继续添加该用户，批量部分失败会返回真实错误并保持可重试。
-- 连接踢除会规范化并去重 IP，保护非法、特殊、本机和白名单地址；缺少 capability、IP 查询失败、超时或任一 `ss -K` 失败不再伪报成功。
+- 连接踢除会规范化并去重 IP，保护非法、特殊、本机和白名单地址；缺少 capability、IP 查询失败或任一 `NETLINK_SOCK_DIAG` socket destroy 失败不再伪报成功。
 - `get-users-ip-list` 优先使用单次批量 RPC；旧 core 只在 `UNIMPLEMENTED` 时降级到最多 8 个固定 worker，并缓存 capability，消除 N+1 无界 goroutine。
 - 所有内部 Handler/Stats unary gRPC 调用增加取消传播和有界 deadline；默认 5 秒，健康探测 3 秒，批量 legacy 查询共享总预算。
-- Xray webhook 改为 64 条有界非阻塞队列和单 worker；插件关闭使用不可逆 admission fence，超时或 nft 清理失败后拒绝新 mutation 并允许 Close 重试。
+- Xray webhook 改为 64 条有界等待队列和单 worker；容量超时、取消或关闭会明确返回 503，插件关闭使用不可逆 admission fence，超时或 nft 清理失败后拒绝新 mutation 并允许 Close 重试。
 - 整机退出改为共享 25 秒预算；后台版本探测可取消并等待，rw-core 确认停止后才清理 nft 表，避免独立 timeout 累加越过 service manager 的 TERM grace。
 - 公开 `xray/stop` 串行化 start/stop，并只在 core 停止成功后 reset 插件；停止失败不再提前撤销 nft 过滤。
-- 重复执行安装脚本会进入同一可回滚升级事务；坏 systemd/OpenRC service、binary/support/node.env/rw-core 写入失败均恢复升级前文件和运行状态。
+- 重复执行安装脚本会进入同一可回滚升级事务；坏 systemd/OpenRC service、binary/support/node.env/rw-core 写入失败均恢复升级前文件、开机注册和运行状态，恢复不完整时保留唯一备份并明确失败。
+- rw-core 安装按 installer、core、geo 与 ASN 的实际目标文件系统分别聚合 staging/备份峰值；任一挂载空间不足会在替换资产前失败。
+- CLI 只有零参数会进入 daemon；未知或多余参数直接失败。Unix socket 启动拒绝 live、symlink 与非 socket 路径，退出时只删除当前实例实际拥有的 socket。
 - 卸载不再按进程名终止任意 `rw-core`，也不再删除通用 Xray 路径，只清理本项目私有进程、socket、nftables 表与 `/usr/local/{lib,share}/remnanode`。
 - 非交互安装未提供 Secret Key 时会完成落盘但保持服务停止，不再错误等待未启动服务的端口。
 - 所有安装/升级包装入口的 `--dry-run` 保持零写入；路径型 Release tag 在 bootstrap 和事务开始前拒绝，service/core 始终取自目标 Release 的已校验 support。

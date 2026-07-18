@@ -1,22 +1,17 @@
 #!/sbin/openrc-run
-# shellcheck shell=sh disable=SC2034
+# shellcheck shell=sh disable=SC2034,SC3043
 
 name="remnawave-node"
 description="Remnawave Node Lite (Go)"
 
-required_files="/etc/remnanode/node.env"
-if [ -r /etc/remnanode/node.env ]; then
-	set -a
-	# shellcheck disable=SC1091
-	. /etc/remnanode/node.env
-	set +a
-fi
-
 supervisor=supervise-daemon
-command="/usr/local/bin/remnanode-lite"
+command="/usr/bin/env"
+command_args="-i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/var/lib/remnanode USER=remnanode LOGNAME=remnanode REMNANODE_ENV=/etc/remnanode/node.env /usr/local/bin/remnanode-lite"
 command_user="remnanode:remnanode"
 directory="/var/lib/remnanode"
-pidfile="/run/remnanode/supervise-daemon.pid"
+# supervise-daemon manages this file as root. Keep it outside the
+# service-writable runtime directory so the daemon cannot replace it.
+pidfile="/run/remnawave-node-supervise.pid"
 output_log="/var/log/remnanode/openrc.log"
 error_log="/var/log/remnanode/openrc.err.log"
 capabilities="^cap_net_admin,^cap_net_bind_service"
@@ -27,6 +22,15 @@ respawn_delay=5
 respawn_max=5
 respawn_period=60
 retry="TERM/30/KILL/5"
+# OpenRC 0.62.6 resolves the cleanup path inconsistently for names already
+# prefixed with openrc. cleanup_resource_cgroup owns this exact cgroup instead.
+rc_cgroup_cleanup=NO
+rc_cgroup_settings="
+memory.max 469762048
+memory.swap.max 0
+cpu.max 100000 100000
+pids.max 256
+"
 
 depend() {
 	need net
@@ -34,6 +38,128 @@ depend() {
 }
 
 start_pre() {
+	[ -f /etc/remnanode/node.env ] && [ ! -L /etc/remnanode/node.env ] \
+		&& [ -r /etc/remnanode/node.env ] \
+		|| { eerror "node.env must be a readable regular non-symlink file"; return 1; }
+	[ -x /usr/bin/env ] || { eerror "missing executable /usr/bin/env"; return 1; }
+	[ -x /usr/local/bin/remnanode-lite ] || { eerror "missing executable /usr/local/bin/remnanode-lite"; return 1; }
 	checkpath -d -o remnanode:remnanode -m 0750 \
-		/var/log/remnanode /var/lib/remnanode /run/remnanode
+		/var/log/remnanode /var/lib/remnanode /run/remnanode || return 1
+	verify_resource_cgroup
+}
+
+stop_post() {
+	cleanup_resource_cgroup
+}
+
+cgroup_limit_error() {
+	eerror "$1"
+	eerror "production requires writable cgroup v2 limits"
+	return 1
+}
+
+verify_resource_cgroup() {
+	local base group actual candidate setting file expected procs member found=0 stale=""
+	base="${1:-}"
+	if [ -z "$base" ]; then
+		for candidate in /sys/fs/cgroup /sys/fs/cgroup/unified; do
+			if [ -f "${candidate}/cgroup.controllers" ]; then
+				base=$candidate
+				break
+			fi
+		done
+	fi
+	[ -n "$base" ] || { cgroup_limit_error "cgroup v2 is unavailable"; return $?; }
+	group="${base}/openrc.${RC_SVCNAME:-remnawave-node}"
+	[ -d "$group" ] || { cgroup_limit_error "OpenRC did not create ${group}"; return $?; }
+
+	for setting in \
+		"memory.max:469762048" \
+		"memory.swap.max:0" \
+		"cpu.max:100000 100000" \
+		"pids.max:256"; do
+		file=${setting%%:*}
+		expected=${setting#*:}
+		[ -r "${group}/${file}" ] || { cgroup_limit_error "missing cgroup controller ${file}"; return $?; }
+		actual=$(cat "${group}/${file}")
+		[ "$actual" = "$expected" ] || {
+			cgroup_limit_error "cgroup ${file}=${actual}, expected ${expected}"
+			return $?
+		}
+	done
+
+	procs="${group}/cgroup.procs"
+	[ -r "$procs" ] || { cgroup_limit_error "missing cgroup membership file ${procs}"; return $?; }
+	while IFS= read -r member; do
+		if [ "$member" = "$$" ]; then
+			found=1
+		elif [ -n "$member" ]; then
+			stale="${stale}${stale:+,}${member}"
+		fi
+	done <"$procs"
+	if [ "$found" -ne 1 ]; then
+		cgroup_limit_error "OpenRC process $$ is not in ${group}"
+		return $?
+	fi
+	if [ -n "$stale" ]; then
+		cgroup_limit_error "stale processes remain in ${group}: ${stale}"
+		return $?
+	fi
+}
+
+read_cgroup_populated() {
+	awk '
+		$1 == "populated" && $2 ~ /^[01]$/ { value = $2; seen++ }
+		END { if (seen != 1) exit 1; print value }
+	' "$1"
+}
+
+cleanup_resource_cgroup() {
+	local base="${1:-}" group candidate procs events kill_file populated i=0
+	if [ -z "$base" ]; then
+		for candidate in /sys/fs/cgroup /sys/fs/cgroup/unified; do
+			if [ -f "${candidate}/cgroup.controllers" ]; then
+				base=$candidate
+				break
+			fi
+		done
+	fi
+	[ -n "$base" ] || return 0
+	group="${base}/openrc.${RC_SVCNAME:-remnawave-node}"
+	[ ! -L "$group" ] || { eerror "refusing symlink service cgroup ${group}"; return 1; }
+	[ -d "$group" ] || return 0
+	procs="${group}/cgroup.procs"
+	events="${group}/cgroup.events"
+	kill_file="${group}/cgroup.kill"
+	[ -r "$procs" ] || { eerror "cannot read ${procs}"; return 1; }
+	[ -r "$events" ] || { eerror "cannot read ${events}"; return 1; }
+
+	if awk -v pid="$$" '$0 == pid { found = 1 } END { exit(found ? 0 : 1) }' "$procs"; then
+		[ -w "${base}/cgroup.procs" ] || { eerror "cannot migrate stop_post out of ${group}"; return 1; }
+		printf '0\n' >"${base}/cgroup.procs" || return 1
+	fi
+
+	populated=$(read_cgroup_populated "$events") || {
+		eerror "invalid cgroup.events for ${group}"
+		return 1
+	}
+	if [ "$populated" = 1 ]; then
+		[ -w "$kill_file" ] || { eerror "missing writable ${kill_file}"; return 1; }
+		printf '1\n' >"$kill_file" || return 1
+	fi
+
+	while [ "$i" -lt 5 ]; do
+		populated=$(read_cgroup_populated "$events") || {
+			eerror "invalid cgroup.events for ${group}"
+			return 1
+		}
+		[ "$populated" = 0 ] && break
+		sleep 1
+		i=$((i + 1))
+	done
+	[ "$populated" = 0 ] || { eerror "${group} remains populated after cgroup.kill"; return 1; }
+	if ! rmdir "$group"; then
+		eerror "failed to remove exact service cgroup ${group}"
+		return 1
+	fi
 }

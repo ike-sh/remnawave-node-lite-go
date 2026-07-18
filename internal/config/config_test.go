@@ -1,10 +1,14 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Luxiaba/remnawave-node-lite-go/internal/secret"
+	"golang.org/x/sys/unix"
 )
 
 func TestLoadDotEnvWithDefaults(t *testing.T) {
@@ -130,6 +134,199 @@ func TestLoadSecretKeyOverridesFile(t *testing.T) {
 	}
 }
 
+func TestParseDotEnvRejectsUnboundedOrSpecialFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	regular := filepath.Join(dir, "regular.env")
+	if err := os.WriteFile(regular, []byte("NODE_PORT=2222\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	symlink := filepath.Join(dir, "symlink.env")
+	if err := os.Symlink(regular, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseDotEnv(symlink); err == nil {
+		t.Fatal("expected symlink env file to fail")
+	}
+
+	fifo := filepath.Join(dir, "node.fifo")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseDotEnv(fifo); err == nil {
+		t.Fatal("expected FIFO env file to fail without opening it")
+	}
+
+	oversized := filepath.Join(dir, "oversized.env")
+	if err := os.WriteFile(oversized, []byte(strings.Repeat("A", maxDotEnvBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseDotEnv(oversized); err == nil {
+		t.Fatal("expected oversized env file to fail")
+	}
+}
+
+func TestSecureOpenKeepsNonblockingDescriptor(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "node.env")
+	if err := os.WriteFile(path, []byte("NODE_PORT=2222\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := openReadOnlyNoFollow(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	flags, err := unix.FcntlInt(file.Fd(), unix.F_GETFL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags&unix.O_NONBLOCK == 0 {
+		t.Fatal("secure file descriptor does not retain O_NONBLOCK")
+	}
+}
+
+func TestParseDotEnvBoundsLinesAndAssignments(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "lines",
+			content: strings.Repeat("#\n", maxDotEnvLines+1),
+		},
+		{
+			name: "assignments",
+			content: func() string {
+				var content strings.Builder
+				for index := 0; index <= maxDotEnvAssignments; index++ {
+					fmt.Fprintf(&content, "KEY_%d=value\n", index)
+				}
+				return content.String()
+			}(),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "node.env")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parseDotEnv(path); err == nil {
+				t.Fatalf("expected %s limit to fail", test.name)
+			}
+		})
+	}
+}
+
+func TestParseDotEnvAcceptsBoundedLargeInlineValue(t *testing.T) {
+	t.Parallel()
+
+	want := strings.Repeat("A", secret.MaxEncodedBytes)
+	path := filepath.Join(t.TempDir(), "node.env")
+	if err := os.WriteFile(path, []byte("SECRET_KEY="+want+"\nNODE_PORT=2222\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	values, err := parseDotEnv(path)
+	if err != nil {
+		t.Fatalf("parseDotEnv large inline value: %v", err)
+	}
+	if values["SECRET_KEY"] != want {
+		t.Fatalf("SECRET_KEY length = %d, want %d", len(values["SECRET_KEY"]), len(want))
+	}
+}
+
+func TestLoadSecretFromFileRejectsUnsafeInputs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	regular := filepath.Join(dir, "regular.key")
+	if err := os.WriteFile(regular, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oversized := filepath.Join(dir, "oversized.key")
+	if err := os.WriteFile(oversized, []byte(strings.Repeat("A", secret.MaxEncodedBytes+3)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadSecretFromFile(map[string]string{"SECRET_KEY_FILE": oversized}); err == nil {
+		t.Fatal("expected oversized secret file to fail")
+	}
+
+	symlink := filepath.Join(dir, "symlink.key")
+	if err := os.Symlink(regular, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadSecretFromFile(map[string]string{"SECRET_KEY_FILE": symlink}); err == nil {
+		t.Fatal("expected symlink secret file to fail")
+	}
+
+	fifo := filepath.Join(dir, "secret.fifo")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadSecretFromFile(map[string]string{"SECRET_KEY_FILE": fifo}); err == nil {
+		t.Fatal("expected FIFO secret file to fail without opening it")
+	}
+
+	boundary := filepath.Join(dir, "boundary.key")
+	want := strings.Repeat("A", secret.MaxEncodedBytes)
+	if err := os.WriteFile(boundary, []byte(want+"\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadSecretFromFile(map[string]string{"SECRET_KEY_FILE": boundary})
+	if err != nil {
+		t.Fatalf("load exact boundary with CRLF: %v", err)
+	}
+	if got != want {
+		t.Fatalf("canonical boundary length = %d, want %d", len(got), len(want))
+	}
+}
+
+func TestCanonicalSecretFileSuffix(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "none", input: "YWJj", want: "YWJj"},
+		{name: "LF", input: "YWJj\n", want: "YWJj"},
+		{name: "CRLF", input: "YWJj\r\n", want: "YWJj"},
+		{name: "URL safe", input: "-_8=", want: "-_8="},
+		{name: "leading space", input: " YWJj", wantErr: true},
+		{name: "internal tab", input: "YW\tJj", wantErr: true},
+		{name: "double LF", input: "YWJj\n\n", wantErr: true},
+		{name: "bare CR", input: "YWJj\r", wantErr: true},
+		{name: "empty", input: "\n", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := canonicalSecretFile([]byte(test.input))
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("canonicalSecretFile(%q) unexpectedly succeeded", test.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("canonicalSecretFile(%q): %v", test.input, err)
+			}
+			if got != test.want {
+				t.Fatalf("canonicalSecretFile(%q) = %q, want %q", test.input, got, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadInternalOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(path, []byte("NODE_PORT=3000\nSECRET_KEY=abc\nINTERNAL_SOCKET_PATH=/tmp/node.sock\nINTERNAL_REST_TOKEN=token\nLOG_DIR=/tmp/logs\n"), 0o600); err != nil {
@@ -146,11 +343,15 @@ func TestLoadInternalOverrides(t *testing.T) {
 }
 
 func TestLoadStrictOptionalValues(t *testing.T) {
-	for _, key := range []string{"LOW_MEMORY", "BODY_LIMIT_MB", "DISABLE_HASHED_SET_CHECK"} {
+	for _, key := range []string{
+		"LOW_MEMORY", "BODY_LIMIT_MB", "DISABLE_HASHED_SET_CHECK", "GOMEMLIMIT",
+		"NODE_CONTRACT_VERSION", "XRAY_CORE_VERSION",
+	} {
 		t.Setenv(key, "")
 	}
 	path := filepath.Join(t.TempDir(), ".env")
-	content := "NODE_PORT=3000\nSECRET_KEY=abc\nLOW_MEMORY=YES\nDISABLE_HASHED_SET_CHECK=no\nBODY_LIMIT_MB=16\n"
+	content := "NODE_PORT=3000\nSECRET_KEY=abc\nLOW_MEMORY=YES\nDISABLE_HASHED_SET_CHECK=no\n" +
+		"BODY_LIMIT_MB=16\nGOMEMLIMIT=180MiB\nNODE_CONTRACT_VERSION=2.8.0\nXRAY_CORE_VERSION=v26.6.27\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -159,8 +360,41 @@ func TestLoadStrictOptionalValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if !cfg.LowMemory || cfg.DisableHashedSetCheck || cfg.BodyLimitMB != 16 {
+	if !cfg.LowMemory || cfg.DisableHashedSetCheck || cfg.BodyLimitMB != 16 ||
+		!cfg.GoMemoryLimitSet || cfg.GoMemoryLimitBytes != 180<<20 ||
+		cfg.NodeContractVersion != "2.8.0" || cfg.XrayCoreVersion != "v26.6.27" {
 		t.Fatalf("unexpected optional values: %#v", cfg)
+	}
+}
+
+func TestOptionalMemoryLimit(t *testing.T) {
+	t.Parallel()
+
+	maxInt64 := int64(^uint64(0) >> 1)
+	for _, test := range []struct {
+		raw     string
+		want    int64
+		wantSet bool
+		wantErr bool
+	}{
+		{raw: "", wantSet: false},
+		{raw: "off", want: maxInt64, wantSet: true},
+		{raw: "123456", want: 123456, wantSet: true},
+		{raw: "188743680", want: 180 << 20, wantSet: true},
+		{raw: "180MiB", want: 180 << 20, wantSet: true},
+		{raw: "1TiB", want: 1 << 40, wantSet: true},
+		{raw: "180MB", wantErr: true},
+		{raw: "9223372036854775808", wantErr: true},
+		{raw: "-1MiB", wantErr: true},
+	} {
+		got, set, err := optionalMemoryLimit(map[string]string{"GOMEMLIMIT": test.raw}, "GOMEMLIMIT")
+		if (err != nil) != test.wantErr {
+			t.Errorf("optionalMemoryLimit(%q) error = %v, wantErr %v", test.raw, err, test.wantErr)
+			continue
+		}
+		if err == nil && (got != test.want || set != test.wantSet) {
+			t.Errorf("optionalMemoryLimit(%q) = (%d, %v), want (%d, %v)", test.raw, got, set, test.want, test.wantSet)
+		}
 	}
 }
 
@@ -174,11 +408,17 @@ func TestLoadRejectsInvalidOptionalValues(t *testing.T) {
 		{name: "hash check boolean", line: "DISABLE_HASHED_SET_CHECK=disabled", wantError: "DISABLE_HASHED_SET_CHECK must be a boolean"},
 		{name: "body limit text", line: "BODY_LIMIT_MB=large", wantError: "BODY_LIMIT_MB must be an integer"},
 		{name: "body limit integer overflow", line: "BODY_LIMIT_MB=999999999999999999999999", wantError: "BODY_LIMIT_MB must be an integer"},
+		{name: "memory limit suffix", line: "GOMEMLIMIT=180MB", wantError: "GOMEMLIMIT must be"},
+		{name: "contract version", line: "NODE_CONTRACT_VERSION=latest", wantError: "NODE_CONTRACT_VERSION has an invalid"},
+		{name: "core version", line: "XRAY_CORE_VERSION=26", wantError: "XRAY_CORE_VERSION has an invalid"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			for _, key := range []string{"LOW_MEMORY", "BODY_LIMIT_MB", "DISABLE_HASHED_SET_CHECK"} {
+			for _, key := range []string{
+				"LOW_MEMORY", "BODY_LIMIT_MB", "DISABLE_HASHED_SET_CHECK", "GOMEMLIMIT",
+				"NODE_CONTRACT_VERSION", "XRAY_CORE_VERSION",
+			} {
 				t.Setenv(key, "")
 			}
 			path := filepath.Join(t.TempDir(), ".env")
