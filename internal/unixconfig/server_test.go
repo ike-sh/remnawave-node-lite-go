@@ -81,14 +81,15 @@ func TestListenAndServeRejectsLiveSocketWithoutRemovingIt(t *testing.T) {
 
 func TestListenAndServeReplacesStableStaleSocket(t *testing.T) {
 	path := unixSocketTestPath(t)
-	stale := leaveStaleUnixSocket(t, path)
+	leaveStaleUnixSocket(t, path)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	server := &Server{Path: path, Token: "token", Provider: staticProvider{}}
 	go func() { done <- server.ListenAndServe(ctx) }()
 
-	current := waitForLiveUnixSocket(t, path, stale)
+	current := waitForLiveUnixSocket(t, path)
 	if current.Mode().Perm() != 0o600 {
 		t.Fatalf("socket permissions = %o, want 600", current.Mode().Perm())
 	}
@@ -104,10 +105,11 @@ func TestListenAndServeReplacesStableStaleSocket(t *testing.T) {
 func TestListenAndServeDoesNotRemoveReplacementSocket(t *testing.T) {
 	path := unixSocketTestPath(t)
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	server := &Server{Path: path, Token: "token", Provider: staticProvider{}}
 	go func() { done <- server.ListenAndServe(ctx) }()
-	waitForLiveUnixSocket(t, path, nil)
+	waitForLiveUnixSocket(t, path)
 
 	displaced := path + ".owned"
 	if err := os.Rename(path, displaced); err != nil {
@@ -151,7 +153,7 @@ func TestListenAndServeDoesNotRemoveReplacementSocket(t *testing.T) {
 
 func TestConcurrentStaleSocketStartsKeepWinnerReachable(t *testing.T) {
 	path := unixSocketTestPath(t)
-	stale := leaveStaleUnixSocket(t, path)
+	leaveStaleUnixSocket(t, path)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	start := make(chan struct{})
@@ -179,7 +181,7 @@ func TestConcurrentStaleSocketStartsKeepWinnerReachable(t *testing.T) {
 	if loser.err == nil || !strings.Contains(loser.err.Error(), "lock unix socket directory") {
 		t.Fatalf("server %d result = %v, want directory lock failure", loser.id, loser.err)
 	}
-	waitForLiveUnixSocket(t, path, stale)
+	waitForLiveUnixSocket(t, path)
 	conn, err := net.DialTimeout("unix", path, time.Second)
 	if err != nil {
 		t.Fatalf("dial winning server socket: %v", err)
@@ -236,30 +238,34 @@ func unixSocketTestPath(t *testing.T) string {
 	return filepath.Join(dir, "s")
 }
 
-func leaveStaleUnixSocket(t *testing.T, path string) os.FileInfo {
+func leaveStaleUnixSocket(t *testing.T, path string) {
 	t.Helper()
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		t.Fatalf("bind stale socket: %v", err)
 	}
 	listener.SetUnlinkOnClose(false)
-	info, err := os.Lstat(path)
-	if err != nil {
-		_ = listener.Close()
-		t.Fatalf("stat stale socket: %v", err)
-	}
 	if err := listener.Close(); err != nil {
 		t.Fatalf("close stale socket: %v", err)
 	}
-	return info
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("stat stale socket: %v", err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("stale path %q is not a unix socket", path)
+	}
 }
 
-func waitForLiveUnixSocket(t *testing.T, path string, previous os.FileInfo) os.FileInfo {
+func waitForLiveUnixSocket(t *testing.T, path string) os.FileInfo {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		info, err := os.Lstat(path)
-		if err == nil && info.Mode()&os.ModeSocket != 0 && (previous == nil || !os.SameFile(previous, info)) {
+		// A newly created socket may reuse the stale socket's inode on Linux.
+		// A successful connection is the reliable readiness signal; comparing
+		// os.FileInfo values would turn inode reuse into a false timeout.
+		if err == nil && info.Mode()&os.ModeSocket != 0 {
 			conn, dialErr := net.DialTimeout("unix", path, 20*time.Millisecond)
 			if dialErr == nil {
 				_ = conn.Close()
