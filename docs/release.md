@@ -101,20 +101,22 @@ REQUIRE_TAG_AT_HEAD=1 \
 
 - GitHub Actions 允许 workflow 按 YAML 申请上述权限；若组织限制第三方 Action，显式允许 workflow 中已固定 SHA 的 Docker、GitHub 和 softprops Action。
 - 首次镜像 push 后，将 `ghcr.io/luxiaba/remnawave-node-lite-go` Package 设置为 Public，并确认 Package 关联到本仓库。Public Package 的生产服务器不需要登录。
-- 分支保护要求 `test`、`container` 等主分支检查通过；release tag 只能指向已完成 M8 验收的最终 commit。
+- 分支保护只要求不会因路径过滤而缺失的 `test` 检查通过；`container` 是按路径运行的辅助构建，不得设为 required check。release tag 只能指向已完成 M8 验收的最终 commit。
 
-正式发布前需要在服务器验证候选镜像时，在 `main` 的 Actions 页面手动运行 `container` workflow。手动入口只允许 `refs/heads/main`，发布：
+合入 `main` 后，`container` workflow 自动发布用于服务器验收的主线镜像：
 
 ```text
-ghcr.io/luxiaba/remnawave-node-lite-go:candidate-sha-<commit>
+ghcr.io/luxiaba/remnawave-node-lite-go:edge
+ghcr.io/luxiaba/remnawave-node-lite-go:sha-<commit>
 ```
 
-候选镜像同样包含 amd64/arm64、SBOM、provenance 和 attestation，但不代表正式 Release，不得使用版本 tag。服务器必须以同一个完整 commit 从 raw GitHub 下载 `compose.yaml`、`.env.example`，并把 `REMNANODE_IMAGE` 指向 `candidate-sha-<commit>`；完整无源码命令见 [Docker Compose 部署](deployment-docker.md)。正式发布后再切换到精确版本或 manifest digest。
+候选镜像同样包含 amd64/arm64、SBOM、provenance 和 attestation，但不代表正式 Release，不得使用版本 tag。服务器必须以同一个完整 commit 从 raw GitHub 下载 `compose.yaml`、`.env.example`，并把 `REMNANODE_IMAGE` 指向不可变的 `sha-<commit>`；`edge` 仅用于观察当前主线。需要重发时可在 `main` 手动运行 workflow，它还会生成 `candidate-sha-<commit>` 别名。完整无源码命令见 [Docker Compose 部署](deployment-docker.md)。正式发布后再切换到精确版本或 manifest digest。
 
-授权后按顺序推送主线与不可变 tag：
+授权后先确保最终 commit 已通过受保护流程进入 `main`，再推送不可变 tag。Release workflow 会再次验证 tag commit 可从 `origin/main` 到达，拒绝从 `dev` 或临时分支直接发布：
 
 ```bash
-git push origin main
+git fetch origin main
+git merge-base --is-ancestor v0.1.0 origin/main
 git push origin v0.1.0
 ```
 
@@ -128,10 +130,12 @@ git push origin v0.1.0
 
 ```text
 ghcr.io/luxiaba/remnawave-node-lite-go:0.1.0
+ghcr.io/luxiaba/remnawave-node-lite-go:0.1
+ghcr.io/luxiaba/remnawave-node-lite-go:latest
 ghcr.io/luxiaba/remnawave-node-lite-go:sha-<commit>
 ```
 
-镜像是 `linux/amd64`、`linux/arm64` manifest list，并附带 BuildKit SBOM/provenance。独立的 `attest-container` job 从 GHCR 按不可变 commit tag 解析已发布 manifest digest，再生成 GitHub build attestation；它不会重新构建或移动镜像 tag。workflow 明确禁用 `latest`。发布完成后验证：
+镜像是 `linux/amd64`、`linux/arm64` manifest list，并附带 BuildKit SBOM/provenance。独立的 `attest-container` job 从 GHCR 按不可变 commit tag 解析已发布 manifest digest，再生成 GitHub build attestation；它不会重新构建或移动镜像 tag。只有稳定 SemVer Release 才更新 `latest`，预发布 tag 不会。发布完成后验证：
 
 ```bash
 docker buildx imagetools inspect \
@@ -142,7 +146,7 @@ gh attestation verify \
   --repo Luxiaba/remnawave-node-lite-go
 ```
 
-已成功发布的版本 tag 和 GHCR tag 不得移动或覆盖。workflow 部分失败时，先确认 GitHub Release、GHCR digest 和 attestation 哪一步已经产生；镜像发布成功而 attestation 失败时，只重试独立的 `attest-container`，不要重跑已经成功的 `publish-container`，也不要删除并重建 tag。主分支/PR 的 `.github/workflows/container.yml` 会执行不推送的 linux/amd64 完整镜像构建，降低 tag 发布时才发现 Dockerfile 失效的风险。
+已成功发布的精确版本 tag 与 `sha-*` tag 不得移动或覆盖；minor 与 `latest` 是明确的稳定版浮动别名，不用于回滚。workflow 部分失败时，先确认 GitHub Release、GHCR digest 和 attestation 哪一步已经产生；镜像发布成功而 attestation 失败时，只重试独立的 `attest-container`，不要重跑已经成功的 `publish-container`，也不要删除并重建 tag。`dev`/PR 的 `.github/workflows/container.yml` 会执行不推送的 linux/amd64 完整镜像构建，`main` 则自动发布主线候选，降低 tag 发布时才发现 Dockerfile 失效的风险。
 
 Dockerfile frontend、Go、Debian、BuildKit、QEMU 和 SBOM scanner 均固定版本或 multi-arch manifest digest；rw-core、geo 与 `ipverse/as-ip-blocks` ASN 源码归档继续固定 commit 和 SHA-256。更新任一 digest 必须作为普通代码变更经过 `container` 与完整代码门禁，不能在 release tag 上临时覆盖 build args。
 

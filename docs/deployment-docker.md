@@ -70,7 +70,7 @@ unset GHCR_TOKEN
 
 ## 正式发布前的候选验收
 
-正式 Release 前的服务器验收使用维护者从 `main` 手动发布的 `candidate-sha-<commit>` 镜像。候选镜像不承诺版本稳定性，只能用于与该 commit 绑定的验收；不得自行改写为 `0.1.0` 等正式 tag。
+合入 `main` 且改动命中容器构建输入时，`container` workflow 自动发布可变的 `edge` 和不可变的 `sha-<commit>` 多架构镜像。`edge` 只方便查看当前主线，服务器验收必须固定 `sha-<commit>`；候选镜像不代表正式 Release，不得自行改写为 `0.1.0` 等正式 tag。维护者仍可从 `main` 手动运行 workflow，补发同一 `sha-<commit>` 并额外生成 `candidate-sha-<commit>` 别名。
 
 候选阶段没有 GitHub Release 资产。服务器按完整 commit 下载同一版本的 Compose 和环境模板，不需要 clone 仓库：
 
@@ -82,7 +82,7 @@ mkdir -p /opt/remnanode && cd /opt/remnanode
 base_url="https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/${candidate_commit}"
 curl -fL "$base_url/compose.yaml" -o compose.yaml
 curl -fL "$base_url/.env.example" -o remnanode.env.example
-sed -i "s|^REMNANODE_IMAGE=.*|REMNANODE_IMAGE=ghcr.io/luxiaba/remnawave-node-lite-go:candidate-sha-${candidate_commit}|" remnanode.env.example
+sed -i "s|^REMNANODE_IMAGE=.*|REMNANODE_IMAGE=ghcr.io/luxiaba/remnawave-node-lite-go:sha-${candidate_commit}|" remnanode.env.example
 mv remnanode.env.example .env
 chmod 600 .env
 # 编辑 .env，填写完整 SECRET_KEY
@@ -96,7 +96,7 @@ docker compose ps
 
 ```bash
 gh attestation verify \
-  "oci://ghcr.io/luxiaba/remnawave-node-lite-go:candidate-sha-${candidate_commit}" \
+  "oci://ghcr.io/luxiaba/remnawave-node-lite-go:sha-${candidate_commit}" \
   --repo Luxiaba/remnawave-node-lite-go
 ```
 
@@ -129,6 +129,8 @@ docker compose ps
 ```
 
 回滚时同时恢复上一个版本配套的 `compose.yaml`，将 `REMNANODE_IMAGE` 恢复为已验证的版本 tag 或 digest，再重复相同命令。修改 Secret 或端口后也需要重新创建容器。
+
+希望自动跟随最新稳定版时，可以显式配置 `REMNANODE_IMAGE=ghcr.io/luxiaba/remnawave-node-lite-go:latest`，再定期执行上述 pull/recreate 命令。`latest` 不会自动替换正在运行的容器，也不应用作回滚依据。
 
 ## 本地源码构建
 
@@ -176,4 +178,4 @@ docker compose down --volumes
 - 固定 manifest digest 的 Go、Debian 与 Dockerfile frontend 基础镜像
 - Debian bookworm slim、CA 证书和 nftables 运行依赖
 
-发布 workflow 不生成或消费 `latest`；任一固定外部资产摘要不匹配都会使构建失败。
+稳定 SemVer Release 会更新 `latest`，预发布版本不会；构建过程不消费任何浮动的外部基础镜像或资产，任一固定摘要不匹配都会失败。

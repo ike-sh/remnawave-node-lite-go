@@ -46,7 +46,7 @@ docker compose up -d --no-build
 docker compose ps
 ```
 
-镜像由 tag Release workflow 推送到 `ghcr.io/luxiaba/remnawave-node-lite-go`，不发布 `latest`；生产使用精确版本 tag 或 manifest digest。完整的无源码部署、私有 Package 登录、attestation 验证、更新、回滚和本地构建说明见 [Docker Compose 部署](docs/deployment-docker.md)。
+镜像由 tag Release workflow 推送到 `ghcr.io/luxiaba/remnawave-node-lite-go`。稳定版本同时更新精确版本、minor、`latest` 和 commit tag；生产仍推荐使用精确版本或 manifest digest。完整的无源码部署、私有 Package 登录、attestation 验证、更新、回滚和本地构建说明见 [Docker Compose 部署](docs/deployment-docker.md)。
 
 ### systemd（Debian / Ubuntu 等）
 

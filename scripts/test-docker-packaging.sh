@@ -78,10 +78,12 @@ require_text compose.yaml 'test -S /run/remnanode/internal.sock && kill -0 1'
 
 require_text .github/workflows/release.yml 'packages: write'
 require_text .github/workflows/release.yml 'attestations: write'
+github_expression_prefix='$'
+require_text .github/workflows/release.yml \
+  "git merge-base --is-ancestor \"${github_expression_prefix}GITHUB_SHA\" origin/main"
 require_text .github/workflows/release.yml 'needs: release'
 require_text .github/workflows/release.yml 'attest-container:'
 require_text .github/workflows/release.yml 'needs: publish-container'
-github_expression_prefix='$'
 require_text .github/workflows/release.yml 'docker buildx imagetools inspect'
 require_text .github/workflows/release.yml "sha-${github_expression_prefix}{{ github.sha }}"
 require_text .github/workflows/release.yml "subject-digest: ${github_expression_prefix}{{ steps.digest.outputs.digest }}"
@@ -89,7 +91,9 @@ require_text .github/workflows/release.yml 'platforms: linux/amd64,linux/arm64'
 require_text .github/workflows/release.yml 'provenance: mode=max'
 sbom_generator='generator=docker.io/docker/buildkit-syft-scanner:stable-1@sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68'
 require_text .github/workflows/release.yml "sbom: ${sbom_generator}"
-require_text .github/workflows/release.yml 'flavor: latest=false'
+require_text .github/workflows/release.yml 'flavor: latest=auto'
+require_text .github/workflows/release.yml 'type=semver,pattern={{major}}.{{minor}}'
+require_text .github/workflows/release.yml "type=semver,pattern={{major}},enable=\${{ !startsWith(github.ref_name, 'v0.') }}"
 require_text .github/workflows/release.yml 'image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0'
 require_text .github/workflows/release.yml 'image=moby/buildkit:v0.31.1@sha256:6b59b7df63a8cb9902736f9ddf7fcff8261613d3e7449b8ea8b7537fc399c03a'
 require_text .github/workflows/release.yml 'dist/compose.yaml'
@@ -97,12 +101,15 @@ require_text .github/workflows/release.yml 'dist/remnanode.env.example'
 require_text .github/workflows/container.yml 'outputs: type=cacheonly'
 require_text .github/workflows/container.yml 'push: false'
 require_text .github/workflows/container.yml 'workflow_dispatch:'
+require_text .github/workflows/container.yml 'branches: [dev, main]'
 require_text .github/workflows/container.yml "cancel-in-progress: \${{ github.event_name != 'workflow_dispatch' }}"
-require_text .github/workflows/container.yml "if: github.event_name != 'workflow_dispatch'"
-require_text .github/workflows/container.yml "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
+require_text .github/workflows/container.yml "if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')"
+require_text .github/workflows/container.yml "if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')"
 require_text .github/workflows/container.yml "if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'"
 require_text .github/workflows/container.yml 'Reject non-main candidate dispatch'
 require_text .github/workflows/container.yml 'candidate publishing is only allowed from refs/heads/main'
+require_text .github/workflows/container.yml 'type=raw,value=edge'
+require_text .github/workflows/container.yml 'type=sha,prefix=sha-,format=long'
 require_text .github/workflows/container.yml 'candidate-sha-'
 require_text .github/workflows/container.yml "sbom: ${sbom_generator}"
 require_text .github/workflows/container.yml 'packages: write'
@@ -110,22 +117,26 @@ require_text .github/workflows/container.yml 'attestations: write'
 require_text .github/workflows/container.yml 'provenance: mode=max'
 require_text .github/workflows/container.yml 'push: true'
 require_text .github/workflows/container.yml 'push-to-registry: true'
-require_text .github/workflows/container.yml 'attest-candidate:'
-require_text .github/workflows/container.yml 'needs: publish-candidate'
+require_text .github/workflows/container.yml 'attest-main:'
+require_text .github/workflows/container.yml 'needs: publish-main'
 require_text .github/workflows/container.yml 'docker buildx imagetools inspect'
-require_text .github/workflows/container.yml "candidate-sha-${github_expression_prefix}{{ github.sha }}"
+require_text .github/workflows/container.yml "sha-${github_expression_prefix}{{ github.sha }}"
 require_text .github/workflows/container.yml "subject-digest: ${github_expression_prefix}{{ steps.digest.outputs.digest }}"
 require_text .github/workflows/container.yml 'image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0'
 require_text .github/workflows/container.yml 'image=moby/buildkit:v0.31.1@sha256:6b59b7df63a8cb9902736f9ddf7fcff8261613d3e7449b8ea8b7537fc399c03a'
 
-if grep -Eq 'ghcr\.io/[^[:space:]]+:latest|type=raw[^[:space:]]*latest' \
-  compose.yaml .env.example .github/workflows/release.yml .github/workflows/container.yml; then
-  echo "production container configuration must not publish or consume latest" >&2
+if grep -Eq 'ghcr\.io/[^[:space:]]+:latest' compose.yaml .env.example; then
+  echo "production container configuration must default to an immutable version" >&2
+  exit 1
+fi
+
+if grep -Eq 'type=raw[^[:space:]]*latest' .github/workflows/release.yml .github/workflows/container.yml; then
+  echo "stable latest must be derived automatically from a SemVer release" >&2
   exit 1
 fi
 
 if grep -Eq '^[[:space:]]+needs:[[:space:]]+build[[:space:]]*$' .github/workflows/container.yml; then
-  echo "manual candidate publishing must not repeat the CI build job" >&2
+  echo "main image publishing must not repeat the CI build job" >&2
   exit 1
 fi
 
