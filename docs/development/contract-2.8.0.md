@@ -48,7 +48,7 @@ Go manager 使用单一显式状态，而不是多个可形成非法组合的布
 | `starting` | stop | `stopping` | generation 失效并取消 start，由 stop 接管进程 |
 | `running` | stop 或自然退出 | `stopping` / `stopped` | 回收进程并清理配置与 hash 状态 |
 
-Manager 内部的生命周期修改由 operation mutex 保护，状态发布与所有权交接在 manager mutex 下完成。HTTP coordinator 为 start 提供共享 lease，并用独立的两个 handler 槽限制同时保留的配置；因此第二个并发 start 可以进入 Manager 并立即得到官方兼容的 `Request already in progress`。stop、plugin sync/recreate 使用独占 lease，等待中的独占操作阻止后续 start 插队。每个已接受的 start 使用单调 generation，旧操作不能覆盖新 stop；所有成功 spawn 的子进程都由唯一 `Wait` goroutine 回收。Linux 将 rw-core 启动在独立 process group 中并设置 parent-death signal；正常 stop 的 SIGINT、超时后的 SIGKILL 以及组长自然退出后的兜底清理都作用于整个进程组。parent-death signal 只直接保护组长，Node 硬崩时后代进程的最终清理仍依赖 systemd cgroup/OpenRC supervisor，后续发布阶段必须在两种发行环境用 wrapper + child 实测，不能把该信号表述为对所有后代的单独保证。
+Manager 内部的生命周期修改由 operation mutex 保护，状态发布与所有权交接在 manager mutex 下完成。HTTP coordinator 为 start 提供共享 lease，并用独立的两个 handler 槽限制同时保留的配置；因此第二个并发 start 可以进入 Manager 并立即得到官方兼容的 `Request already in progress`。stop、plugin sync/recreate 使用独占 lease，等待中的独占操作阻止后续 start 插队。每个已接受的 start 使用单调 generation，旧操作不能覆盖新 stop；所有成功 spawn 的子进程都由唯一 `Wait` goroutine 回收。Linux 将 rw-core 启动在独立 process group 中并设置 parent-death signal；正常 stop 的 SIGINT、超时后的 SIGKILL 以及组长自然退出后的兜底清理都作用于整个进程组。parent-death signal 只直接保护组长；Node 或 supervisor 自身被强杀后不保证自动回收所有后代，运维恢复方式是重启服务、主机或重新创建容器。
 
 进程级测试覆盖 pending 到 active 的提交边界、并发 start、start 与 stop 交错、context cancel、启动超时、就绪前后退出、自然退出、并发/重复 stop、SIGINT 与 SIGKILL 升级。Linux 测试额外固定独立进程组、整组信号与后代清理。路由测试覆盖 start 共享进入、stop/plugin 独占等待、等待取消、Panel stop 的 `Stop -> ResetPlugins` 顺序，以及 Stop 失败时保留插件快照和 nft 规则。
 

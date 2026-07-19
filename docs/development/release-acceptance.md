@@ -47,7 +47,7 @@ Manifest 固定以下发布边界：
 - Node version output 与安装后二进制 SHA-256。
 - rw-core version、commit、固定下载资产 SHA-256 和安装后二进制 SHA-256。
 - 全新安装、重复安装、启停/重启、成功升级、失败升级回滚、reboot 后 Panel 重同步、capability 边界、卸载隔离、nft namespace 和 socket-kill namespace 检查。
-- `systemChecks.rwCoreProcessGroupCleanup=true`：使用 wrapper + child 验证独立 PGID、整组 SIGINT/SIGKILL、leader 自然退出后的残余组清理，以及 init manager 接管 Node 硬崩后的后代清理。
+- `systemChecks.rwCoreProcessGroupCleanup=true`：使用 wrapper + child 验证独立 PGID、正常停止的整组 SIGINT/SIGKILL，以及 leader 自然退出后的残余组清理；不测试 Node 或 supervisor 自身被强杀后的自动恢复。
 
 环境固定为 Ubuntu 24.04/systemd 与 Alpine 3.22/OpenRC；两条记录的架构并集必须覆盖 amd64 和 arm64。
 

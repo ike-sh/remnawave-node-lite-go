@@ -48,11 +48,12 @@
 M6/M7 的资源与发行环境数据是对应 checkpoint 的历史工程基线，不是当前 M8 候选的发布证据；冻结候选 `C` 后必须按验收协议重新执行。
 
 当前批次先集中关闭官方 `2.8.0` 静态行为差异、明确 Go bug 和代码级 512 MiB 约束，
-全部修改完成后统一回归。以下事项已记录但后置到发布或专项增强阶段，不阻塞当前代码收口：
+全部修改完成后统一回归。release evidence、tag、真实 Panel/systemd/OpenRC 和长期 soak 仍在 M8 完成。
 
-- release evidence、tag、Release 资料、真实 Panel/systemd/OpenRC 和长期 soak；
-- installer 持久 phase journal、SIGKILL/掉电后的启动恢复；
-- OpenRC `supervise-daemon` 异常退出后的残留 cgroup 与后代恢复；
+以下事项作为已接受限制或后续增强，不阻塞 `0.1.0`：
+
+- installer 不实现持久 phase journal；被 `SIGKILL` 或掉电中断后重新运行 installer，容器部署则重新创建容器；
+- OpenRC 正常 `stop_post` 继续清理专用 cgroup；`supervise-daemon` 自身异常退出后通过重启主机或重新部署恢复；
 - active config 常驻副本与运行期 `dump-config` 的内存取舍；
 - P3 测试补强：`runNode` 顶层失败收敛、Unix server 活动 handler 取消，以及更完整的官方源码内容 oracle。
 
@@ -120,7 +121,7 @@ M6/M7 的资源与发行环境数据是对应 checkpoint 的历史工程基线�
 
 - 完成真实 rw-core、Panel、nftables、systemd/OpenRC 集成测试。
 - 在冻结候选上复核 `xray start/stop` 与 `plugin sync/recreate` 的 shared-start/exclusive-mutation coordinator、固定锁序和取消传播。
-- 在 systemd/OpenRC 中用 wrapper + child 验证 rw-core 独立进程组、整组信号、leader 自然退出和 Node 硬崩后的后代清理。
+- 在 systemd/OpenRC 中验证 rw-core 独立进程组、正常停止、超时升级和 leader 自然退出后的后代清理；不要求 Node 或 supervisor 自身被强杀后的自动恢复。
 - 通过 `go test`、race、vet、静态检查、脚本检查和多架构构建。
 - 在目标资源限制下完成持续运行与故障恢复测试。
 - 更新兼容矩阵、风险清单、运维文档和 `0.1.0` Release 资料。

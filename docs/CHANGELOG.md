@@ -37,7 +37,7 @@
 - Xray 启动、停止、健康检查和自然退出改为显式四态生命周期；stop 可取消正在启动的 core，失败/超时不再提交配置或 hash，所有子进程均被回收。
 - 移除非官方的 `last-start.json` 持久化与开机旧配置恢复；Node 重启后由 Panel 健康检查重新下发 start，`healthcheck` 只读缓存状态。
 - Panel stop 固定先确认 core 停止再清理插件；停止失败时保留插件快照与 nft 规则，避免运行中的 core 出现无过滤窗口。
-- Linux 将 rw-core 置于独立进程组，SIGINT、超时 SIGKILL 和 leader 自然退出后的兜底清理覆盖整个进程组；parent-death signal 保护直接子进程，Node 硬崩后的后代清理由 init manager 在 M8 实测。
+- Linux 将 rw-core 置于独立进程组，SIGINT、超时 SIGKILL 和 leader 自然退出后的兜底清理覆盖整个进程组；parent-death signal 保护直接子进程，Node 或 supervisor 自身被强杀后通过重启或重新部署恢复。
 - 插件同步改为不可变 plan 的 `apply -> Xray reconcile -> commit` 事务；nft/Xray 失败不再提前提交状态，并会尝试恢复上一份 firewall plan。`plugin sync/recreate` 与 `xray start/stop` 共用应用层 lifecycle gate，消除 core 启动配置与插件快照竞态。
 - nftables 初始化、双栈批处理、ingress/torrent 解封、recreate 重放、错误传播和退出清表统一收口；缺失元素的多种 nft 错误文案均按幂等成功处理。
 - nft 不可用时合法配置仍按官方语义接受，但 torrent effective state 保持禁用；reset 不再丢弃未 collect reports，ASN/shared list 降级会写入明确日志。

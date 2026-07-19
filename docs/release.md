@@ -42,7 +42,7 @@ git tag -a "$CANDIDATE_TAG" -m "checkpoint M8 code candidate $C"
 - Panel `2.8.1` 在 systemd 与 OpenRC 节点上的完整生命周期、统计、用户和插件流程。
 - 并发交错 `xray start/stop` 与 `plugin sync/recreate`，确认共用外层 lifecycle gate、固定锁序和取消传播。
 - Ubuntu 24.04/systemd 与 Alpine 3.22/OpenRC；两者架构并集覆盖 amd64、arm64。
-- rw-core `v26.6.27`、nftables、`NETLINK_SOCK_DIAG` socket destroy、安装、重复安装、升级、坏版本回滚、reboot 和卸载隔离；两种 init 环境都用 wrapper + child 验证独立进程组及后代清理。
+- rw-core `v26.6.27`、nftables、`NETLINK_SOCK_DIAG` socket destroy、安装、重复安装、升级、坏版本回滚、reboot 和卸载隔离；两种 init 环境都验证正常停止与 leader 自然退出后的独立进程组清理。
 - 整机 `512 MiB / 1 CPU / 2 GiB / no swap`、50k 用户、至少 24 小时持续运行及故障恢复。
 
 证据写入 `docs/development/acceptance/v0.1.0/`。不得记录 JWT、证书、私钥、Secret Key、IP、hostname 或原始响应 body。
@@ -152,6 +152,6 @@ Dockerfile frontend、Go、Debian、BuildKit、QEMU 和 SBOM scanner 均固定�
 
 `upgrade.sh` 在替换前备份 binary、service、support、`node.env`、`secret.key` 和可选 rw-core 资产，并记录升级前的 active 状态；install 委托可能修复开机注册时还会捕获 enabled 状态。所有变更型 installer 入口通过固定的 `/run/lock/remnanode-installer.lock` 串行执行，嵌套的 rw-core 安装继承同一锁；事务使用 root-only 的 `/var/lib/remnanode-installer`，并在下载、解压或任一目标文件系统的磁盘预算不足时提前失败。rw-core 子安装复用外层回滚记录，不创建第二份相同资产备份。对于升级前运行中或由 install 委托要求启动的服务，目标版本二进制必须实际持有配置端口，否则恢复旧文件、开机注册与运行状态；显式升级原本 stopped 的服务保持 stopped。回滚前若服务停止命令失败，或不能确认 Node/rw-core 全部退出，将保留备份并拒绝替换运行中的文件；任何恢复步骤失败同样保留唯一备份并以非零状态结束。
 
-共享内核 `flock` 只消除并发 installer 写入，不能恢复已经被 `SIGKILL` 或掉电中断的事务。持久 phase journal、开机 fence 与中断回滚，以及 OpenRC supervisor 异常退出后的后代清理，仍是冻结 `0.1.0` 候选前的发布阻断。
+共享内核 `flock` 消除并发 installer 写入，但不恢复已经被 `SIGKILL` 或掉电中断的事务。`0.1.0` 不实现持久 phase journal、开机 fence 或 OpenRC supervisor 崩溃后的自动恢复；遇到此类情况重新运行 installer、重启主机或重新创建容器即可，这些极端恢复能力不作为发布阻断。
 
 版本回退只允许使用本项目确实发布过的旧 tag：`sudo RNL_TAG=vX.Y.Z bash upgrade.sh --yes`。不得使用参考仓库的历史 tag。
