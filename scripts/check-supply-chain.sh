@@ -16,18 +16,18 @@ if release_binary_version_matches_tag "$version_output" "v${version}.invalid"; t
   exit 1
 fi
 
-if grep -Eq 'remnawave/asn-index/releases/download/(latest|latest/)' .github/workflows/release.yml; then
-  echo "release workflow ASN source must use an immutable release tag" >&2
+if grep -Eq '^[[:space:]]+ASN_SOURCE_URL:.*latest' .github/workflows/release.yml; then
+  echo "release workflow ASN source must not use a floating latest reference" >&2
   exit 1
 fi
-grep -Fq 'ASN_SOURCE_URL: https://github.com/remnawave/asn-index/releases/download/2026-03-30/asn-prefixes.json' \
+grep -Fq 'ASN_SOURCE_URL: https://github.com/ipverse/as-ip-blocks/archive/56d021c7536afb15317155e45b57e7b5c87a4700.tar.gz' \
   .github/workflows/release.yml || {
-  echo "release workflow ASN source does not match the audited 2026-03-30 asset" >&2
+  echo "release workflow ASN source is not pinned to the audited ipverse commit" >&2
   exit 1
 }
-grep -Fq 'ASN_SOURCE_SHA256: 78db1c6b8bc86861a9c4bbca07229fcc4ee8b4fe8fa5b7c6069161f66c365cfc' \
+grep -Fq 'ASN_SOURCE_SHA256: fc8be15bfbef3134f603276a26364935dbd2543d099dbaafa978a33b674a58ec' \
   .github/workflows/release.yml || {
-  echo "release workflow ASN source digest does not match the audited asset" >&2
+  echo "release workflow ASN source digest does not match the audited commit archive" >&2
   exit 1
 }
 

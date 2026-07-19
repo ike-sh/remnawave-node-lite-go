@@ -172,7 +172,7 @@ docker compose down --volumes
 - `remnanode-lite` `0.1.0`，上报 Node 契约版本 `2.8.0`
 - rw-core `v26.6.27`，分别固定 amd64/arm64 Release 资产与 SHA-256
 - 同一 rw-core Release 的 `geoip.dat` / `geosite.dat`
-- 固定 `2026-03-30` Remnawave ASN JSON 摘要生成的 compact ASN 数据库
+- 固定 `ipverse/as-ip-blocks@56d021c` 源码归档与 SHA-256，流式生成 compact ASN 数据库
 - 固定 manifest digest 的 Go、Debian 与 Dockerfile frontend 基础镜像
 - Debian bookworm slim、CA 证书和 nftables 运行依赖
 

@@ -42,8 +42,8 @@ ARG TARGETARCH
 ARG XRAY_CORE_VERSION=v26.6.27
 ARG XRAY_AMD64_SHA256=b3e5902d06d6282fe53cfa2fc426058b9aeaa429b2c812e20887cd47f26d08bf
 ARG XRAY_ARM64_SHA256=13a251379bea366c2cf10363ad71e75734193d401f26f518bf0c25e5c8f8c931
-ARG ASN_SOURCE_URL=https://github.com/remnawave/asn-index/releases/download/2026-03-30/asn-prefixes.json
-ARG ASN_SOURCE_SHA256=78db1c6b8bc86861a9c4bbca07229fcc4ee8b4fe8fa5b7c6069161f66c365cfc
+ARG ASN_SOURCE_URL=https://github.com/ipverse/as-ip-blocks/archive/56d021c7536afb15317155e45b57e7b5c87a4700.tar.gz
+ARG ASN_SOURCE_SHA256=fc8be15bfbef3134f603276a26364935dbd2543d099dbaafa978a33b674a58ec
 
 COPY --from=build /out/asn-builder /usr/local/bin/asn-builder
 
@@ -69,12 +69,12 @@ RUN set -eux; \
     chmod 0644 /assets/xray/geoip.dat /assets/xray/geosite.dat; \
     curl --fail --location --silent --show-error \
       --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
-      "$ASN_SOURCE_URL" -o /tmp/asn-prefixes.json; \
-    printf '%s  %s\n' "$ASN_SOURCE_SHA256" /tmp/asn-prefixes.json | sha256sum --check --strict; \
-    asn-builder -format remnawave-json \
-      -in /tmp/asn-prefixes.json -out /assets/asn/asn-prefixes.bin; \
+      "$ASN_SOURCE_URL" -o /tmp/as-ip-blocks.tar.gz; \
+    printf '%s  %s\n' "$ASN_SOURCE_SHA256" /tmp/as-ip-blocks.tar.gz | sha256sum --check --strict; \
+    asn-builder -format ipverse-tar-gz \
+      -in /tmp/as-ip-blocks.tar.gz -out /assets/asn/asn-prefixes.bin; \
     chmod 0644 /assets/asn/asn-prefixes.bin; \
-    rm -f /tmp/xray.zip /tmp/asn-prefixes.json /usr/local/bin/asn-builder
+    rm -f /tmp/xray.zip /tmp/as-ip-blocks.tar.gz /usr/local/bin/asn-builder
 
 FROM ${DEBIAN_IMAGE} AS runtime
 

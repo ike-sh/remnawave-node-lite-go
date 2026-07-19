@@ -1,8 +1,8 @@
 name: release
 
 env:
-  ASN_SOURCE_URL: https://github.com/remnawave/asn-index/releases/download/2026-03-30/asn-prefixes.json
-  ASN_SOURCE_SHA256: 78db1c6b8bc86861a9c4bbca07229fcc4ee8b4fe8fa5b7c6069161f66c365cfc
+  ASN_SOURCE_URL: https://github.com/ipverse/as-ip-blocks/archive/56d021c7536afb15317155e45b57e7b5c87a4700.tar.gz
+  ASN_SOURCE_SHA256: fc8be15bfbef3134f603276a26364935dbd2543d099dbaafa978a33b674a58ec
   REGISTRY: ghcr.io
   IMAGE_NAME: luxiaba/remnawave-node-lite-go
 
@@ -25,19 +25,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: remnawave/node
           ref: 596f015a5c8f876dc9a9d61b6cb78d35bd8e379b
           path: .official-source
           persist-credentials: false
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.5"
 
@@ -113,13 +113,13 @@ jobs:
 
           curl --fail --location --silent --show-error \
             --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
-            "${ASN_SOURCE_URL}" -o /tmp/asn-prefixes.json
-          printf '%s  %s\n' "${ASN_SOURCE_SHA256}" /tmp/asn-prefixes.json | sha256sum --check --strict
+            "${ASN_SOURCE_URL}" -o /tmp/as-ip-blocks.tar.gz
+          printf '%s  %s\n' "${ASN_SOURCE_SHA256}" /tmp/as-ip-blocks.tar.gz | sha256sum --check --strict
           go run ./cmd/asn-builder \
-            -format remnawave-json \
-            -in /tmp/asn-prefixes.json \
+            -format ipverse-tar-gz \
+            -in /tmp/as-ip-blocks.tar.gz \
             -out dist/asn-prefixes.bin
-          rm -f /tmp/asn-prefixes.json
+          rm -f /tmp/as-ip-blocks.tar.gz
 
           cd dist
           sha256sum \
@@ -130,7 +130,7 @@ jobs:
             remnanode.env.example \
             > SHA256SUMS
 
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           body_path: docs/releases/${{ github.ref_name }}.md
           fail_on_unmatched_files: true
@@ -150,7 +150,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 

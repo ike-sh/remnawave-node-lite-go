@@ -144,7 +144,7 @@ gh attestation verify \
 
 已成功发布的版本 tag 和 GHCR tag 不得移动或覆盖。workflow 部分失败时，先确认 GitHub Release、GHCR digest 和 attestation 哪一步已经产生；镜像发布成功而 attestation 失败时，只重试独立的 `attest-container`，不要重跑已经成功的 `publish-container`，也不要删除并重建 tag。主分支/PR 的 `.github/workflows/container.yml` 会执行不推送的 linux/amd64 完整镜像构建，降低 tag 发布时才发现 Dockerfile 失效的风险。
 
-Dockerfile frontend、Go、Debian、BuildKit、QEMU 和 SBOM scanner 均固定版本或 multi-arch manifest digest；rw-core、geo 与 ASN 资产继续固定 SHA-256。更新任一 digest 必须作为普通代码变更经过 `container` 与完整代码门禁，不能在 release tag 上临时覆盖 build args。
+Dockerfile frontend、Go、Debian、BuildKit、QEMU 和 SBOM scanner 均固定版本或 multi-arch manifest digest；rw-core、geo 与 `ipverse/as-ip-blocks` ASN 源码归档继续固定 commit 和 SHA-256。更新任一 digest 必须作为普通代码变更经过 `container` 与完整代码门禁，不能在 release tag 上临时覆盖 build args。
 
 ## 6. 回滚
 
