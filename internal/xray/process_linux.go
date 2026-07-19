@@ -74,8 +74,11 @@ func waitForProcessLeader(process *processState) (processLeaderWait, error) {
 	}
 }
 
-// cleanupOwnedProcessGroup kills every member of the group and verifies that
-// no non-leader member remains before cmd.Wait is allowed to reap the leader.
+// cleanupOwnedProcessGroup kills every live member of the group and verifies
+// that no live non-leader member remains before cmd.Wait is allowed to reap the
+// leader. Zombie members have already released their resources and cannot
+// execute or receive signals, so waiting for an external reaper would make
+// cleanup depend on the container's PID 1.
 func cleanupOwnedProcessGroup(process *os.Process, timeout time.Duration) error {
 	if process == nil {
 		return os.ErrProcessDone
@@ -145,7 +148,7 @@ func ownedProcessGroupMembers(processGroup, leaderPID int, deadline time.Time) (
 			if statErr != nil {
 				return processGroupSnapshot{}, statErr
 			}
-			if pgid == processGroup {
+			if pgid == processGroup && state != 'Z' && state != 'X' {
 				members.total++
 				if members.reportedCount < len(members.reported) {
 					members.reported[members.reportedCount] = processGroupMember{pid: pid, state: state}
