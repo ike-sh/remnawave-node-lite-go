@@ -7,7 +7,7 @@ env:
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - ".github/workflows/container.yml"
       - ".dockerignore"
@@ -17,7 +17,7 @@ on:
       - "cmd/**"
       - "internal/**"
   pull_request:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - ".github/workflows/container.yml"
       - ".dockerignore"
