@@ -9,11 +9,17 @@ env:
   OFFICIAL_NODE_REF: "2.8.0"
   OFFICIAL_NODE_COMMIT: "596f015a5c8f876dc9a9d61b6cb78d35bd8e379b"
 
+permissions:
+  contents: read
+
 jobs:
   compare-routes:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Clone pinned official Remnawave Node
         run: |

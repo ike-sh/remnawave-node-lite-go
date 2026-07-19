@@ -2,10 +2,7 @@ name: remnanode-lite
 
 services:
   remnanode:
-    image: remnanode-lite-go:0.1.0
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: "${REMNANODE_IMAGE:-ghcr.io/luxiaba/remnawave-node-lite-go:0.1.0}"
     container_name: remnanode
     hostname: remnanode
     network_mode: host

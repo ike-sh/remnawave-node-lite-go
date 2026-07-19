@@ -45,6 +45,13 @@ grep -Fq "remnanode-contract-probe/${version}" internal/contract/probe.go ||
   fail "contract probe User-Agent is not $version"
 grep -Fq "| 当前版本 | \`${version}\`" README.md ||
   fail "README current version is not $version"
+expected_ghcr_image="ghcr.io/luxiaba/remnawave-node-lite-go:${version}"
+grep -Fq "$expected_ghcr_image" compose.yaml ||
+  fail "compose.yaml image is not $expected_ghcr_image"
+grep -Fq "REMNANODE_IMAGE=${expected_ghcr_image}" .env.example ||
+  fail ".env.example image is not $expected_ghcr_image"
+grep -Fq "image: remnanode-lite-go:${version}" compose.build.yaml ||
+  fail "compose.build.yaml local image is not remnanode-lite-go:$version"
 for script in install-node.sh install-node-alpine.sh upgrade.sh uninstall.sh; do
   grep -Fq "remnawave-node-lite-go/v${version}/scripts/${script}" README.md ||
     fail "README ${script} URL is not pinned to v${version}"

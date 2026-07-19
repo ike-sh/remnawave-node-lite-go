@@ -1,8 +1,10 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7.0@sha256:dbbd5e059e8a07ff7ea6233b213b36aa516b4c53c645f1817a4dd18b83cbea56
 
-ARG GO_VERSION=1.26.5
+# Multi-architecture manifest digests audited on 2026-07-19.
+ARG GO_IMAGE=golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651
+ARG DEBIAN_IMAGE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS build
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
 
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -34,7 +36,7 @@ RUN set -eux; \
       go build -mod=readonly -buildvcs=false -trimpath \
       -ldflags='-s -w' -o /out/asn-builder ./cmd/asn-builder
 
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS assets
+FROM --platform=$BUILDPLATFORM ${DEBIAN_IMAGE} AS assets
 
 ARG TARGETARCH
 ARG XRAY_CORE_VERSION=v26.6.27
@@ -74,7 +76,7 @@ RUN set -eux; \
     chmod 0644 /assets/asn/asn-prefixes.bin; \
     rm -f /tmp/xray.zip /tmp/asn-prefixes.json /usr/local/bin/asn-builder
 
-FROM debian:bookworm-slim AS runtime
+FROM ${DEBIAN_IMAGE} AS runtime
 
 LABEL org.opencontainers.image.title="Remnawave Node Lite (Go)" \
       org.opencontainers.image.description="Low-memory Remnawave Node 2.8.0 compatible implementation" \

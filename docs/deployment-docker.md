@@ -1,6 +1,12 @@
 # Docker Compose 部署
 
-Docker 部署与官方 Remnawave Node 使用相同的宿主网络模型：Node 直接监听宿主机端口，并获得 nftables、连接关闭以及低端口监听所需的最小能力。Go Node 直接管理 rw-core 生命周期，因此容器只有一个主进程，不需要 s6 或第二个常驻 supervisor。
+`v0.1.0` 正式发布后，Release workflow 将同一份源码构建为 `linux/amd64`、`linux/arm64` multi-arch 镜像并发布到：
+
+```text
+ghcr.io/luxiaba/remnawave-node-lite-go
+```
+
+生产服务器只需要 `compose.yaml` 和 `.env`。Compose 与官方 Remnawave Node 一样使用宿主网络；Go Node 直接管理 rw-core 生命周期，因此容器只有一个主进程，不需要 s6 或第二个常驻 supervisor。
 
 ## 前置条件
 
@@ -9,29 +15,38 @@ Docker 部署与官方 Remnawave Node 使用相同的宿主网络模型：Node �
 - 已在 Panel 创建节点并取得完整 `SECRET_KEY`
 - Panel 配置的 Node 端口与 `NODE_PORT` 一致，默认 `2222`
 
-生产配置限制容器使用 `448 MiB RAM / 0 swap / 1 CPU / 256 PIDs`，为整机 `512 MiB RAM / 1 vCPU / 2 GB disk` 留出宿主机余量。2 GB 是运行时目标；不要在磁盘仅剩 2 GB 的生产机上保留 Go 构建镜像和 BuildKit 缓存。
+生产 Compose 限制容器使用 `448 MiB RAM / 0 swap / 1 CPU / 256 PIDs`，为整机 `512 MiB RAM / 1 vCPU / 2 GB disk` 留出宿主机余量。
 
-## 直接从仓库部署
+## 无源码部署
+
+正式版本发布后，从 GitHub Release 下载经过同一份 `SHA256SUMS` 覆盖的部署文件。以下以 `0.1.0` 为例：
 
 ```bash
-git clone https://github.com/Luxiaba/remnawave-node-lite-go.git
-cd remnawave-node-lite-go
-cp deploy/docker.env.example .env
+mkdir -p /opt/remnanode && cd /opt/remnanode
+
+base_url=https://github.com/Luxiaba/remnawave-node-lite-go/releases/download/v0.1.0
+curl -fLO "$base_url/compose.yaml"
+curl -fLO "$base_url/remnanode.env.example"
+curl -fLO "$base_url/SHA256SUMS"
+
+grep -E ' (compose.yaml|remnanode.env.example)$' SHA256SUMS | sha256sum -c
+mv remnanode.env.example .env
 chmod 600 .env
 ```
 
-编辑 `.env`，至少填写：
+编辑 `.env`，至少填写完整 Secret：
 
 ```env
+REMNANODE_IMAGE=ghcr.io/luxiaba/remnawave-node-lite-go:0.1.0
 NODE_PORT=2222
 SECRET_KEY=粘贴_Panel_提供的完整_base64_内容
 LOW_MEMORY=1
 ```
 
-构建并启动：
+启动并观察状态：
 
 ```bash
-docker compose build --pull
+docker compose pull
 docker compose up -d --no-build
 docker compose ps
 docker compose logs --tail=100 remnanode
@@ -41,26 +56,96 @@ docker compose logs --tail=100 remnanode
 
 Compose 使用 `network_mode: host`，因此没有也不应添加 `ports:` 映射。`NET_ADMIN` 用于 nftables 和 socket destroy；显式的 `NET_BIND_SERVICE` 等价于官方镜像默认保留的低端口监听能力。
 
-## 在其他机器构建
+## GHCR 可见性与登录
 
-在 2 GB 磁盘的小机器上，建议先在工作站或 CI 构建目标架构镜像，再传到生产机，避免 Go 工具链和构建缓存占用生产磁盘。以 amd64 服务器为例：
+项目计划将 GHCR Package 设为 Public。Public Package 可以匿名拉取，不需要在服务器保存 GitHub 凭据。
+
+首次发布后、尚未切换为 Public 时，使用只包含 `read:packages` 的最小权限 PAT 登录。不要把 PAT 写入 `.env`：
 
 ```bash
-docker buildx build --platform linux/amd64 \
-  --tag remnanode-lite-go:0.1.0 --load .
-docker save remnanode-lite-go:0.1.0 | gzip > remnanode-lite-go_0.1.0_amd64.tar.gz
-scp remnanode-lite-go_0.1.0_amd64.tar.gz root@server:/tmp/
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io \
+  --username YOUR_GITHUB_USERNAME --password-stdin
+unset GHCR_TOKEN
 ```
 
-在服务器加载镜像并使用同一份 `compose.yaml`、`.env` 启动：
+## 正式发布前的候选验收
+
+正式 Release 前的服务器验收使用维护者从 `main` 手动发布的 `candidate-sha-<commit>` 镜像。候选镜像不承诺版本稳定性，只能用于与该 commit 绑定的验收；不得自行改写为 `0.1.0` 等正式 tag。
+
+候选阶段没有 GitHub Release 资产。服务器按完整 commit 下载同一版本的 Compose 和环境模板，不需要 clone 仓库：
 
 ```bash
-gzip -dc /tmp/remnanode-lite-go_0.1.0_amd64.tar.gz | docker load
-rm -f /tmp/remnanode-lite-go_0.1.0_amd64.tar.gz
+candidate_commit=替换为_40位小写_commit
+printf '%s\n' "$candidate_commit" | grep -Eq '^[0-9a-f]{40}$'
+
+mkdir -p /opt/remnanode && cd /opt/remnanode
+base_url="https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/${candidate_commit}"
+curl -fL "$base_url/compose.yaml" -o compose.yaml
+curl -fL "$base_url/.env.example" -o remnanode.env.example
+sed -i "s|^REMNANODE_IMAGE=.*|REMNANODE_IMAGE=ghcr.io/luxiaba/remnawave-node-lite-go:candidate-sha-${candidate_commit}|" remnanode.env.example
+mv remnanode.env.example .env
+chmod 600 .env
+# 编辑 .env，填写完整 SECRET_KEY
+
+docker compose pull
 docker compose up -d --no-build
+docker compose ps
 ```
 
-arm64 服务器将两处 `linux/amd64` / `_amd64` 改为 `linux/arm64` / `_arm64`。
+完整 commit 同时固定部署文件与镜像 tag。候选 attestation 发布成功后，还可验证镜像确由本仓库 workflow 构建：
+
+```bash
+gh attestation verify \
+  "oci://ghcr.io/luxiaba/remnawave-node-lite-go:candidate-sha-${candidate_commit}" \
+  --repo Luxiaba/remnawave-node-lite-go
+```
+
+## 固定镜像摘要
+
+精确版本 tag 不会被维护者主动覆盖。需要抵御 registry tag 被误移动时，可在首次拉取后记录 manifest digest：
+
+```bash
+docker image inspect \
+  --format '{{index .RepoDigests 0}}' \
+  ghcr.io/luxiaba/remnawave-node-lite-go:0.1.0
+```
+
+将输出的完整 `name@sha256:...` 写入 `.env` 的 `REMNANODE_IMAGE` 即可固定摘要。GitHub CLI 可验证发布 workflow 生成的 build attestation：
+
+```bash
+gh attestation verify \
+  oci://ghcr.io/luxiaba/remnawave-node-lite-go:0.1.0 \
+  --repo Luxiaba/remnawave-node-lite-go
+```
+
+## 更新与回滚
+
+跨版本更新时，先在临时目录按“无源码部署”步骤下载并校验目标 Release 的 `compose.yaml`、环境模板和 `SHA256SUMS`；确认配置兼容后再替换当前 `compose.yaml`，并把 `.env` 中 `REMNANODE_IMAGE` 改为新的精确版本。随后执行：
+
+```bash
+docker compose pull
+docker compose up -d --no-build --force-recreate
+docker compose ps
+```
+
+回滚时同时恢复上一个版本配套的 `compose.yaml`，将 `REMNANODE_IMAGE` 恢复为已验证的版本 tag 或 digest，再重复相同命令。修改 Secret 或端口后也需要重新创建容器。
+
+## 本地源码构建
+
+源码构建仅用于开发、审计或 GHCR 暂不可用的应急场景。`compose.build.yaml` 会覆盖生产镜像名并增加本地 build 配置：
+
+```bash
+git clone https://github.com/Luxiaba/remnawave-node-lite-go.git
+cd remnawave-node-lite-go
+cp .env.example .env
+chmod 600 .env
+# 编辑 .env，填写 SECRET_KEY
+
+docker compose -f compose.yaml -f compose.build.yaml build --pull
+docker compose -f compose.yaml -f compose.build.yaml up -d --no-build
+```
+
+不要在磁盘仅剩 2 GB 的生产机上源码构建；Go 工具链、跨架构基础层和 BuildKit 缓存可能超过运行时磁盘预算。
 
 ## 运维
 
@@ -72,29 +157,23 @@ docker compose stop remnanode
 docker compose down
 ```
 
-rw-core 输出保存在命名卷 `remnanode-logs`，Node 会限制并轮转日志；Docker 自身日志也限制为 `2 x 5 MiB`。普通 `docker compose down` 保留 rw-core 日志，确认不再需要数据时才执行：
+rw-core 输出保存在命名卷 `remnanode-logs`，Node 会限制并轮转日志；Docker 自身日志也限制为 `2 x 5 MiB`。普通 `docker compose down` 保留日志，确认不再需要数据时才执行：
 
 ```bash
 docker compose down --volumes
 ```
 
-更新源码后重新构建并原地替换：
+不要提交 `.env`。Secret 会作为容器环境变量存在于本机 Docker 元数据中，应限制 Docker socket 和主机管理员权限。
 
-```bash
-docker compose build --pull
-docker compose up -d --no-build --force-recreate
-```
+## 镜像内容
 
-修改 `.env` 中的 Secret 或端口后也需要重新创建容器。不要提交 `.env`；Secret 会作为容器环境变量存在于本机 Docker 元数据中，应限制 Docker socket 和主机管理员权限。
-
-## 打包内容与固定版本
-
-多阶段镜像包含：
+`0.1.0` 镜像包含：
 
 - `remnanode-lite` `0.1.0`，上报 Node 契约版本 `2.8.0`
 - rw-core `v26.6.27`，分别固定 amd64/arm64 Release 资产与 SHA-256
 - 同一 rw-core Release 的 `geoip.dat` / `geosite.dat`
 - 固定 `2026-03-30` Remnawave ASN JSON 摘要生成的 compact ASN 数据库
+- 固定 manifest digest 的 Go、Debian 与 Dockerfile frontend 基础镜像
 - Debian bookworm slim、CA 证书和 nftables 运行依赖
 
-镜像构建不会使用 `latest` 下载 rw-core 或 ASN 数据，任一外部资产摘要不匹配都会使构建失败。
+发布 workflow 不生成或消费 `latest`；任一固定外部资产摘要不匹配都会使构建失败。

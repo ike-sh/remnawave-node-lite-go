@@ -9,6 +9,7 @@
 
 ### 新增
 
+- 新增 GHCR 多架构镜像发布链：tag Release 在既有门禁后发布 amd64/arm64 manifest、精确版本与 commit 标签、SBOM、BuildKit provenance 和 GitHub build attestation；主分支/PR 独立验证容器构建。
 - 新增 amd64/arm64 多阶段 Docker 镜像与生产 Compose：固定并校验 rw-core/geo/ASN 资产，采用官方 host network 与能力模型，同时落实 448 MiB/no-swap/1 CPU/256 PID、只读 rootfs、健康检查和日志上限。
 - 固化官方 Node `2.8.0@596f015` 的 26 条路由、Zod 请求/响应、错误格式和副作用为可执行契约。
 - 新增默认只读、需 mTLS/JWT 的 `contract-probe`，用于官方 Node 与 Go Node 的黑盒语义差分。

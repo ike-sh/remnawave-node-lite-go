@@ -34,18 +34,19 @@ Remnawave Panel 的轻量级 Go Node 实现：以**单一可执行文件**运行
 
 ### Docker Compose
 
-Docker 部署沿用官方 Node 的宿主网络与 `NET_ADMIN` 模型，并额外落实 `448 MiB / 1 CPU / 0 swap / 256 PIDs` 生产限制：
+`v0.1.0` 正式发布后，Release 将同时提供 `linux/amd64`、`linux/arm64` GHCR 镜像。生产服务器只需 `compose.yaml` 和 `.env`，不需要源码或 Go 工具链：
 
 ```bash
-cp deploy/docker.env.example .env
+# 从同一 GitHub Release 下载 compose.yaml 和 remnanode.env.example
+mv remnanode.env.example .env
 chmod 600 .env
 # 编辑 .env，填写完整 SECRET_KEY
-docker compose build --pull
+docker compose pull
 docker compose up -d --no-build
 docker compose ps
 ```
 
-完整的首次部署、异机预构建、更新、日志与卸载说明见 [Docker Compose 部署](docs/deployment-docker.md)。host network 模式下不配置 `ports:`；防火墙需只对 Panel 地址开放 `NODE_PORT`。
+镜像由 tag Release workflow 推送到 `ghcr.io/luxiaba/remnawave-node-lite-go`，不发布 `latest`；生产使用精确版本 tag 或 manifest digest。完整的无源码部署、私有 Package 登录、attestation 验证、更新、回滚和本地构建说明见 [Docker Compose 部署](docs/deployment-docker.md)。
 
 ### systemd（Debian / Ubuntu 等）
 
@@ -88,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/Luxiaba/remnawave-node-lite-go/v0.1
 
 ## 配置说明
 
-原生部署主配置文件为 `/etc/remnanode/node.env`；Docker Compose 从仓库根目录 `.env` 读取同名运行变量，模板见 `deploy/docker.env.example`。
+原生部署主配置文件为 `/etc/remnanode/node.env`，模板见 `deploy/node.env.example`；Docker Compose 从仓库根目录 `.env` 读取运行变量，模板见 `.env.example`。
 
 ```env
 NODE_PORT=2222
