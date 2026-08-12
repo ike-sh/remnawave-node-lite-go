@@ -3,17 +3,17 @@
 # 封装官方 Remnawave install-xray.sh
 set -euo pipefail
 
-XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.6.27}"
+XRAY_CORE_VERSION="${XRAY_CORE_VERSION:-v26.7.28}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-XTLS}"
 INSTALL_SCRIPT="${INSTALL_SCRIPT:-https://raw.githubusercontent.com/remnawave/scripts/main/scripts/install-xray.sh}"
 NODE_ENV="${NODE_ENV:-/etc/remnanode/node.env}"
 
 usage() {
   cat <<'EOF'
-用法：install-xray.sh [--version v26.6.27] [--upstream XTLS] [--dry-run]
+用法：install-xray.sh [--version v26.7.28] [--upstream XTLS] [--dry-run]
 
 环境变量：
-  XRAY_CORE_VERSION   rw-core 版本，默认 v26.6.27（Node 2.8.0 要求 ≥ 26.6.27）
+  XRAY_CORE_VERSION   rw-core 版本，默认 v26.7.28（Node 3.1.1 基线）
   UPSTREAM_REPO       上游仓库标识，默认 XTLS
   INSTALL_SCRIPT      安装脚本 URL
   CUSTOM_CORE_URL     自定义 rw-core 下载 URL（对齐官方 Docker entrypoint，设置后跳过官方安装脚本）
@@ -31,31 +31,48 @@ load_env_var() {
   val="$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
   [ -n "$val" ] || return 0
   printf -v "$key" '%s' "$val"
-  export "$key"
+  export "${key?}"
 }
 
 install_custom_core() {
   local url="$1"
   local target="/usr/local/bin/xray"
+  local staged
+  staged="$(mktemp "${target}.download.XXXXXX")"
   echo "CUSTOM_CORE_URL 已设置，从自定义地址下载 rw-core..."
   echo "  URL: ${url}"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$target"
+    if ! curl -fsSL "$url" -o "$staged"; then
+      rm -f "$staged"
+      return 1
+    fi
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$target" "$url"
+    if ! wget -q -O "$staged" "$url"; then
+      rm -f "$staged"
+      return 1
+    fi
   else
     echo "缺少 curl 或 wget，无法下载 CUSTOM_CORE_URL" >&2
+    rm -f "$staged"
     return 1
   fi
-  chmod +x "$target"
-  if [ ! -x "$target" ]; then
-    echo "下载完成但 $target 不可执行" >&2
+  if ! chmod 0755 "$staged"; then
+    rm -f "$staged"
+    return 1
+  fi
+  if ! "$staged" version >/dev/null 2>&1; then
+    echo "下载的自定义 rw-core 无法执行 version 命令，保留现有 core" >&2
+    rm -f "$staged"
+    return 1
+  fi
+  if ! mv -f "$staged" "$target"; then
+    rm -f "$staged"
     return 1
   fi
   echo "自定义 rw-core 已安装到 ${target}"
 }
 
-# ASN 前缀数据库（插件 asList 共享列表解析；对齐官方 2.8.0 的 /usr/local/share/asn）。
+# ASN 前缀数据库（插件 asList 共享列表解析；对齐官方 3.1.1 的 /usr/local/share/asn）。
 # 未提供 ASN_DB_URL 时跳过；运行时缺失该文件则 asList 自动降级为空。
 ASN_DB_URL="${ASN_DB_URL:-}"
 ASN_DB_PATH="${ASN_DB_PATH:-/usr/local/share/asn/asn-prefixes.bin}"

@@ -37,6 +37,7 @@ type State struct {
 	whitelistIPs map[string]struct{}
 	reports      []TorrentReport
 	torrent      torrentSettings
+	preStart     preStartSettings
 	asn          ASNResolver
 }
 
@@ -109,6 +110,7 @@ func (s *State) Reset() {
 	s.whitelistIPs = make(map[string]struct{})
 	s.reports = nil
 	s.torrent = torrentSettings{}
+	s.preStart = preStartSettings{}
 }
 
 type SyncPlugin struct {
@@ -148,6 +150,7 @@ func (s *State) UpdateFromSync(plugin *SyncPlugin) (changed bool, accepted bool)
 		s.whitelistIPs = make(map[string]struct{})
 		s.reports = nil
 		s.torrent = torrentSettings{}
+		s.preStart = preStartSettings{}
 		return true, true
 	}
 
@@ -180,6 +183,7 @@ func (s *State) UpdateFromSync(plugin *SyncPlugin) (changed bool, accepted bool)
 		}
 	}
 	s.configureTorrentBlocker(rawConfig, shared)
+	s.configurePreStart(rawConfig)
 
 	return true, true
 }

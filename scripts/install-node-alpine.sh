@@ -2,7 +2,7 @@
 # remnawave-node-lite-go Alpine Linux 一键安装（OpenRC）
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -116,9 +116,10 @@ while [ $# -gt 0 ]; do
 done
 
 on_error() {
+	local exit_code=$?
   echo "安装失败：${STAGE}" >&2
   echo "失败命令：${BASH_COMMAND}" >&2
-  exit $?
+  exit "$exit_code"
 }
 
 trap on_error ERR
@@ -182,7 +183,7 @@ run_sibling_script() {
 
 show_menu() {
   echo
-  echo "Remnawave Node Lite ${VERSION} (contract 2.8.0) — Alpine"
+  echo "Remnawave Node Lite ${VERSION} (contract 3.1.1) — Alpine"
   echo "  1) 安装"
   echo "  2) 升级"
   echo "  3) 卸载"

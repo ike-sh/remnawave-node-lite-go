@@ -9,7 +9,7 @@ on:
       upstream_ref:
         description: "remnawave/node git ref (tag/branch)"
         required: false
-        default: "main"
+        default: "3.1.1"
 
 jobs:
   compare-routes:
@@ -19,35 +19,33 @@ jobs:
 
       - name: Clone upstream remnawave/node
         run: |
-          ref="${{ github.event.inputs.upstream_ref || 'main' }}"
-          git clone --depth 1 --branch "$ref" https://github.com/remnawave/node.git /tmp/remnawave-node || \
-            git clone --depth 1 https://github.com/remnawave/node.git /tmp/remnawave-node
+          ref="${{ github.event.inputs.upstream_ref }}"
+          if [ -z "$ref" ]; then
+            ref=$(tr -d ' \n\r' < internal/version/contract.version)
+          fi
+          git clone --depth 1 --branch "$ref" https://github.com/remnawave/node.git /tmp/remnawave-node
 
       - name: Report upstream version
         id: official
         run: |
-          ver=$(python3 -c "import json; print(json.load(open('/tmp/remnawave-node/package.json'))['version'])")
-          local_ver=$(tr -d ' \n\r' < internal/version/contract.version)
-          echo "Upstream @remnawave/node version: $ver"
-          echo "Lite-go contract.version: $local_ver"
-          echo "upstream_version=$ver" >> "$GITHUB_OUTPUT"
-          if [ "$ver" != "$local_ver" ]; then
-            echo "::error::contract.version ($local_ver) != upstream ($ver) — update internal/version/contract.version and version.go ContractVersion default"
+          node_ver=$(python3 -c "import json; print(json.load(open('/tmp/remnawave-node/package.json'))['version'])")
+          wire_ver=$(python3 -c "import json; print(json.load(open('/tmp/remnawave-node/libs/contract/package.json'))['version'])")
+          local_node_ver=$(tr -d ' \n\r' < internal/version/contract.version)
+          local_wire_ver=$(tr -d ' \n\r' < internal/version/node-contract.version)
+          echo "Upstream @remnawave/node version: $node_ver"
+          echo "Upstream @remnawave/node-contract version: $wire_ver"
+          echo "Lite-go reported nodeVersion: $local_node_ver"
+          echo "Lite-go wire contract baseline: $local_wire_ver"
+          echo "upstream_version=$node_ver" >> "$GITHUB_OUTPUT"
+          if [ "$node_ver" != "$local_node_ver" ]; then
+            echo "::error::reported nodeVersion ($local_node_ver) != upstream node ($node_ver)"
             exit 1
           fi
-          if [ "$ver" != "2.8.0" ]; then
-            echo "::notice::Upstream node bumped to $ver — review contract diff manually"
+          if [ "$wire_ver" != "$local_wire_ver" ]; then
+            echo "::error::wire contract baseline ($local_wire_ver) != upstream node-contract ($wire_ver)"
+            exit 1
           fi
-          python3 <<'PY'
-          import re, pathlib
-          text = pathlib.Path("/tmp/remnawave-node/libs/contract/api/routes.ts").read_text()
-          paths = set()
-          for m in re.finditer(r"`(\$\{ROOT\}/[^`]+)`", text):
-              p = m.group(1).replace("${ROOT}", "")
-              paths.add(p)
-          for p in sorted(paths):
-              print(p)
-          PY > /tmp/official-routes.txt
+          python3 scripts/extract-contract-routes.py /tmp/remnawave-node > /tmp/official-routes.txt
           echo "count=$(wc -l < /tmp/official-routes.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Extract lite-go implemented routes

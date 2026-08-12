@@ -3,6 +3,7 @@ package plugin_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,6 +15,7 @@ import (
 type mockXray struct {
 	removeOutbound int
 	stopIfOnline   int
+	removeError    error
 }
 
 func (m *mockXray) StopIfOnline() bool {
@@ -23,7 +25,7 @@ func (m *mockXray) StopIfOnline() bool {
 
 func (m *mockXray) RemoveTorrentBlockerOutbound() error {
 	m.removeOutbound++
-	return nil
+	return m.removeError
 }
 
 func TestHandleSyncDisableUsesRemoveOutboundWhenNoIncludeTags(t *testing.T) {
@@ -72,6 +74,52 @@ func TestHandleSyncDisableUsesRemoveOutboundWhenNoIncludeTags(t *testing.T) {
 	}
 	if xray.stopIfOnline != 0 {
 		t.Fatalf("StopIfOnline calls = %d, want 0", xray.stopIfOnline)
+	}
+}
+
+func TestHandleSyncDisableFallsBackToStopWhenHotRemoveFails(t *testing.T) {
+	t.Parallel()
+
+	state := plugin.NewState()
+	xray := &mockXray{removeError: errors.New("xray is still starting")}
+	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
+
+	_, _ = state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{
+			"torrentBlocker": map[string]any{
+				"enabled":       true,
+				"blockDuration": 300,
+				"ignoreLists":   map[string]any{},
+			},
+		},
+	}))
+
+	body, _ := json.Marshal(map[string]any{
+		"plugin": map[string]any{
+			"uuid": "00000000-0000-4000-8000-000000000001",
+			"name": "test",
+			"config": map[string]any{
+				"torrentBlocker": map[string]any{
+					"enabled":       false,
+					"blockDuration": 0,
+					"ignoreLists":   map[string]any{},
+				},
+			},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	write := func(w http.ResponseWriter, status int, value any) {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(value)
+	}
+
+	service.HandleSync(rec, req, write)
+
+	if xray.removeOutbound != 1 || xray.stopIfOnline != 1 {
+		t.Fatalf("expected hot-remove then stop fallback, remove=%d stop=%d", xray.removeOutbound, xray.stopIfOnline)
 	}
 }
 

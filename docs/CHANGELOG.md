@@ -3,6 +3,37 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [1.2.0] - 2026-08-12
+
+对齐上游 `@remnawave/node` v3.1.1（wire contract v2.9.0，REST 路由仍为 26 条）。
+
+### 安全
+
+- **动态 core 强校验**：Panel 下发的自定义 core 仅允许 HTTPS，限制下载时间与大小，必须通过 SHA-256 校验和 `version` 执行探测后才会原子激活；校验失败保留当前 core。
+- **安全回滚**：动态 core 使用独立的 `xray-custom`、staged 文件与 marker；Panel 不再下发 custom core 时恢复 `/usr/local/bin/xray` stock core，不覆盖普通 `XRAY_BIN` 文件。
+
+### 新增
+
+- **动态 geodata**：启动前按 `xrayConfig.geodata.assets` 并发准备 geo 文件；限制 HTTPS URL 与文件名，失败时按上游行为创建空 stub。
+- **Pre-Start 插件**：支持 `preStart.cleanupSockets`，每次 core 启动前清理残留 Unix socket；普通文件、目录和符号链接不会删除，单模式最多处理 256 项。
+- **Torrent 外部 webhook**：支持 `torrentBlocker.webhookUrl`，封禁报告入队后异步 POST，超时不会阻塞内部报告收集。
+
+### 变更
+
+- rw-core 与 Go API 基线升级到 **v26.7.28**；同步升级 gRPC、`x/net`、`x/crypto` 等传递依赖。
+- `github.com/klauspost/compress` 升级到 **v1.18.7**，消除旧版本 S2 模块的已知越界读取公告（本项目使用的 zstd 调用链未受影响）。
+- core 版本改为读取当前激活二进制，不再允许旧 `XRAY_CORE_VERSION` 环境变量覆盖真实版本。
+- contract-sync CI 分别校验 Node `3.1.1` 与 wire contract `2.9.0`，并固定比较对应 tag。
+
+### 修复
+
+- geodata 改为固定 worker pool；同名目标按配置顺序串行处理，避免大量资源产生无界 goroutine 或争用同一个临时文件。
+- 停止无进程的 core 时也完整清理配置哈希与入站状态；core 提前退出时 readiness 检查立即失败，不再空等启动超时。
+- 插件热移除失败会回退为停止 core；nftables 重建或规则同步失败不再误报成功，负数超时不会意外变成永久封禁。
+- Unix 内部 socket 启动清理拒绝删除普通文件；网络监控停止操作支持并发幂等调用。
+- 裸机 `CUSTOM_CORE_URL` 安装改为 staged 下载、`version` 探测和原子替换，下载失败保留现有 core。
+- CI 增加 race detector 与 `go vet`，发布工作流通过 actionlint/ShellCheck 校验。
+
 ## [1.1.0] - 2026-06-30
 
 对齐上游 `@remnawave/node` v2.8.0。
@@ -173,6 +204,7 @@
 
 ---
 
+[1.2.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.2.0
 [1.1.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.1.0
 [1.0.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.0.0
 [0.8.30]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v0.8.30

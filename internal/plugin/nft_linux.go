@@ -24,7 +24,7 @@ func newNFTManager() *nftManager {
 }
 
 func (m *nftManager) Available() bool {
-	return m.available && m != nil
+	return m != nil && m.available
 }
 
 func (m *nftManager) recreateTables() error {
@@ -105,6 +105,9 @@ table ip6 %s {
 func (m *nftManager) blockIP(ip string, timeoutSeconds int) error {
 	if !m.available {
 		return fmt.Errorf("nftables unavailable")
+	}
+	if timeoutSeconds < 0 {
+		return fmt.Errorf("timeout must be zero or positive")
 	}
 	table, set, ok := ipTableAndTorrentSet(ip)
 	if !ok {

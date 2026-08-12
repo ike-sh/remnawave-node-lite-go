@@ -127,3 +127,99 @@ func TestBuildSharedIPMapUsesExtPrefix(t *testing.T) {
 		t.Fatalf("expected ext:mylist key, got %#v", m)
 	}
 }
+
+func TestValidatePluginConfigAcceptsPreStartAndWebhook(t *testing.T) {
+	t.Parallel()
+	torrent := validTorrentBlocker(true)
+	torrent["webhookUrl"] = "https://example.com/hook"
+	err := ValidatePluginConfig(map[string]any{
+		"torrentBlocker": torrent,
+		"preStart": map[string]any{
+			"enabled": true,
+			"cleanupSockets": map[string]any{
+				"enabled": true,
+				"files":   []any{"/dev/shm/*.sock"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("valid 0.6.2 plugin config rejected: %v", err)
+	}
+}
+
+func TestValidatePluginConfigRejectsUnsafePreStartPaths(t *testing.T) {
+	t.Parallel()
+	err := ValidatePluginConfig(map[string]any{
+		"preStart": map[string]any{
+			"enabled": true,
+			"cleanupSockets": map[string]any{
+				"enabled": true,
+				"files":   []any{"relative.sock"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected relative cleanup path to be rejected")
+	}
+}
+
+func TestValidatePluginConfigRejectsASNAboveUint32(t *testing.T) {
+	t.Parallel()
+	err := ValidatePluginConfig(map[string]any{
+		"sharedLists": []any{map[string]any{
+			"name":  "ext:invalid-asn",
+			"type":  "asList",
+			"items": []any{int64(4294967296)},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected ASN above uint32 range to be rejected")
+	}
+}
+
+func TestValidatePluginConfigRejectsStringASN(t *testing.T) {
+	t.Parallel()
+	err := ValidatePluginConfig(map[string]any{
+		"sharedLists": []any{map[string]any{
+			"name":  "ext:invalid-asn",
+			"type":  "asList",
+			"items": []any{"AS13335"},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected string ASN to be rejected by z.int-compatible validation")
+	}
+}
+
+func TestValidatePluginConfigUsesJavaScriptSafeIntegers(t *testing.T) {
+	t.Parallel()
+	cfg := validTorrentBlocker(true)
+	cfg["blockDuration"] = float64(1 << 53)
+	if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err == nil {
+		t.Fatal("expected unsafe blockDuration integer to be rejected")
+	}
+
+	cfg = validTorrentBlocker(true)
+	cfg["ignoreLists"] = map[string]any{"userId": []any{float64(1 << 53)}}
+	if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err == nil {
+		t.Fatal("expected unsafe user ID integer to be rejected")
+	}
+}
+
+func TestValidatePluginConfigMatchesUnrestrictedWebhookURLSchema(t *testing.T) {
+	t.Parallel()
+	cfg := validTorrentBlocker(true)
+	cfg["webhookUrl"] = "ftp://example.com/report"
+	if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err != nil {
+		t.Fatalf("upstream z.url-compatible webhook rejected: %v", err)
+	}
+}
+
+func TestValidatePluginConfigRejectsIncompleteWebhookURL(t *testing.T) {
+	t.Parallel()
+	cfg := validTorrentBlocker(true)
+	cfg["webhookUrl"] = "https:"
+	if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err == nil {
+		t.Fatal("expected incomplete webhook URL to be rejected")
+	}
+}

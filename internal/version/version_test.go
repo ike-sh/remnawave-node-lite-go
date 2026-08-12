@@ -17,6 +17,16 @@ func TestContractVersionMatchesBaselineFile(t *testing.T) {
 	}
 }
 
+func TestWireContractBaseline(t *testing.T) {
+	raw, err := os.ReadFile("node-contract.version")
+	if err != nil {
+		t.Fatalf("read node-contract.version: %v", err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "2.9.0" {
+		t.Fatalf("wire contract baseline = %q, want 2.9.0", got)
+	}
+}
+
 func TestReportedNodeVersionEnvOverride(t *testing.T) {
 	t.Setenv("NODE_CONTRACT_VERSION", "3.0.0")
 	if got := ReportedNodeVersion(); got != "3.0.0" {

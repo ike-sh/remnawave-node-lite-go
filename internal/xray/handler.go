@@ -3,6 +3,7 @@ package xray
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"remnawave-node-lite-go/internal/xtls"
 )
@@ -108,14 +109,16 @@ func (m *Manager) HandlerGetInboundUsersCount(ctx context.Context, tag string) (
 }
 
 func (m *Manager) RemoveTorrentBlockerOutbound() error {
-	return m.HandlerRemoveOutbound(context.Background(), torrentBlockerOutboundTag)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.HandlerRemoveOutbound(ctx, torrentBlockerOutboundTag)
 }
 
 func (m *Manager) StopIfOnline() bool {
 	m.mu.RLock()
-	online := m.xrayOnline
+	shouldStop := m.xrayOnline || m.process != nil || m.startProcessing
 	m.mu.RUnlock()
-	if !online {
+	if !shouldStop {
 		return false
 	}
 	return m.Stop(false).IsStopped

@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 升级脚本（保留 node.env 与 rw-core）
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 UNIT="/etc/systemd/system/remnawave-node.service"
@@ -67,9 +67,10 @@ while [ $# -gt 0 ]; do
 done
 
 on_error() {
+	local exit_code=$?
   echo "升级失败：${STAGE}" >&2
   echo "失败命令：${BASH_COMMAND}" >&2
-  exit $?
+  exit "$exit_code"
 }
 
 trap on_error ERR

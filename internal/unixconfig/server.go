@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -51,7 +52,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 	}
 
-	_ = os.Remove(s.Path)
+	if err := removeUnixSocket(s.Path); err != nil {
+		return err
+	}
 	listener, err := net.Listen("unix", s.Path)
 	if err != nil {
 		return err
@@ -76,7 +79,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("failed to shutdown unix config server", "error", err)
 		}
-		_ = os.Remove(s.Path)
+		if err := removeUnixSocket(s.Path); err != nil {
+			slog.Warn("failed to remove unix config socket", "error", err)
+		}
 	}()
 
 	err = s.httpServer.Serve(listener)
@@ -84,6 +89,23 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+func removeUnixSocket(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect unix socket %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("refusing to remove non-socket path %s", path)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove unix socket %s: %w", path, err)
+	}
+	return nil
 }
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {

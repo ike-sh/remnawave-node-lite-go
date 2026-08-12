@@ -35,9 +35,11 @@ type Options struct {
 type TorrentBlockerConfigProvider interface {
 	TorrentBlockerEnabled() bool
 	TorrentBlockerIncludeRuleTags() []string
+	PreStartCleanupSockets() (bool, []string)
 }
 
 type Manager struct {
+	lifecycleMu      sync.Mutex
 	mu               sync.RWMutex
 	xrayBin          string
 	geoDir           string
@@ -49,6 +51,8 @@ type Manager struct {
 	disableHashCheck bool
 	lowMemory        bool
 	torrentBlocker   TorrentBlockerConfigProvider
+	coreLoader       *coreLoader
+	geodataLoader    *geodataLoader
 
 	xrayVersion      *string
 	xrayOnline       bool
@@ -134,6 +138,8 @@ func NewManager(opts Options) (*Manager, error) {
 		xtlsSocket:       socket,
 		disableHashCheck: opts.DisableHashCheck,
 		lowMemory:        opts.LowMemory,
+		coreLoader:       newCoreLoader(opts.XrayBin),
+		geodataLoader:    newGeodataLoader(opts.GeoDir),
 	}
 	manager.refreshVersion()
 	return manager, nil
@@ -182,6 +188,12 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 		log.Printf("xray/start failed: %s", message)
 		return m.startResponse(false, &message)
 	}
+	if !m.lifecycleMu.TryLock() {
+		message := "Request already in progress"
+		log.Printf("xray/start rejected: %s", message)
+		return m.startResponse(false, &message)
+	}
+	defer m.lifecycleMu.Unlock()
 
 	m.mu.Lock()
 	if m.startProcessing {
@@ -229,6 +241,14 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 		}
 	}
 
+	geodata := fullConfig["geodata"]
+	if err := m.coreLoader.prepare(ctx, geodata); err != nil {
+		message := err.Error()
+		log.Printf("xray/start failed: prepare core: %s", message)
+		return m.startResponse(false, &message)
+	}
+	m.geodataLoader.prepare(ctx, geodata)
+
 	m.mu.Lock()
 	m.currentConfig = fullConfig
 	m.currentConfigJSON = fullConfigJSON
@@ -239,7 +259,11 @@ func (m *Manager) Start(ctx context.Context, req StartRequest) StartResponse {
 		log.Printf("xray/start failed: stop previous rw-core: %s", message)
 		return m.startResponse(false, &message)
 	}
+	m.mu.Unlock()
 
+	m.runPreStart()
+
+	m.mu.Lock()
 	process, err := m.startProcessLocked()
 	if err != nil {
 		m.xrayOnline = false
@@ -315,6 +339,8 @@ func (m *Manager) flushPersistedStart() {
 // boot config is removed so the node stays disabled after reboot. Process shutdown
 // must pass clearPersist=false so RestoreOnBoot can recover rw-core on next start.
 func (m *Manager) Stop(clearPersist bool) StopResponse {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	if !clearPersist {
 		m.flushPersistedStart()
 	}
@@ -582,6 +608,8 @@ func (m *Manager) stopProcessLocked(clearConfig bool) error {
 		if clearConfig {
 			m.currentConfig = nil
 			m.currentConfigJSON = nil
+			m.clearHashStateLocked()
+			m.clearInboundTagsLocked()
 		}
 		return nil
 	}
@@ -620,7 +648,7 @@ func (m *Manager) refreshVersion() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	output, err := exec.CommandContext(ctx, m.xrayBin, "version").Output()
+	output, err := execCommandOutput(ctx, m.xrayBin, "version")
 	if err != nil {
 		return
 	}
@@ -636,13 +664,8 @@ func (m *Manager) refreshVersion() {
 
 var xraySemverRe = regexp.MustCompile(`\d+\.\d+\.\d+`)
 
-// parseVersionLine returns semver like "26.3.27", matching official node (XRAY_CORE_VERSION / semver.coerce).
+// parseVersionLine returns the actual selected binary's semver-like version.
 func parseVersionLine(output string) string {
-	if env := strings.TrimSpace(os.Getenv("XRAY_CORE_VERSION")); env != "" {
-		if v := coerceSemver(env); v != "" {
-			return v
-		}
-	}
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -655,10 +678,8 @@ func parseVersionLine(output string) string {
 	return ""
 }
 
-func coerceSemver(raw string) string {
-	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "v")
-	return extractSemver(raw)
+var execCommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).Output()
 }
 
 func extractSemver(raw string) string {

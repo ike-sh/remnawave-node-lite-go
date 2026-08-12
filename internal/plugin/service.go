@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"remnawave-node-lite-go/internal/connections"
 )
@@ -22,6 +23,7 @@ type Service struct {
 	nft     *nftManager
 	dropper *connections.Dropper
 	xray    XrayController
+	webhook *http.Client
 }
 
 func NewService(state *State, dropper *connections.Dropper, xray XrayController) *Service {
@@ -30,6 +32,7 @@ func NewService(state *State, dropper *connections.Dropper, xray XrayController)
 		nft:     newNFTManager(),
 		dropper: dropper,
 		xray:    xray,
+		webhook: &http.Client{Timeout: 5 * time.Second},
 	}
 }
 
@@ -61,7 +64,9 @@ func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write write
 	rawConfig := extractPluginConfig(req.Plugin)
 	if err := ValidatePluginConfig(rawConfig); err != nil {
 		slog.Warn("plugin config validation failed", "error", err)
-		s.ResetPlugins()
+		if resetErr := s.ResetPlugins(); resetErr != nil {
+			slog.Warn("plugin cleanup after validation failure failed", "error", resetErr)
+		}
 		if s.xray != nil {
 			s.xray.StopIfOnline()
 		}
@@ -82,9 +87,19 @@ func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write write
 	nowIncludeTags := s.state.TorrentBlockerIncludeRuleTags()
 
 	if changed && s.nft.Available() {
-		_ = s.nft.recreateTables()
+		if err := s.nft.recreateTables(); err != nil {
+			slog.Warn("plugin nftables reset failed", "error", err)
+			s.state.Reset()
+			writeAccepted(write, w, false)
+			return
+		}
 		if rawConfig != nil {
-			s.syncFilters(rawConfig)
+			if err := s.syncFilters(rawConfig); err != nil {
+				slog.Warn("plugin nftables filter sync failed", "error", err)
+				s.state.Reset()
+				writeAccepted(write, w, false)
+				return
+			}
 		}
 	}
 
@@ -98,7 +113,11 @@ func (s *Service) handlePluginClear(write writeJSONFn, w http.ResponseWriter) {
 		return
 	}
 	slog.Info("plugin sync received empty payload, cleaning up active plugin")
-	s.ResetPlugins()
+	if err := s.ResetPlugins(); err != nil {
+		slog.Warn("plugin cleanup failed", "error", err)
+		writeAccepted(write, w, false)
+		return
+	}
 	if s.xray != nil {
 		s.xray.StopIfOnline()
 	}
@@ -106,11 +125,12 @@ func (s *Service) handlePluginClear(write writeJSONFn, w http.ResponseWriter) {
 }
 
 // ResetPlugins clears plugin state and nftables plugin tables (official withPluginCleanup).
-func (s *Service) ResetPlugins() {
+func (s *Service) ResetPlugins() error {
 	s.state.Reset()
 	if s.nft.Available() {
-		_ = s.nft.recreateTables()
+		return s.nft.recreateTables()
 	}
+	return nil
 }
 
 func (s *Service) applyTorrentRestart(wasEnabled, nowEnabled bool, prevIncludeTags, nowIncludeTags []string) {
@@ -119,7 +139,12 @@ func (s *Service) applyTorrentRestart(wasEnabled, nowEnabled bool, prevIncludeTa
 	}
 	switch {
 	case wasEnabled && !nowEnabled && len(nowIncludeTags) == 0:
-		_ = s.xray.RemoveTorrentBlockerOutbound()
+		if err := s.xray.RemoveTorrentBlockerOutbound(); err != nil {
+			// A core may still be starting, or its gRPC API may already be
+			// unavailable. Stopping the lifecycle prevents it from coming online
+			// with the now-disabled torrent outbound still configured.
+			s.xray.StopIfOnline()
+		}
 	default:
 		needsRestart := (wasEnabled && !nowEnabled) ||
 			(!wasEnabled && nowEnabled) ||

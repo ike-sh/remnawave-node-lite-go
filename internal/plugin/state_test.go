@@ -121,3 +121,32 @@ func TestNewSyncPluginFromEnvelopeRoundTrip(t *testing.T) {
 		t.Fatalf("config = %#v", cfg)
 	}
 }
+
+func TestUpdateFromSyncStoresAndResetsPreStart(t *testing.T) {
+	state := plugin.NewState()
+	_, accepted := state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{
+			"preStart": map[string]any{
+				"enabled": true,
+				"cleanupSockets": map[string]any{
+					"enabled": true,
+					"files":   []any{"/dev/shm/*.sock"},
+				},
+			},
+		},
+	}))
+	if !accepted {
+		t.Fatal("expected plugin config to be accepted")
+	}
+	enabled, files := state.PreStartCleanupSockets()
+	if !enabled || len(files) != 1 || files[0] != "/dev/shm/*.sock" {
+		t.Fatalf("pre-start state = enabled:%v files:%v", enabled, files)
+	}
+	state.Reset()
+	enabled, files = state.PreStartCleanupSockets()
+	if enabled || len(files) != 0 {
+		t.Fatalf("pre-start state survived reset: enabled:%v files:%v", enabled, files)
+	}
+}

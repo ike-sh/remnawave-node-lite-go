@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 卸载脚本（systemd / Alpine OpenRC）
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 PREFIX="/usr/local/bin"
 BIN_NAME="remnanode-lite"
 RUN_WRAPPER="${PREFIX}/remnawave-node-run"
@@ -15,6 +15,8 @@ GEO_DIR="/usr/local/share/xray"
 ASN_DIR="/usr/local/share/asn"
 XRAY_BIN="/usr/local/bin/rw-core"
 XRAY_LEGACY="/usr/local/bin/xray"
+XRAY_CUSTOM="/usr/local/bin/xray-custom"
+XRAY_MARKER="/usr/local/bin/.rw-core.json"
 
 YES=0
 DRY_RUN=0
@@ -83,9 +85,10 @@ while [ $# -gt 0 ]; do
 done
 
 on_error() {
+	local exit_code=$?
   echo "卸载失败：${STAGE}" >&2
   echo "失败命令：${BASH_COMMAND}" >&2
-  exit $?
+  exit "$exit_code"
 }
 
 trap on_error ERR
@@ -227,6 +230,7 @@ print_plan() {
   [ "$PURGE_DATA" -eq 1 ] && echo "  • 删除数据：${DATA_DIR}"
   if [ "$PURGE_XRAY" -eq 1 ]; then
     echo "  • 删除 rw-core：${XRAY_BIN}"
+    echo "  • 删除动态 core：${XRAY_CUSTOM} / ${XRAY_MARKER}"
     echo "  • 删除 geo：${GEO_DIR}"
     echo "  • 删除 ASN 数据：${ASN_DIR}"
     [ -e "$XRAY_LEGACY" ] && echo "  • 删除 xray：${XRAY_LEGACY}"
@@ -305,6 +309,8 @@ remove_xray() {
   fi
   step "删除 rw-core 与 geo 数据"
   run rm -f "$XRAY_BIN"
+  run rm -f "$XRAY_CUSTOM" "${XRAY_CUSTOM}.staged" "${XRAY_CUSTOM}.staged.download"
+  run rm -f "$XRAY_MARKER" "${XRAY_MARKER}.tmp" "${XRAY_BIN}.tmp"
   if [ -L "$XRAY_LEGACY" ] || [ -f "$XRAY_LEGACY" ]; then
     run rm -f "$XRAY_LEGACY"
   fi

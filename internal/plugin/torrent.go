@@ -1,8 +1,12 @@
 package plugin
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"log/slog"
 	"net"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -26,6 +30,7 @@ type torrentSettings struct {
 	includeRuleTags []string
 	ignoredIPs      map[string]struct{}
 	ignoredUsers    map[string]struct{}
+	webhookURL      string
 }
 
 func (s *State) configureTorrentBlocker(rawConfig map[string]any, shared map[string][]string) {
@@ -41,13 +46,11 @@ func (s *State) configureTorrentBlocker(rawConfig map[string]any, shared map[str
 	if !enabled {
 		return
 	}
-	duration := 300
-	if value, ok := blocker["blockDuration"].(float64); ok && value > 0 {
-		duration = int(value)
-	}
+	duration, _ := asInt(blocker["blockDuration"])
 	s.torrent.enabled = true
 	s.torrent.blockDuration = duration
 	s.torrent.includeRuleTags = toStringSlice(blocker["includeRuleTags"])
+	s.torrent.webhookURL, _ = blocker["webhookUrl"].(string)
 
 	if ignoreLists, ok := blocker["ignoreLists"].(map[string]any); ok {
 		for _, ip := range resolveIPList(toStringSlice(ignoreLists["ip"]), shared) {
@@ -101,10 +104,13 @@ func (s *State) torrentEnabled() bool {
 func (s *State) torrentBlockDuration() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.torrent.blockDuration <= 0 {
-		return 300
-	}
 	return s.torrent.blockDuration
+}
+
+func (s *State) torrentWebhookURL() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.torrent.webhookURL
 }
 
 func (s *Service) HandleXrayWebhook(payload map[string]any) {
@@ -136,7 +142,7 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 	}
 
 	now := time.Now().UTC()
-	s.state.AddReport(TorrentReport{
+	report := TorrentReport{
 		ActionReport: struct {
 			Blocked       bool      `json:"blocked"`
 			IP            string    `json:"ip"`
@@ -153,7 +159,31 @@ func (s *Service) HandleXrayWebhook(payload map[string]any) {
 			ProcessedAt:   now,
 		},
 		XrayReport: payload,
-	})
+	}
+	s.state.AddReport(report)
+	if webhookURL := s.state.torrentWebhookURL(); webhookURL != "" {
+		go s.sendTorrentWebhook(webhookURL, report)
+	}
+}
+
+func (s *Service) sendTorrentWebhook(webhookURL string, report TorrentReport) {
+	payload, err := json.Marshal(report)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	response, err := s.webhook.Do(req)
+	if err != nil {
+		slog.Debug("torrent blocker webhook failed", "url", webhookURL, "error", err)
+		return
+	}
+	defer response.Body.Close()
 }
 
 func ExtractWebhookIPForTest(source string) string {
@@ -222,21 +252,26 @@ func buildSharedIPMap(rawConfig map[string]any, resolver ASNResolver) map[string
 	return shared
 }
 
-func (s *Service) syncFilters(cfg map[string]any) {
+func (s *Service) syncFilters(cfg map[string]any) error {
 	shared := buildSharedIPMap(cfg, s.state.asnResolver())
 	if ingress, ok := cfg["ingressFilter"].(map[string]any); ok {
 		if enabled, _ := ingress["enabled"].(bool); enabled {
 			ips := resolveIPList(toStringSlice(ingress["blockedIps"]), shared)
-			_ = s.nft.syncIngressFilter(ips)
+			if err := s.nft.syncIngressFilter(ips); err != nil {
+				return err
+			}
 		}
 	}
 	if egress, ok := cfg["egressFilter"].(map[string]any); ok {
 		if enabled, _ := egress["enabled"].(bool); enabled {
 			ips := resolveIPList(toStringSlice(egress["blockedIps"]), shared)
 			ports := toIntSlice(egress["blockedPorts"])
-			_ = s.nft.syncEgressFilter(ips, ports)
+			if err := s.nft.syncEgressFilter(ips, ports); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func toIntSlice(value any) []int {

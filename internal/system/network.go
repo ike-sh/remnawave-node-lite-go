@@ -24,6 +24,7 @@ type NetworkMonitor struct {
 	current      *NetworkInterface
 	pollInterval time.Duration
 	stop         chan struct{}
+	stopOnce     sync.Once
 }
 
 var defaultMonitor = NewNetworkMonitor()
@@ -48,11 +49,7 @@ func NewNetworkMonitor() *NetworkMonitor {
 }
 
 func (m *NetworkMonitor) Stop() {
-	select {
-	case <-m.stop:
-	default:
-		close(m.stop)
-	}
+	m.stopOnce.Do(func() { close(m.stop) })
 }
 
 func (m *NetworkMonitor) GetDefaultInterface() *NetworkInterface {

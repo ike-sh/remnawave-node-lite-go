@@ -10,11 +10,11 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 | 项目 | 说明 |
 | --- | --- |
-| 当前版本 | [v1.1.0](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.1.0) |
-| Panel 契约 | `@remnawave/node` v2.8.0（上报 `nodeVersion=2.8.0`） |
+| 当前版本 | [v1.2.0](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.2.0) |
+| Panel 契约 | `@remnawave/node` v3.1.1（上报 `nodeVersion=3.1.1`；wire contract v2.9.0） |
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
 
-安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v1.1.0` 指定版本。
+安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v1.2.0` 指定版本。
 
 ---
 
@@ -22,7 +22,7 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 - Linux（Debian / Ubuntu 等 systemd 发行版，或 Alpine + OpenRC）
 - Panel 下发的 `SECRET_KEY`（含 mTLS 证书与 JWT 公钥）
-- [rw-core](https://github.com/XTLS/Xray-core) **≥ v26.6.27**（2.8.0 抽象套接字 API 的硬性要求；安装脚本默认安装该版本）
+- [rw-core](https://github.com/XTLS/Xray-core) **v26.7.28** 基线（安装脚本默认安装；Panel 可下发带 SHA-256 的自定义 core）
 - 可选：`nft`、`ss`（插件 IP 封禁与连接踢除，需 `CAP_NET_ADMIN`）
 
 ---
@@ -82,7 +82,7 @@ GEO_DIR=/usr/local/share/xray
 LOG_DIR=/var/log/remnanode
 ```
 
-可选能力见 `deploy/node.env.example`：`LOW_MEMORY`、`BODY_LIMIT_MB`、`NODE_BIND_ADDR`（绑定监听地址）、`CUSTOM_CORE_URL`、`GEO_ZAPRET_FILE` / `IP_ZAPRET_FILE` 等。
+可选能力见 `deploy/node.env.example`：`LOW_MEMORY`、`BODY_LIMIT_MB`、`NODE_BIND_ADDR`（绑定监听地址）、`CUSTOM_CORE_URL`、`GEO_ZAPRET_FILE` / `IP_ZAPRET_FILE` 等。保持默认 `XRAY_BIN=/usr/local/bin/rw-core` 时，Node 3.1.1 可按 Panel 配置安全下载/切换自定义 core，并自动准备 geodata assets。
 
 ---
 
@@ -130,13 +130,14 @@ xerrors  # rw-core 错误输出
 
 ## 功能与兼容性
 
-实现与官方 `@remnawave/node` v2.8.0 对齐的 **26 条 REST API**，涵盖：
+实现与官方 `@remnawave/node` v3.1.1 对齐的 **26 条 REST API**，涵盖：
 
 - 节点注册与 mTLS / JWT 认证
 - Xray 生命周期（启动、停止、配置热更新）
 - 流量与在线统计
 - 用户热更新（VLESS / Trojan / Shadowsocks）
-- 插件同步（nftables、torrent-blocker、AS/IP 共享列表等）
+- 插件同步（nftables、torrent-blocker、外部 webhook、pre-start socket 清理、AS/IP 共享列表等）
+- Panel 下发的自定义 core（HTTPS + SHA-256 + 原子切换/stock 回滚）与 geodata assets
 
 未实现：Docker 镜像（项目定位为裸机轻量部署）。
 

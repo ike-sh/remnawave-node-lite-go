@@ -48,7 +48,7 @@ func parseASN(item any) (uint32, bool) {
 			return uint32(v), true
 		}
 	case int:
-		if v > 0 {
+		if v > 0 && uint64(v) <= uint64(^uint32(0)) {
 			return uint32(v), true
 		}
 	case int64:

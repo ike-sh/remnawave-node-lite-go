@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// ValidatePluginConfig performs structural validation aligned with @remnawave/node-plugins@0.4.5.
+// ValidatePluginConfig performs structural validation aligned with @remnawave/node-plugins@0.6.2.
 func ValidatePluginConfig(config map[string]any) error {
 	if config == nil {
 		return fmt.Errorf("plugin config is required")
@@ -24,6 +24,9 @@ func ValidatePluginConfig(config map[string]any) error {
 		return err
 	}
 	if err := validateTorrentBlockerSection(config["torrentBlocker"]); err != nil {
+		return err
+	}
+	if err := validatePreStartSection(config["preStart"]); err != nil {
 		return err
 	}
 

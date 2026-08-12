@@ -4,11 +4,26 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
 type staticProvider struct {
 	config map[string]any
+}
+
+func TestRemoveUnixSocketRefusesRegularFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "important")
+	if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeUnixSocket(path); err == nil {
+		t.Fatal("expected regular file removal to be refused")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "keep" {
+		t.Fatalf("regular file changed: %q, err=%v", got, err)
+	}
 }
 
 func (p staticProvider) CurrentConfigJSON() []byte {

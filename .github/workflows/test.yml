@@ -19,5 +19,11 @@ jobs:
       - name: go test
         run: go test ./...
 
+      - name: go test (race detector)
+        run: go test -race ./...
+
+      - name: go vet
+        run: go vet ./...
+
       - name: go build
         run: go build -o /dev/null ./cmd/remnanode-lite

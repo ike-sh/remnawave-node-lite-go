@@ -3,10 +3,15 @@ package xray
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"remnawave-node-lite-go/internal/artifact"
 )
 
 func TestBuildCommandArgs(t *testing.T) {
@@ -20,6 +25,38 @@ func TestBuildCommandArgs(t *testing.T) {
 	}
 	if got := args[1]; got != "http+unix:///run/remnawave.sock/internal/get-config" {
 		t.Fatalf("unexpected config URL: %s", got)
+	}
+}
+
+func TestStartPreparesGeodataBeforeSpawningCore(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("geo"))
+	}))
+	defer server.Close()
+	geoDir := t.TempDir()
+	manager, err := NewManager(Options{
+		XrayBin:            "definitely-missing-rw-core",
+		GeoDir:             geoDir,
+		LogDir:             t.TempDir(),
+		InternalSocketPath: "/run/remnawave.sock",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.geodataLoader.download = func(ctx context.Context, rawURL, path string, opts artifact.Options) (artifact.Result, error) {
+		opts.Client = server.Client()
+		return artifact.Download(ctx, rawURL, path, opts)
+	}
+	response := manager.Start(context.Background(), StartRequest{XrayConfig: map[string]any{
+		"geodata": map[string]any{
+			"assets": []any{map[string]any{"url": server.URL, "file": "custom.dat"}},
+		},
+	}})
+	if response.IsStarted {
+		t.Fatal("missing core should not start")
+	}
+	if got, err := os.ReadFile(filepath.Join(geoDir, "custom.dat")); err != nil || string(got) != "geo" {
+		t.Fatalf("geodata was not prepared before spawn: %q, %v", got, err)
 	}
 }
 
@@ -92,6 +129,59 @@ func TestStartStoresFullConfigWhenCommandFails(t *testing.T) {
 	}
 }
 
+func TestStartRejectsWhileLifecycleOperationIsActive(t *testing.T) {
+	manager, err := NewManager(Options{
+		XrayBin: "definitely-missing-rw-core",
+		GeoDir:  t.TempDir(),
+		LogDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.lifecycleMu.Lock()
+	response := manager.Start(context.Background(), StartRequest{XrayConfig: map[string]any{}})
+	manager.lifecycleMu.Unlock()
+	if response.Error == nil || *response.Error != "Request already in progress" {
+		t.Fatalf("unexpected response while lifecycle is busy: %#v", response)
+	}
+}
+
+func TestWaitForGRPCFailsImmediatelyWhenProcessExited(t *testing.T) {
+	manager, err := NewManager(Options{
+		XrayBin: "definitely-missing-rw-core",
+		GeoDir:  t.TempDir(),
+		LogDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Now()
+	if manager.waitForGRPC(context.Background(), time.Second) {
+		t.Fatal("missing process must not become ready")
+	}
+	if elapsed := time.Since(startedAt); elapsed > 250*time.Millisecond {
+		t.Fatalf("missing process waited too long: %s", elapsed)
+	}
+}
+
+func TestStopIfOnlineAlsoStopsInProgressLifecycle(t *testing.T) {
+	manager, err := NewManager(Options{
+		XrayBin: "definitely-missing-rw-core",
+		GeoDir:  t.TempDir(),
+		LogDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.startProcessing = true
+	manager.mu.Unlock()
+
+	if !manager.StopIfOnline() {
+		t.Fatal("in-progress lifecycle should be stopped even before online state is set")
+	}
+}
+
 func TestStopClearsConfig(t *testing.T) {
 	manager, err := NewManager(Options{
 		XrayBin:            "definitely-missing-rw-core",
@@ -103,10 +193,20 @@ func TestStopClearsConfig(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	manager.Start(context.Background(), StartRequest{XrayConfig: map[string]any{"a": "b"}})
+	manager.mu.Lock()
+	manager.emptyConfigHash = "stale"
+	manager.inboundHashes = map[string]*HashedSet{"inbound": NewHashedSet("user")}
+	manager.inboundTags = map[string]struct{}{"inbound": {}}
+	manager.mu.Unlock()
 	manager.Stop(true)
 
 	if len(manager.CurrentConfig()) != 0 {
 		t.Fatalf("expected config to be cleared")
+	}
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	if manager.emptyConfigHash != "" || manager.inboundHashes != nil || manager.inboundTags != nil {
+		t.Fatalf("runtime hash state survived stop without a process")
 	}
 }
 
@@ -207,7 +307,7 @@ func TestParseVersionLine(t *testing.T) {
 	}
 
 	t.Setenv("XRAY_CORE_VERSION", "v26.3.27")
-	if got := parseVersionLine("ignored"); got != "26.3.27" {
-		t.Fatalf("XRAY_CORE_VERSION override = %q, want 26.3.27", got)
+	if got := parseVersionLine("Xray 26.7.28"); got != "26.7.28" {
+		t.Fatalf("binary output must win over stale XRAY_CORE_VERSION, got %q", got)
 	}
 }

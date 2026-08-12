@@ -193,23 +193,36 @@ func (s *StatsAPI) GetUsersIPList(ctx context.Context) ([]UserIPEntry, error) {
 	}
 
 	results := make([]UserIPEntry, len(userIDs))
-	sem := make(chan struct{}, 50)
-	var wg sync.WaitGroup
-
-	for index, userID := range userIDs {
-		wg.Add(1)
-		go func(i int, id string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			ips, err := s.GetUserIPList(ctx, id, true)
-			if err != nil || len(ips) == 0 {
-				return
-			}
-			results[i] = UserIPEntry{UserID: id, IPs: ips}
-		}(index, userID)
+	workerCount := min(50, len(userIDs))
+	type userJob struct {
+		index  int
+		userID string
 	}
+	jobs := make(chan userJob)
+	var wg sync.WaitGroup
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				ips, err := s.GetUserIPList(ctx, job.userID, true)
+				if err != nil || len(ips) == 0 {
+					continue
+				}
+				results[job.index] = UserIPEntry{UserID: job.userID, IPs: ips}
+			}
+		}()
+	}
+
+enqueue:
+	for index, userID := range userIDs {
+		select {
+		case jobs <- userJob{index: index, userID: userID}:
+		case <-ctx.Done():
+			break enqueue
+		}
+	}
+	close(jobs)
 	wg.Wait()
 
 	filtered := make([]UserIPEntry, 0, len(userIDs))

@@ -15,7 +15,8 @@
 | 文件 | 字段 |
 |------|------|
 | `internal/version/version.go` | `var Version` |
-| `internal/version/contract.version` | upstream contract 版本 |
+| `internal/version/contract.version` | Panel 上报的 upstream Node 版本 |
+| `internal/version/node-contract.version` | upstream wire contract 版本 |
 | `scripts/install-node.sh` | `VERSION=` |
 | `scripts/install-node-alpine.sh` | `VERSION=` |
 | `scripts/upgrade.sh` | `VERSION=` |
@@ -33,10 +34,10 @@ go build -o remnanode-lite ./cmd/remnanode-lite
 
 ```bash
 git add -A
-git commit -m "release: v1.0.0"
-git tag v1.0.0
+git commit -m "release: v1.2.0"
+git tag v1.2.0
 git push origin main
-git push origin v1.0.0
+git push origin v1.2.0
 ```
 
 ## 4. 等待 CI Release
@@ -50,7 +51,7 @@ git push origin v1.0.0
 ## 5. 服务器验证
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v1.0.0/scripts/upgrade.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v1.2.0/scripts/upgrade.sh | sudo bash -s -- --yes
 sudo remnanode-lite doctor
 journalctl -u remnawave-node -n 50 --no-pager
 ```
