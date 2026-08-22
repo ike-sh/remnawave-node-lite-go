@@ -1,11 +1,12 @@
 module remnawave-node-lite-go
 
-go 1.26
+go 1.26.6
 
 require (
 	github.com/klauspost/compress v1.18.7
 	github.com/xtls/xray-core v1.260327.1-0.20260728075948-5ca6f4b7d4dc
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
+	golang.org/x/crypto v0.54.0
 	google.golang.org/grpc v1.82.1
 )
 
@@ -22,7 +23,6 @@ require (
 	github.com/sagernet/sing v0.5.1 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
-	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect

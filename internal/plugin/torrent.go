@@ -28,6 +28,7 @@ type torrentSettings struct {
 	enabled         bool
 	blockDuration   int
 	includeRuleTags []string
+	rulePlacement   float64
 	ignoredIPs      map[string]struct{}
 	ignoredUsers    map[string]struct{}
 	webhookURL      string
@@ -50,6 +51,7 @@ func (s *State) configureTorrentBlocker(rawConfig map[string]any, shared map[str
 	s.torrent.enabled = true
 	s.torrent.blockDuration = duration
 	s.torrent.includeRuleTags = toStringSlice(blocker["includeRuleTags"])
+	s.torrent.rulePlacement, _ = asNumber(blocker["rulePlacement"])
 	s.torrent.webhookURL, _ = blocker["webhookUrl"].(string)
 
 	if ignoreLists, ok := blocker["ignoreLists"].(map[string]any); ok {
@@ -76,6 +78,12 @@ func (s *State) TorrentBlockerIncludeRuleTags() []string {
 	}
 	out := append([]string(nil), s.torrent.includeRuleTags...)
 	return out
+}
+
+func (s *State) TorrentBlockerRulePlacement() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.torrent.rulePlacement
 }
 
 func (s *State) isTorrentIPIgnored(ip string) bool {

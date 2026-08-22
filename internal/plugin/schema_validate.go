@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Validation aligned with @remnawave/node-plugins@0.6.2 (NodePluginSchema).
+// Validation aligned with @remnawave/node-plugins@0.7.3 (NodePluginSchema).
 
 func isPlainIP(value string) bool {
 	return net.ParseIP(value) != nil
@@ -168,6 +168,12 @@ func validateTorrentBlockerSection(raw any) error {
 			return fmt.Errorf("torrentBlocker.webhookUrl must be an absolute URL")
 		}
 	}
+	if placement, ok := section["rulePlacement"]; ok {
+		value, valid := asNumber(placement)
+		if !valid || value < 0 || value > 1000 {
+			return fmt.Errorf("torrentBlocker.rulePlacement must be a number between 0 and 1000")
+		}
+	}
 	return nil
 }
 
@@ -325,6 +331,28 @@ func asInt(value any) (int, bool) {
 		return toInt(int64(v))
 	case int64:
 		return toInt(v)
+	default:
+		return 0, false
+	}
+}
+
+func asNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return 0, false
+		}
+		return typed, true
+	case float32:
+		value := float64(typed)
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, false
+		}
+		return value, true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
 	default:
 		return 0, false
 	}

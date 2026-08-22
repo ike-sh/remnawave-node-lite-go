@@ -22,6 +22,7 @@ var responseShapeTests = map[string]func(t *testing.T){
 	"/node/xray/stop":                       testXrayStopResponseShape,
 	"/node/xray/healthcheck":                testXrayHealthcheckResponseShape,
 	"/node/stats/get-user-online-status":    testGetUserOnlineStatusResponseShape,
+	"/node/stats/get-geocheck":              testGetGeocheckResponseShape,
 	"/node/stats/get-system-stats":          testGetSystemStatsResponseShape,
 	"/node/stats/get-users-stats":           testGetUsersStatsResponseShape,
 	"/node/stats/get-inbound-stats":         testGetInboundStatsResponseShape,
@@ -119,6 +120,15 @@ func testGetUserOnlineStatusResponseShape(t *testing.T) {
 	rec := httptest.NewRecorder()
 	service.HandleGetUserOnlineStatus(rec, req, writeTestJSON)
 	assertJSONPath(t, rec.Body.Bytes(), "response.isOnline")
+}
+
+func testGetGeocheckResponseShape(t *testing.T) {
+	service := statsService(t)
+	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-geocheck", strings.NewReader(`{"ip":"invalid"}`))
+	rec := httptest.NewRecorder()
+	service.HandleGetGeocheck(rec, req, writeTestJSON)
+	assertJSONPath(t, rec.Body.Bytes(), "errorCode")
+	assertJSONPath(t, rec.Body.Bytes(), "message")
 }
 
 func testGetSystemStatsResponseShape(t *testing.T) {

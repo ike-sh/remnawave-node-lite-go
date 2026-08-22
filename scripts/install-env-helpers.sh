@@ -341,6 +341,7 @@ SECRET_KEY=
 # SECRET_KEY_FILE=${SECRET_FILE}
 
 XRAY_BIN=/usr/local/bin/rw-core
+GEOCHECK_BIN=/usr/local/bin/geocheck
 GEO_DIR=/usr/local/share/xray
 LOG_DIR=${LOG_DIR}
 INTERNAL_SOCKET_PATH=/run/remnanode/internal.sock

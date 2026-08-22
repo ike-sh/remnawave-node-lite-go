@@ -3,6 +3,30 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
+## [1.3.0] - 2026-08-22
+
+对齐上游 `@remnawave/node` v3.3.2（wire contract v3.2.3，REST 路由增至 27 条）。
+
+### 重大变更
+
+- **私有 SNI 握手**：按上游算法从 JWT 公钥与节点 CA 派生服务名；仅向 SNI 精确匹配的 TLS 1.3 客户端提供节点证书。旧 Panel/客户端若不会派生 SNI，将无法连接本版 Node。
+- **Secret Key 启动强校验**：启动前检查 CA 有效期与自签名、节点证书链和有效期、节点私钥匹配关系、JWT 公钥编码；损坏或过期凭据不再延迟到首次握手时失败。
+
+### 新增
+
+- **GeoCheck API**：新增 `POST /node/stats/get-geocheck`（A018），支持指定 IP 或网卡，限制单任务并发、45 秒执行时间和 32 MiB 输出；安装/升级脚本部署并校验官方 GeoCheck v0.3.0。
+- **Torrent 规则位置**：支持 `torrentBlocker.rulePlacement`（0–1000），按上游语义将拦截规则插入用户规则序列；在线配置位置变化会停止 core，等待 Panel 重新下发启动。
+- **重复实例提醒**：Linux 使用抽象 Unix socket 探测同机重复 Node 实例；检测到重复时记录警告但保持上游的非阻断行为。
+- `doctor` 增加完整 Secret Key/SNI 与 GeoCheck 可执行文件检查。
+
+### 修复与加固
+
+- GeoCheck 子进程错误保留受限 stderr，超时可靠终止进程，拒绝非 JSON、错误图像元数据及空 SVG 报告。
+- Torrent 规则位置兼容小数输入：与上游一致，非整数位置回退到 API 规则之后的默认位置。
+- 安装脚本对 GeoCheck 发行包执行官方 SHA-256 校验、归档成员检查、执行探测和同目录原子替换。
+- Release 构建最低 Go 补丁版本固定为 1.26.6，避免使用 1.26.5 中可达的标准库安全缺陷。
+- 新增 SNI 固定向量、证书链、GeoCheck 并发/超时/输出上限、规则插入顺序与配置重启回归测试。
+
 ## [1.2.0] - 2026-08-12
 
 对齐上游 `@remnawave/node` v3.1.1（wire contract v2.9.0，REST 路由仍为 26 条）。
@@ -204,6 +228,7 @@
 
 ---
 
+[1.3.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.3.0
 [1.2.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.2.0
 [1.1.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.1.0
 [1.0.0]: https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.0.0

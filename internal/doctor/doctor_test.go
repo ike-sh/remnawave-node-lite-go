@@ -3,6 +3,7 @@ package doctor
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"remnawave-node-lite-go/internal/config"
@@ -19,11 +20,25 @@ func TestRunMissingEnv(t *testing.T) {
 
 func TestCheckSecret(t *testing.T) {
 	t.Parallel()
-	if r := checkSecret(config.Config{SecretKey: "x"}); r[0].level != "OK" {
-		t.Fatalf("expected OK, got %#v", r)
+	if r := checkSecret(config.Config{SecretKey: "x"}); r[0].level != "ERROR" {
+		t.Fatalf("expected malformed Secret Key error, got %#v", r)
 	}
 	if r := checkSecret(config.Config{}); r[0].level != "ERROR" {
 		t.Fatalf("expected ERROR, got %#v", r)
+	}
+}
+
+func TestCheckGeocheckBinary(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("executable permission bits are a Linux deployment property")
+	}
+	path := filepath.Join(t.TempDir(), "geocheck")
+	if err := os.WriteFile(path, []byte("test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := checkGeocheckBinary(path); r[0].level != "OK" {
+		t.Fatalf("expected executable GeoCheck to pass, got %#v", r)
 	}
 }
 

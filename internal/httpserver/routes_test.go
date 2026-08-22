@@ -79,3 +79,23 @@ func TestHandleNodeRoutesUnknownPath(t *testing.T) {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
+
+func TestHandleNodeRoutesGeocheck(t *testing.T) {
+	t.Parallel()
+
+	server := &Server{statsService: stats.NewService(nil, nil, "geocheck")}
+	req := httptest.NewRequest(http.MethodPost, "/node/stats/get-geocheck", strings.NewReader(`{"ip":"invalid"}`))
+	rec := httptest.NewRecorder()
+	server.handleNodeRoutes(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["errorCode"] != "A018" {
+		t.Fatalf("errorCode = %v, want A018", body["errorCode"])
+	}
+}

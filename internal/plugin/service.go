@@ -76,6 +76,7 @@ func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write write
 
 	wasEnabled := s.state.TorrentBlockerEnabled()
 	prevIncludeTags := append([]string(nil), s.state.TorrentBlockerIncludeRuleTags()...)
+	prevRulePlacement := s.state.TorrentBlockerRulePlacement()
 
 	changed, accepted := s.state.UpdateFromSync(req.Plugin)
 	if !accepted {
@@ -85,6 +86,7 @@ func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write write
 
 	nowEnabled := s.state.TorrentBlockerEnabled()
 	nowIncludeTags := s.state.TorrentBlockerIncludeRuleTags()
+	nowRulePlacement := s.state.TorrentBlockerRulePlacement()
 
 	if changed && s.nft.Available() {
 		if err := s.nft.recreateTables(); err != nil {
@@ -103,7 +105,7 @@ func (s *Service) HandleSync(w http.ResponseWriter, r *http.Request, write write
 		}
 	}
 
-	s.applyTorrentRestart(wasEnabled, nowEnabled, prevIncludeTags, nowIncludeTags)
+	s.applyTorrentRestart(wasEnabled, nowEnabled, prevIncludeTags, nowIncludeTags, prevRulePlacement, nowRulePlacement)
 	writeAccepted(write, w, true)
 }
 
@@ -133,7 +135,7 @@ func (s *Service) ResetPlugins() error {
 	return nil
 }
 
-func (s *Service) applyTorrentRestart(wasEnabled, nowEnabled bool, prevIncludeTags, nowIncludeTags []string) {
+func (s *Service) applyTorrentRestart(wasEnabled, nowEnabled bool, prevIncludeTags, nowIncludeTags []string, prevRulePlacement, nowRulePlacement float64) {
 	if s.xray == nil {
 		return
 	}
@@ -148,7 +150,8 @@ func (s *Service) applyTorrentRestart(wasEnabled, nowEnabled bool, prevIncludeTa
 	default:
 		needsRestart := (wasEnabled && !nowEnabled) ||
 			(!wasEnabled && nowEnabled) ||
-			(wasEnabled && nowEnabled && hashIncludeRuleTags(prevIncludeTags) != hashIncludeRuleTags(nowIncludeTags))
+			(wasEnabled && nowEnabled && hashIncludeRuleTags(prevIncludeTags) != hashIncludeRuleTags(nowIncludeTags)) ||
+			(wasEnabled && nowEnabled && prevRulePlacement != nowRulePlacement)
 		if needsRestart {
 			s.xray.StopIfOnline()
 		}

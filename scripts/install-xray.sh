@@ -13,7 +13,7 @@ usage() {
 用法：install-xray.sh [--version v26.7.28] [--upstream XTLS] [--dry-run]
 
 环境变量：
-  XRAY_CORE_VERSION   rw-core 版本，默认 v26.7.28（Node 3.1.1 基线）
+  XRAY_CORE_VERSION   rw-core 版本，默认 v26.7.28（Node 3.3.2 基线）
   UPSTREAM_REPO       上游仓库标识，默认 XTLS
   INSTALL_SCRIPT      安装脚本 URL
   CUSTOM_CORE_URL     自定义 rw-core 下载 URL（对齐官方 Docker entrypoint，设置后跳过官方安装脚本）
@@ -72,7 +72,7 @@ install_custom_core() {
   echo "自定义 rw-core 已安装到 ${target}"
 }
 
-# ASN 前缀数据库（插件 asList 共享列表解析；对齐官方 3.1.1 的 /usr/local/share/asn）。
+# ASN 前缀数据库（插件 asList 共享列表解析；对齐官方 3.3.2 的 /usr/local/share/asn）。
 # 未提供 ASN_DB_URL 时跳过；运行时缺失该文件则 asList 自动降级为空。
 ASN_DB_URL="${ASN_DB_URL:-}"
 ASN_DB_PATH="${ASN_DB_PATH:-/usr/local/share/asn/asn-prefixes.bin}"

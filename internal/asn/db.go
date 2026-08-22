@@ -1,6 +1,6 @@
 // Package asn provides read-only lookups from an ASN→prefixes database file.
 //
-// It mirrors upstream remnawave/node 3.1.1, which resolves plugin `asList`
+// It mirrors upstream remnawave/node 3.3.2, which resolves plugin `asList`
 // shared lists (AS numbers) into IPv4/IPv6 CIDR prefixes via an on-disk LMDB.
 // To keep this node a single CGO-free binary suited to low-memory VPSes, we use
 // a compact, sorted binary format queried with ReadAt + binary search instead of

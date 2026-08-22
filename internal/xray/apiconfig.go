@@ -1,6 +1,8 @@
 package xray
 
 import (
+	"math"
+
 	"remnawave-node-lite-go/internal/netadmin"
 )
 
@@ -13,6 +15,7 @@ const (
 type TorrentBlockerOptions struct {
 	Enabled         bool
 	IncludeRuleTags []string
+	RulePlacement   float64
 	SocketPath      string
 	RESTToken       string
 }
@@ -52,14 +55,12 @@ func generateAPIConfig(input map[string]any, xtlsSocket string, torrent TorrentB
 				"deduplication": 5,
 			},
 		}
-		if len(rules) == 0 {
-			rules = []any{torrentRule}
-		} else {
-			inserted := make([]any, 0, len(rules)+1)
-			inserted = append(inserted, rules[0], torrentRule)
-			inserted = append(inserted, rules[1:]...)
-			rules = inserted
-		}
+		index := resolveTorrentRuleIndex(torrent.RulePlacement, len(rules))
+		inserted := make([]any, 0, len(rules)+1)
+		inserted = append(inserted, rules[:index]...)
+		inserted = append(inserted, torrentRule)
+		inserted = append(inserted, rules[index:]...)
+		rules = inserted
 
 		if len(torrent.IncludeRuleTags) > 0 {
 			tagSet := make(map[string]struct{}, len(torrent.IncludeRuleTags))
@@ -86,6 +87,23 @@ func generateAPIConfig(input map[string]any, xtlsSocket string, torrent TorrentB
 	}
 
 	return result
+}
+
+// resolveTorrentRuleIndex mirrors upstream resolveRuleIndex. Index 0 is the
+// mandatory REMNAWAVE_API rule; rulePlacement counts only Panel/user rules.
+func resolveTorrentRuleIndex(position float64, rulesLength int) int {
+	if rulesLength <= 0 {
+		return 0
+	}
+	if math.IsNaN(position) || math.IsInf(position, 0) || math.Trunc(position) != position || position <= 0 {
+		return 1
+	}
+	userRulesCount := rulesLength - 1
+	requested := int(position)
+	if requested > userRulesCount {
+		requested = userRulesCount
+	}
+	return 1 + requested
 }
 
 func buildWebhookURL(socketPath string) string {

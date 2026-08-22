@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 升级脚本（保留 node.env 与 rw-core）
 set -euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 UNIT="/etc/systemd/system/remnawave-node.service"
@@ -204,6 +204,18 @@ upgrade_xray() {
   fi
 }
 
+install_geocheck() {
+  step "安装/升级 geocheck 0.3.0"
+  local script_dir args=()
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  [ "$DRY_RUN" -eq 1 ] && args+=(--dry-run)
+  if [ -f "${script_dir}/install-geocheck.sh" ]; then
+    bash "${script_dir}/install-geocheck.sh" "${args[@]}"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/install-geocheck.sh" | bash -s -- "${args[@]}"
+  fi
+}
+
 refresh_systemd() {
   if is_alpine; then
     return 0
@@ -307,6 +319,7 @@ main() {
 
   echo "升级前：$(current_version)"
   backup_binary
+  install_geocheck
   download_binary "$arch"
   apply_capabilities
   upgrade_xray

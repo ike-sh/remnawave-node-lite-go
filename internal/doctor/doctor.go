@@ -9,6 +9,7 @@ import (
 
 	"remnawave-node-lite-go/internal/config"
 	"remnawave-node-lite-go/internal/netadmin"
+	"remnawave-node-lite-go/internal/secret"
 	"remnawave-node-lite-go/internal/version"
 )
 
@@ -54,6 +55,7 @@ func Run(args []string) int {
 	} else {
 		results = append(results, checkSecret(cfg)...)
 		results = append(results, checkXrayBinary(cfg.XrayBin)...)
+		results = append(results, checkGeocheckBinary(cfg.GeocheckBin)...)
 		results = append(results, checkGeoFiles(cfg.GeoDir)...)
 		results = append(results, checkASNDatabase(cfg.ASNDBPath)...)
 		results = append(results, checkPersistedStart(cfg.DataDir)...)
@@ -131,15 +133,28 @@ func checkSystemdCapNetAdmin() result {
 }
 
 func checkSecret(cfg config.Config) []result {
-	if strings.TrimSpace(cfg.SecretKey) != "" {
-		return []result{{level: "OK", title: "Secret Key", detail: "已配置"}}
+	if strings.TrimSpace(cfg.SecretKey) == "" {
+		return []result{{
+			level:   "ERROR",
+			title:   "Secret Key",
+			detail:  "未配置（SECRET_KEY 或 SECRET_KEY_FILE 为空）",
+			fixHint: "编辑 /etc/remnanode/secret.key 粘贴 Panel 下发的 Key，然后 systemctl restart remnawave-node",
+		}}
 	}
-	return []result{{
-		level:   "ERROR",
-		title:   "Secret Key",
-		detail:  "未配置（SECRET_KEY 或 SECRET_KEY_FILE 为空）",
-		fixHint: "编辑 /etc/remnanode/secret.key 粘贴 Panel 下发的 Key，然后 systemctl restart remnawave-node",
-	}}
+	payload, err := secret.Parse(cfg.SecretKey)
+	if err != nil {
+		return []result{{
+			level:   "ERROR",
+			title:   "Secret Key",
+			detail:  err.Error(),
+			fixHint: "从 Panel 节点页重新复制完整 Secret Key",
+		}}
+	}
+	sni, err := secret.DeriveSNI(payload.CACertPEM, payload.JWTPublicKey)
+	if err != nil {
+		return []result{{level: "ERROR", title: "Secret Key", detail: err.Error()}}
+	}
+	return []result{{level: "OK", title: "Secret Key", detail: "结构、证书链与密钥匹配有效；SNI=" + sni}}
 }
 
 func checkPersistedStart(dataDir string) []result {
@@ -201,6 +216,30 @@ func checkXrayBinary(bin string) []result {
 	}
 	line := strings.TrimSpace(strings.Split(string(out), "\n")[0])
 	return []result{{level: "OK", title: "rw-core", detail: line}}
+}
+
+func checkGeocheckBinary(bin string) []result {
+	if bin == "" {
+		bin = "/usr/local/bin/geocheck"
+	}
+	info, err := os.Stat(bin)
+	if err != nil {
+		return []result{{
+			level:   "ERROR",
+			title:   "geocheck",
+			detail:  bin + " 不存在",
+			fixHint: "运行 scripts/install-geocheck.sh",
+		}}
+	}
+	if info.Mode()&0o111 == 0 {
+		return []result{{
+			level:   "ERROR",
+			title:   "geocheck",
+			detail:  bin + " 不可执行",
+			fixHint: "sudo chmod +x " + bin,
+		}}
+	}
+	return []result{{level: "OK", title: "geocheck", detail: bin}}
 }
 
 func checkGeoFiles(dir string) []result {

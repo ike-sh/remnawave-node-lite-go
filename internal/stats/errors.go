@@ -19,6 +19,7 @@ var (
 	errFailedInboundsStats  = apiError{Code: "A015", Message: "Failed to get inbounds stats", HTTPStatus: http.StatusInternalServerError}
 	errFailedOutboundsStats = apiError{Code: "A016", Message: "Failed to get outbounds stats", HTTPStatus: http.StatusInternalServerError}
 	errFailedCombinedStats  = apiError{Code: "A017", Message: "Failed to get combined stats", HTTPStatus: http.StatusInternalServerError}
+	errFailedGeocheck       = apiError{Code: "A018", Message: "Failed to get geocheck report", HTTPStatus: http.StatusInternalServerError}
 )
 
 func writeAPIError(write writeJSONFn, w http.ResponseWriter, err apiError) {
@@ -26,5 +27,13 @@ func writeAPIError(write writeJSONFn, w http.ResponseWriter, err apiError) {
 		"timestamp": time.Now().Format(time.RFC3339Nano),
 		"message":   err.Message,
 		"errorCode": err.Code,
+	})
+}
+
+func writeAPIErrorMessage(write writeJSONFn, w http.ResponseWriter, apiErr apiError, message string) {
+	write(w, apiErr.HTTPStatus, map[string]any{
+		"timestamp": time.Now().Format(time.RFC3339Nano),
+		"message":   message,
+		"errorCode": apiErr.Code,
 	})
 }

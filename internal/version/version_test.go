@@ -22,8 +22,8 @@ func TestWireContractBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read node-contract.version: %v", err)
 	}
-	if got := strings.TrimSpace(string(raw)); got != "2.9.0" {
-		t.Fatalf("wire contract baseline = %q, want 2.9.0", got)
+	if got := strings.TrimSpace(string(raw)); got != "3.2.3" {
+		t.Fatalf("wire contract baseline = %q, want 3.2.3", got)
 	}
 }
 

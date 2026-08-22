@@ -35,6 +35,7 @@ type Options struct {
 type TorrentBlockerConfigProvider interface {
 	TorrentBlockerEnabled() bool
 	TorrentBlockerIncludeRuleTags() []string
+	TorrentBlockerRulePlacement() float64
 	PreStartCleanupSockets() (bool, []string)
 }
 
@@ -176,6 +177,7 @@ func (m *Manager) torrentBlockerOptions() TorrentBlockerOptions {
 	if provider != nil {
 		opts.Enabled = provider.TorrentBlockerEnabled()
 		opts.IncludeRuleTags = provider.TorrentBlockerIncludeRuleTags()
+		opts.RulePlacement = provider.TorrentBlockerRulePlacement()
 	}
 	return opts
 }

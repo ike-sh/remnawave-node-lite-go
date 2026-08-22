@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 一键安装脚本
 set -euo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -178,7 +178,7 @@ run_sibling_script() {
 
 show_menu() {
   echo
-  echo "Remnawave Node Lite ${VERSION} (contract 3.1.1)"
+  echo "Remnawave Node Lite ${VERSION} (contract 3.3.2)"
   echo "  1) 安装"
   echo "  2) 升级"
   echo "  3) 卸载"
@@ -406,6 +406,18 @@ install_xray() {
   fi
 }
 
+install_geocheck() {
+  step "安装 geocheck 0.3.0"
+  local script_dir args=()
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  [ "$DRY_RUN" -eq 1 ] && args+=(--dry-run)
+  if [ -f "${script_dir}/install-geocheck.sh" ]; then
+    bash "${script_dir}/install-geocheck.sh" "${args[@]}"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/install-geocheck.sh" | bash -s -- "${args[@]}"
+  fi
+}
+
 setup_directories() {
   step "创建目录"
   run mkdir -p "$ETC_DIR" "$DATA_DIR" "$LOG_DIR"
@@ -542,9 +554,10 @@ do_install() {
 
 	confirm_install
 	setup_directories
-	print_pre_install_panel_hint
+  print_pre_install_panel_hint
   download_binary "$arch"
   install_xray
+  install_geocheck
   install_geo_extra_files
   prompt_node_port
   setup_env_file

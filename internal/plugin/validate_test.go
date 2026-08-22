@@ -31,6 +31,25 @@ func TestValidatePluginConfigAcceptsMinimalConfig(t *testing.T) {
 	}
 }
 
+func TestValidatePluginConfigRulePlacement(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []any{float64(0), float64(1.5), float64(1000)} {
+		cfg := validTorrentBlocker(true)
+		cfg["rulePlacement"] = value
+		if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err != nil {
+			t.Errorf("valid rulePlacement %v rejected: %v", value, err)
+		}
+	}
+	for _, value := range []any{float64(-1), float64(1000.1), "1"} {
+		cfg := validTorrentBlocker(true)
+		cfg["rulePlacement"] = value
+		if err := ValidatePluginConfig(map[string]any{"torrentBlocker": cfg}); err == nil {
+			t.Errorf("invalid rulePlacement %v accepted", value)
+		}
+	}
+}
+
 func TestValidatePluginConfigRequiresTorrentFields(t *testing.T) {
 	t.Parallel()
 	err := ValidatePluginConfig(map[string]any{

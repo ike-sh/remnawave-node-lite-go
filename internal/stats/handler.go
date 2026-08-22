@@ -29,10 +29,19 @@ type ReportsCounter interface {
 type Service struct {
 	provider       Provider
 	reportsCounter ReportsCounter
+	geocheck       *geocheckService
 }
 
-func NewService(provider Provider, reportsCounter ReportsCounter) *Service {
-	return &Service{provider: provider, reportsCounter: reportsCounter}
+func NewService(provider Provider, reportsCounter ReportsCounter, geocheckBin ...string) *Service {
+	bin := defaultGeocheckBin
+	if len(geocheckBin) > 0 && geocheckBin[0] != "" {
+		bin = geocheckBin[0]
+	}
+	return &Service{
+		provider:       provider,
+		reportsCounter: reportsCounter,
+		geocheck:       newGeocheckService(bin),
+	}
 }
 
 type envelope[T any] struct {

@@ -19,6 +19,7 @@ const (
 	defaultDataDir            = "/var/lib/remnanode"
 	defaultInternalSocketPath = "/run/remnanode/internal.sock"
 	defaultASNDBPath          = "/usr/local/share/asn/asn-prefixes.bin"
+	defaultGeocheckBin        = "/usr/local/bin/geocheck"
 )
 
 // ResolveEnvPath returns the first existing env file path, preferring production default.
@@ -42,6 +43,7 @@ type Config struct {
 	InternalSocketPath    string
 	InternalRESTToken     string
 	ASNDBPath             string
+	GeocheckBin           string
 	DisableHashedSetCheck bool
 	LowMemory             bool
 	BodyLimitMB           int
@@ -71,6 +73,7 @@ func Load(dotenvPath string) (Config, error) {
 		"INTERNAL_SOCKET_PATH",
 		"INTERNAL_REST_TOKEN",
 		"ASN_DB_PATH",
+		"GEOCHECK_BIN",
 		"DISABLE_HASHED_SET_CHECK",
 		"LOW_MEMORY",
 		"BODY_LIMIT_MB",
@@ -117,6 +120,7 @@ func Load(dotenvPath string) (Config, error) {
 		InternalSocketPath:    internalSocketPath,
 		InternalRESTToken:     internalRESTToken,
 		ASNDBPath:             optionalString(values, "ASN_DB_PATH", defaultASNDBPath),
+		GeocheckBin:           optionalString(values, "GEOCHECK_BIN", defaultGeocheckBin),
 		DisableHashedSetCheck: optionalBool(values, "DISABLE_HASHED_SET_CHECK", false),
 		LowMemory:             optionalBool(values, "LOW_MEMORY", false),
 		BodyLimitMB:           optionalIntDefault(values, "BODY_LIMIT_MB", 0),

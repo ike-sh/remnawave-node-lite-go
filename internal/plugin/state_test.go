@@ -51,6 +51,25 @@ func TestUpdateFromSyncStoresWhitelist(t *testing.T) {
 	}
 }
 
+func TestUpdateFromSyncStoresTorrentRulePlacement(t *testing.T) {
+	t.Parallel()
+
+	state := plugin.NewState()
+	_, accepted := state.UpdateFromSync(mustSyncPlugin(t, map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{"torrentBlocker": map[string]any{
+			"enabled": true, "blockDuration": 300, "ignoreLists": map[string]any{}, "rulePlacement": 2.5,
+		}},
+	}))
+	if !accepted {
+		t.Fatal("expected accepted sync")
+	}
+	if got := state.TorrentBlockerRulePlacement(); got != 2.5 {
+		t.Fatalf("rule placement = %v, want 2.5", got)
+	}
+}
+
 func TestUpdateFromSyncResolvesSharedWhitelist(t *testing.T) {
 	t.Parallel()
 

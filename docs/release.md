@@ -34,10 +34,10 @@ go build -o remnanode-lite ./cmd/remnanode-lite
 
 ```bash
 git add -A
-git commit -m "release: v1.2.0"
-git tag v1.2.0
+git commit -m "release: v1.3.0"
+git tag v1.3.0
 git push origin main
-git push origin v1.2.0
+git push origin v1.3.0
 ```
 
 ## 4. 等待 CI Release
@@ -51,7 +51,7 @@ git push origin v1.2.0
 ## 5. 服务器验证
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v1.2.0/scripts/upgrade.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v1.3.0/scripts/upgrade.sh | sudo bash -s -- --yes
 sudo remnanode-lite doctor
 journalctl -u remnawave-node -n 50 --no-pager
 ```

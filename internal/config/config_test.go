@@ -27,7 +27,7 @@ func TestLoadDotEnvWithDefaults(t *testing.T) {
 	if cfg.NodePort != 3000 {
 		t.Fatalf("unexpected NODE_PORT: %d", cfg.NodePort)
 	}
-	if cfg.XrayBin != defaultXrayBin || cfg.GeoDir != defaultGeoDir {
+	if cfg.XrayBin != defaultXrayBin || cfg.GeoDir != defaultGeoDir || cfg.GeocheckBin != defaultGeocheckBin {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
 	if cfg.LogDir != defaultLogDir {
@@ -115,5 +115,20 @@ func TestLoadInternalOverrides(t *testing.T) {
 	}
 	if cfg.InternalSocketPath != "/tmp/node.sock" || cfg.InternalRESTToken != "token" || cfg.LogDir != "/tmp/logs" {
 		t.Fatalf("unexpected internal config: %#v", cfg)
+	}
+}
+
+func TestLoadGeocheckOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("NODE_PORT=3000\nSECRET_KEY=abc\nGEOCHECK_BIN=/opt/geocheck\n"), 0o600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.GeocheckBin != "/opt/geocheck" {
+		t.Fatalf("GeocheckBin = %q, want /opt/geocheck", cfg.GeocheckBin)
 	}
 }

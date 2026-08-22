@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -39,7 +40,7 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 	mux := http.NewServeMux()
 	server := &Server{
 		manager:        manager,
-		statsService:   stats.NewService(manager, pluginService),
+		statsService:   stats.NewService(manager, pluginService, cfg.GeocheckBin),
 		handlerService: nodehandler.NewService(manager, dropper),
 		pluginService:  pluginService,
 	}
@@ -92,6 +93,8 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	// stats
 	case r.Method == http.MethodPost && path == "/node/stats/get-user-online-status":
 		s.statsService.HandleGetUserOnlineStatus(w, r, write)
+	case r.Method == http.MethodPost && path == "/node/stats/get-geocheck":
+		s.statsService.HandleGetGeocheck(w, r, write)
 	case r.Method == http.MethodGet && path == "/node/stats/get-system-stats":
 		s.statsService.HandleGetSystemStats(w, write)
 	case r.Method == http.MethodPost && path == "/node/stats/get-users-stats":
@@ -173,13 +176,28 @@ func buildTLSConfig(payload secret.Payload) (*tls.Config, error) {
 	if ok := clientCAs.AppendCertsFromPEM([]byte(payload.CACertPEM)); !ok {
 		return nil, errors.New("append client CA certificate: no certificates found")
 	}
+	expectedSNI, err := secret.DeriveSNI(payload.CACertPEM, payload.JWTPublicKey)
+	if err != nil {
+		return nil, err
+	}
 
-	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
+	config := &tls.Config{
+		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{certificate},
 		ClientCAs:    clientCAs,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
-	}, nil
+	}
+	expected := []byte(expectedSNI)
+	config.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		got := []byte(hello.ServerName)
+		if len(got) != len(expected) || subtle.ConstantTimeCompare(got, expected) != 1 {
+			return nil, errors.New("unknown sni")
+		}
+		// A nil config keeps the active net/http TLS config, including ALPN and
+		// HTTP/2 settings that ListenAndServeTLS may add to its runtime clone.
+		return nil, nil
+	}
+	return config, nil
 }
 
 type envelope[T any] struct {

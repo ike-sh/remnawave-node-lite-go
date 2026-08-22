@@ -222,6 +222,41 @@ func TestHandleSyncIncludeRuleTagsChangeRestartsXray(t *testing.T) {
 	}
 }
 
+func TestHandleSyncRulePlacementChangeRestartsXray(t *testing.T) {
+	t.Parallel()
+
+	state := plugin.NewState()
+	xray := &mockXray{}
+	service := plugin.NewService(state, connections.NewDropper(state.IsWhitelisted), xray)
+	oldConfig := torrentPluginConfigWithPlacement(1)
+	_, _ = state.UpdateFromSync(mustSyncPlugin(t, oldConfig))
+
+	body, err := json.Marshal(map[string]any{"plugin": torrentPluginConfigWithPlacement(2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/node/plugin/sync", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	service.HandleSync(rec, req, func(w http.ResponseWriter, status int, value any) {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(value)
+	})
+
+	if xray.stopIfOnline != 1 {
+		t.Fatalf("StopIfOnline calls = %d, want 1", xray.stopIfOnline)
+	}
+}
+
+func torrentPluginConfigWithPlacement(placement float64) map[string]any {
+	return map[string]any{
+		"uuid": "00000000-0000-4000-8000-000000000001",
+		"name": "test",
+		"config": map[string]any{"torrentBlocker": map[string]any{
+			"enabled": true, "blockDuration": 300, "ignoreLists": map[string]any{}, "rulePlacement": placement,
+		}},
+	}
+}
+
 func TestHandleSyncInvalidConfigStopsXray(t *testing.T) {
 	t.Parallel()
 

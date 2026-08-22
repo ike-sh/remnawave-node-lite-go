@@ -14,6 +14,7 @@ type preStartProvider struct {
 
 func (p preStartProvider) TorrentBlockerEnabled() bool              { return false }
 func (p preStartProvider) TorrentBlockerIncludeRuleTags() []string  { return nil }
+func (p preStartProvider) TorrentBlockerRulePlacement() float64     { return 0 }
 func (p preStartProvider) PreStartCleanupSockets() (bool, []string) { return p.enabled, p.files }
 
 func TestPreStartNeverRemovesRegularFiles(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	"remnawave-node-lite-go/internal/connections"
 	"remnawave-node-lite-go/internal/doctor"
 	"remnawave-node-lite-go/internal/httpserver"
+	"remnawave-node-lite-go/internal/instance"
 	"remnawave-node-lite-go/internal/netadmin"
 	"remnawave-node-lite-go/internal/plugin"
 	"remnawave-node-lite-go/internal/secret"
@@ -58,6 +59,15 @@ func main() {
 	bodylimit.Configure(cfg.LowMemory, cfg.BodyLimitMB)
 	if !netadmin.HasCapNetAdmin() {
 		log.Printf("warning: CAP_NET_ADMIN not available — nftables plugin and ss -K connection drop are disabled (check systemd AmbientCapabilities)")
+	}
+
+	instanceLock, acquired, lockErr := instance.Acquire()
+	if lockErr != nil {
+		log.Printf("warning: duplicate-node guard unavailable: %v", lockErr)
+	} else if !acquired {
+		log.Printf("warning: another Remnawave Node is already running in this network namespace; multiple nodes share host-level state and are unsupported")
+	} else {
+		defer instanceLock.Close()
 	}
 
 	payload, err := secret.Parse(cfg.SecretKey)

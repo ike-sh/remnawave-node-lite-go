@@ -5,12 +5,13 @@ import (
 )
 
 // Official @remnawave/node REST paths (from libs/contract/api/routes.ts).
-// Baseline: upstream v3.1.1 (2026-08-10) — contract-sync CI tracks the reported tag.
+// Baseline: upstream v3.3.2 (2026-08-20) — contract-sync CI tracks the reported tag.
 var officialRoutes = []string{
 	"/node/xray/start",
 	"/node/xray/stop",
 	"/node/xray/healthcheck",
 	"/node/stats/get-user-online-status",
+	"/node/stats/get-geocheck",
 	"/node/stats/get-users-stats",
 	"/node/stats/get-system-stats",
 	"/node/stats/get-inbound-stats",
@@ -41,6 +42,7 @@ var liteGoImplemented = map[string]bool{
 	"/node/xray/stop":                       true,
 	"/node/xray/healthcheck":                true,
 	"/node/stats/get-user-online-status":    true,
+	"/node/stats/get-geocheck":              true,
 	"/node/stats/get-users-stats":           true,
 	"/node/stats/get-system-stats":          true,
 	"/node/stats/get-inbound-stats":         true,
