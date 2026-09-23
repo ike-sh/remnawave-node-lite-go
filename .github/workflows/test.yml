@@ -2,7 +2,7 @@ name: test
 
 on:
   push:
-    branches: [main]
+    branches: [main, release/v1.4.0-rc]
   pull_request:
     branches: [main]
 
@@ -26,4 +26,21 @@ jobs:
         run: go vet ./...
 
       - name: go build
-        run: go build -o /dev/null ./cmd/remnanode-lite
+        run: |
+          go build -o /dev/null ./cmd/remnanode-lite
+          go build -o /dev/null ./cmd/asn-builder
+
+      - name: install and upgrade env preservation
+        run: bash scripts/test-install-env-helpers.sh
+
+      - name: isolated native socket destroy integration
+        shell: bash
+        run: |
+          CGO_ENABLED=0 go test -c -o "${RUNNER_TEMP}/netadmin.test" ./internal/netadmin
+          docker run --rm --cap-add NET_ADMIN \
+            -v "${RUNNER_TEMP}:/audit:ro" debian:bookworm-slim sh -c '
+              apt-get update -qq &&
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iproute2 libcap2-bin >/dev/null &&
+              uname -a && ss -V && id && capsh --print &&
+              REMNANODE_SOCKET_INTEGRATION=1 /audit/netadmin.test -test.run=TestKillSocketsByIP -test.v
+            '

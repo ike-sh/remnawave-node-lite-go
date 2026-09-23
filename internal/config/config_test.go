@@ -132,3 +132,51 @@ func TestLoadGeocheckOverride(t *testing.T) {
 		t.Fatalf("GeocheckBin = %q, want /opt/geocheck", cfg.GeocheckBin)
 	}
 }
+
+func TestSNIAndNFTablesOfficialBooleanDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name, extra                     string
+		wantSNI, wantLogging, wantReply bool
+	}{
+		{"old-v1.3-env", "", false, true, false},
+		{"explicit-false", "SNI_VERIFICATION=false\n", false, true, false},
+		{"explicit-true", "SNI_VERIFICATION=true\n", true, true, false},
+		{"nft-options", "NFTABLES_LOGGING=false\nNFTABLES_ACCEPT_REPLY_TRAFFIC=true\n", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range []string{"SNI_VERIFICATION", "NFTABLES_LOGGING", "NFTABLES_ACCEPT_REPLY_TRAFFIC"} {
+				t.Setenv(key, "")
+			}
+			path := filepath.Join(t.TempDir(), "node.env")
+			original := "NODE_PORT=4321\nSECRET_KEY=preserved-key\nCUSTOM_USER_VAR=keep-me\n" + tc.extra
+			if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.SNIVerification != tc.wantSNI || cfg.NFTablesLogging != tc.wantLogging || cfg.NFTablesAcceptReplyTraffic != tc.wantReply {
+				t.Fatalf("unexpected flags: %#v", cfg)
+			}
+			if cfg.NodePort != 4321 || cfg.SecretKey != "preserved-key" {
+				t.Fatalf("existing settings lost: %#v", cfg)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != original {
+				t.Fatal("loading changed node.env")
+			}
+		})
+	}
+}
+
+func TestSNIRejectsInvalidBoolean(t *testing.T) {
+	t.Setenv("SNI_VERIFICATION", "")
+	path := filepath.Join(t.TempDir(), "node.env")
+	if err := os.WriteFile(path, []byte("NODE_PORT=3000\nSECRET_KEY=abc\nSNI_VERIFICATION=yes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("official boolean schema must reject yes")
+	}
+}

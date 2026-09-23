@@ -9,7 +9,7 @@ on:
       upstream_ref:
         description: "remnawave/node git ref (tag/branch)"
         required: false
-        default: "3.3.2"
+        default: "3.4.1"
 
 jobs:
   compare-routes:
@@ -24,6 +24,13 @@ jobs:
             ref=$(tr -d ' \n\r' < internal/version/contract.version)
           fi
           git clone --depth 1 --branch "$ref" https://github.com/remnawave/node.git /tmp/remnawave-node
+
+      - name: Verify pinned upstream source
+        run: |
+          test "$(git -C /tmp/remnawave-node rev-parse HEAD)" = "44912631321664dbd5822e9bf8d96766ccff7c93" || {
+            echo "::error::upstream tag source changed; audit all DTO/schema and routes before updating the pin"
+            exit 1
+          }
 
       - name: Report upstream version
         id: official
@@ -45,29 +52,50 @@ jobs:
             echo "::error::wire contract baseline ($local_wire_ver) != upstream node-contract ($wire_ver)"
             exit 1
           fi
-          python3 scripts/extract-contract-routes.py /tmp/remnawave-node > /tmp/official-routes.txt
+          python3 scripts/extract-contract-methods.py official /tmp/remnawave-node > /tmp/official-routes.txt
           echo "count=$(wc -l < /tmp/official-routes.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          test "$(wc -l < /tmp/official-routes.txt | tr -d ' ')" = "25" || {
+            echo "::error::official REST route count changed"
+            exit 1
+          }
 
       - name: Extract lite-go implemented routes
         run: |
-          grep -E '^\s*"/node/' internal/contract/routes_test.go \
-            | sed 's/.*"\(\/[^"]*\)".*/\1/' \
-            | sort -u > /tmp/lite-routes.txt
+          python3 scripts/extract-contract-methods.py local . > /tmp/lite-routes.txt
 
       - name: Diff routes
         run: |
-          echo "=== Official only (missing in lite-go) ==="
-          comm -23 /tmp/official-routes.txt /tmp/lite-routes.txt || true
-          echo ""
-          echo "=== Lite-go only (not in official contract) ==="
-          comm -13 /tmp/official-routes.txt /tmp/lite-routes.txt || true
-          echo ""
-          missing=$(comm -23 /tmp/official-routes.txt /tmp/lite-routes.txt | wc -l | tr -d ' ')
-          if [ "$missing" != "0" ]; then
-            echo "::error::Found $missing official route(s) not covered in lite-go contract test"
+          diff -u internal/contract/routes.snapshot /tmp/official-routes.txt
+          diff -u internal/contract/routes.snapshot /tmp/lite-routes.txt
+          echo "All 25 official method/path pairs match the pinned snapshot and Go router."
+
+      - name: Detect newer tagged contract drift
+        if: github.event_name == 'schedule'
+        run: |
+          latest_ref=$(git ls-remote --tags --refs https://github.com/remnawave/node.git \
+            | awk -F/ '/refs\/tags\/[0-9]+\.[0-9]+\.[0-9]+$/ { print $3 }' \
+            | sort -V | tail -n 1)
+          test -n "$latest_ref" || { echo "::error::no official semver tag found"; exit 1; }
+          echo "Latest official tag: $latest_ref"
+          if [ "$latest_ref" = "3.4.1" ]; then exit 0; fi
+          git clone --depth 1 --branch "$latest_ref" https://github.com/remnawave/node.git /tmp/remnawave-node-latest
+          python3 scripts/extract-contract-methods.py official /tmp/remnawave-node-latest > /tmp/latest-routes.txt
+          diff -u internal/contract/routes.snapshot /tmp/latest-routes.txt || {
+            echo "::error::new official tag changes REST method/path inventory; audit and sync required"
             exit 1
-          fi
-          echo "All ${{ steps.official.outputs.count }} official routes are covered."
+          }
+          pinned_schema=$(git -C /tmp/remnawave-node rev-parse HEAD:libs/contract/commands)
+          latest_schema=$(git -C /tmp/remnawave-node-latest rev-parse HEAD:libs/contract/commands)
+          test "$pinned_schema" = "$latest_schema" || {
+            echo "::error::new official tag changes command/DTO schemas; audit and sync required"
+            exit 1
+          }
+          pinned_config=$(git -C /tmp/remnawave-node rev-parse HEAD:src/common/config/app-config/config.schema.ts)
+          latest_config=$(git -C /tmp/remnawave-node-latest rev-parse HEAD:src/common/config/app-config/config.schema.ts)
+          test "$pinned_config" = "$latest_config" || {
+            echo "::error::new official tag changes runtime config schema; audit and sync required"
+            exit 1
+          }
 
       - uses: actions/setup-go@v5
         with:

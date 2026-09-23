@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"remnawave-node-lite-go/internal/connections"
@@ -22,16 +23,19 @@ type Provider interface {
 	HandlerAddShadowsocksUser(ctx context.Context, tag, username, password string, cipherType int, ivCheck bool, level uint32) xtls.HandlerResult
 	HandlerAddShadowsocks2022User(ctx context.Context, tag, username, key string, level uint32) xtls.HandlerResult
 	HandlerAddHysteriaUser(ctx context.Context, tag, username, auth string, level uint32) xtls.HandlerResult
-	HandlerGetInboundUsers(ctx context.Context, tag string) ([]xtls.InboundUser, xtls.HandlerResult)
-	HandlerGetInboundUsersCount(ctx context.Context, tag string) (int64, xtls.HandlerResult)
 }
 
 type Service struct {
 	provider Provider
-	dropper  *connections.Dropper
+	dropper  connectionDropper
 }
 
-func NewService(provider Provider, dropper *connections.Dropper) *Service {
+type connectionDropper interface {
+	DropIPs([]string) bool
+	DropUsers(context.Context, connections.IPListProvider, []string) bool
+}
+
+func NewService(provider Provider, dropper connectionDropper) *Service {
 	return &Service{provider: provider, dropper: dropper}
 }
 
@@ -68,11 +72,18 @@ func (s *Service) HandleAddUser(w http.ResponseWriter, r *http.Request, write wr
 	}
 
 	username := req.Data[0].Username
+	var userIPs []string
+	if req.HashData.PrevVlessUUID != nil && *req.HashData.PrevVlessUUID != "" {
+		userIPs = collectUserIPs(r.Context(), s.provider, username)
+	}
 	if username != "" {
 		for _, tag := range s.provider.InboundTags() {
 			s.provider.HandlerRemoveUser(r.Context(), tag, username)
 			s.provider.RemoveUserFromInboundHash(tag, hashUUID)
 		}
+	}
+	if len(userIPs) > 0 {
+		s.dropIPs(userIPs)
 	}
 
 	results := make([]xtls.HandlerResult, 0, len(req.Data))
@@ -169,65 +180,6 @@ func (s *Service) HandleRemoveUsers(w http.ResponseWriter, r *http.Request, writ
 	}
 
 	write(w, http.StatusOK, envelope[genericResponse]{Response: aggregateResults(results)})
-}
-
-func (s *Service) HandleGetInboundUsersCount(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	var req tagRequest
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
-	}
-
-	if s.provider == nil || req.Tag == "" {
-		write(w, http.StatusOK, envelope[struct {
-			Count int64 `json:"count"`
-		}]{Response: struct {
-			Count int64 `json:"count"`
-		}{Count: 0}})
-		return
-	}
-	count, result := s.provider.HandlerGetInboundUsersCount(r.Context(), req.Tag)
-	if !result.OK {
-		writeHandlerAPIError(write, w, errFailedInboundUsers, handlerErrorMessage(result.Message, errFailedInboundUsers.Message))
-		return
-	}
-
-	write(w, http.StatusOK, envelope[struct {
-		Count int64 `json:"count"`
-	}]{Response: struct {
-		Count int64 `json:"count"`
-	}{Count: count}})
-}
-
-func (s *Service) HandleGetInboundUsers(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
-	var req tagRequest
-	if !decodeBody(r, &req) {
-		writeError(write, w, "invalid JSON body")
-		return
-	}
-
-	if s.provider == nil || req.Tag == "" {
-		write(w, http.StatusOK, envelope[struct {
-			Users []xtls.InboundUser `json:"users"`
-		}]{Response: struct {
-			Users []xtls.InboundUser `json:"users"`
-		}{Users: []xtls.InboundUser{}}})
-		return
-	}
-	users, result := s.provider.HandlerGetInboundUsers(r.Context(), req.Tag)
-	if !result.OK {
-		writeHandlerAPIError(write, w, errFailedInboundUsers, handlerErrorMessage(result.Message, errFailedInboundUsers.Message))
-		return
-	}
-	if users == nil {
-		users = make([]xtls.InboundUser, 0)
-	}
-
-	write(w, http.StatusOK, envelope[struct {
-		Users []xtls.InboundUser `json:"users"`
-	}]{Response: struct {
-		Users []xtls.InboundUser `json:"users"`
-	}{Users: users}})
 }
 
 func (s *Service) HandleDropUsersConnections(w http.ResponseWriter, r *http.Request, write writeJSONFn) {
@@ -373,8 +325,8 @@ func writeError(write writeJSONFn, w http.ResponseWriter, message string) {
 }
 
 func recoverHandler(write writeJSONFn, w http.ResponseWriter) {
-	if recover() != nil {
-		writeHandlerAPIError(write, w, errInternalServer, errInternalServer.Message)
+	if panicValue := recover(); panicValue != nil {
+		writeHandlerAPIError(write, w, errInternalServer, fmt.Sprint(panicValue))
 	}
 }
 
@@ -390,10 +342,6 @@ func stringPtr(value string) *string {
 		return nil
 	}
 	return &value
-}
-
-type tagRequest struct {
-	Tag string `json:"tag"`
 }
 
 type addUserRequest struct {

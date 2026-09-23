@@ -31,8 +31,10 @@ type Server struct {
 	pluginService  *plugin.Service
 }
 
+type requestValidatedKey struct{}
+
 func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator, manager *xray.Manager, pluginService *plugin.Service, dropper *connections.Dropper) (*Server, error) {
-	tlsConfig, err := buildTLSConfig(payload)
+	tlsConfig, err := buildTLSConfig(payload, cfg.SNIVerification)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +47,14 @@ func New(cfg config.Config, payload secret.Payload, validator *auth.JWTValidator
 		pluginService:  pluginService,
 	}
 
-	protected := validator.Middleware(bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(http.HandlerFunc(server.handleNodeRoutes))))
+	jwtProtected := validator.Middleware(http.HandlerFunc(server.handleNodeRoutes))
+	parsed := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validatePostRequest(w, r) {
+			return
+		}
+		jwtProtected.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestValidatedKey{}, true)))
+	})
+	protected := bodylimit.DecompressMiddleware(bodylimit.LimitMiddleware(parsed))
 	mux.Handle("/node/", protected)
 
 	server.httpServer = &http.Server{
@@ -74,17 +83,29 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
+	if validated, _ := r.Context().Value(requestValidatedKey{}).(bool); !validated {
+		if !validatePostRequest(w, r) {
+			return
+		}
+	}
 	path := r.URL.Path
-	write := writeJSON
+	write := func(w http.ResponseWriter, status int, value any) {
+		if r.Method == http.MethodPost && status == http.StatusOK {
+			status = http.StatusCreated
+		}
+		if body, ok := value.(map[string]any); ok {
+			if _, coded := body["errorCode"]; coded {
+				body["path"] = r.URL.RequestURI()
+			}
+		}
+		writeJSON(w, status, value)
+	}
 
 	switch {
 	// xray
 	case r.Method == http.MethodGet && path == "/node/xray/healthcheck":
 		writeJSON(w, http.StatusOK, envelope[xray.HealthResponse]{Response: s.manager.Health()})
-	case (r.Method == http.MethodPost || r.Method == http.MethodGet) && path == "/node/xray/stop":
-		if r.Method == http.MethodGet {
-			slog.Warn("deprecated HTTP method for /node/xray/stop; use POST")
-		}
+	case r.Method == http.MethodGet && path == "/node/xray/stop":
 		s.pluginService.ResetPlugins()
 		writeJSON(w, http.StatusOK, envelope[xray.StopResponse]{Response: s.manager.Stop(true)})
 	case r.Method == http.MethodPost && path == "/node/xray/start":
@@ -119,10 +140,6 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handlerService.HandleAddUser(w, r, write)
 	case r.Method == http.MethodPost && path == "/node/handler/remove-user":
 		s.handlerService.HandleRemoveUser(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/handler/get-inbound-users-count":
-		s.handlerService.HandleGetInboundUsersCount(w, r, write)
-	case r.Method == http.MethodPost && path == "/node/handler/get-inbound-users":
-		s.handlerService.HandleGetInboundUsers(w, r, write)
 	case r.Method == http.MethodPost && path == "/node/handler/add-users":
 		s.handlerService.HandleAddUsers(w, r, write)
 	case r.Method == http.MethodPost && path == "/node/handler/remove-users":
@@ -145,7 +162,8 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 		s.pluginService.HandleRecreateTables(w, r, write)
 
 	default:
-		http.NotFound(w, r)
+		// Official NotFoundExceptionFilter destroys the socket for unknown routes.
+		panic(http.ErrAbortHandler)
 	}
 }
 
@@ -163,10 +181,10 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, envelope[xray.StartResponse]{Response: s.manager.Start(r.Context(), request)})
+	writeJSON(w, http.StatusCreated, envelope[xray.StartResponse]{Response: s.manager.Start(r.Context(), request)})
 }
 
-func buildTLSConfig(payload secret.Payload) (*tls.Config, error) {
+func buildTLSConfig(payload secret.Payload, sniVerification bool) (*tls.Config, error) {
 	certificate, err := tls.X509KeyPair([]byte(payload.NodeCertPEM), []byte(payload.NodeKeyPEM))
 	if err != nil {
 		return nil, fmt.Errorf("load node TLS certificate: %w", err)
@@ -176,16 +194,18 @@ func buildTLSConfig(payload secret.Payload) (*tls.Config, error) {
 	if ok := clientCAs.AppendCertsFromPEM([]byte(payload.CACertPEM)); !ok {
 		return nil, errors.New("append client CA certificate: no certificates found")
 	}
-	expectedSNI, err := secret.DeriveSNI(payload.CACertPEM, payload.JWTPublicKey)
-	if err != nil {
-		return nil, err
-	}
-
 	config := &tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{certificate},
 		ClientCAs:    clientCAs,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
+	}
+	if !sniVerification {
+		return config, nil
+	}
+	expectedSNI, err := secret.DeriveSNI(payload.CACertPEM, payload.JWTPublicKey)
+	if err != nil {
+		return nil, err
 	}
 	expected := []byte(expectedSNI)
 	config.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
@@ -205,7 +225,7 @@ type envelope[T any] struct {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		slog.Warn("failed to write JSON response", "error", err)
@@ -214,7 +234,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{
-		"timestamp": time.Now().Format(time.RFC3339Nano),
+		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		"message":   message,
 	})
 }

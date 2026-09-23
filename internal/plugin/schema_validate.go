@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Validation aligned with @remnawave/node-plugins@0.7.3 (NodePluginSchema).
+// Validation aligned with @remnawave/node-plugins@0.8.2 (NodePluginSchema).
 
 func isPlainIP(value string) bool {
 	return net.ParseIP(value) != nil

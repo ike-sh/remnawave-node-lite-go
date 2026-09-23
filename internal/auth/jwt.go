@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -37,7 +38,9 @@ type JWTValidator struct {
 }
 
 func NewJWTValidator(publicKeyPEM string) (*JWTValidator, error) {
-	return NewJWTValidatorWithClaims(publicKeyPEM, DefaultClaimExpectations())
+	// The official passport-jwt strategy verifies RS256 and time claims but
+	// does not configure issuer, audience or subject restrictions.
+	return NewJWTValidatorWithClaims(publicKeyPEM, ClaimExpectations{})
 }
 
 func NewJWTValidatorWithClaims(publicKeyPEM string, claims ClaimExpectations) (*JWTValidator, error) {
@@ -55,8 +58,10 @@ func NewJWTValidatorWithClaims(publicKeyPEM string, claims ClaimExpectations) (*
 func (v *JWTValidator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := v.ValidateBearer(r.Header.Get("Authorization")); err != nil {
-			writeUnauthorized(w)
-			return
+			slog.Warn("request dropped: invalid JWT", "path", r.URL.Path, "remote", r.RemoteAddr, "error", err)
+			// Upstream v3.4.1 destroys the socket for unauthorized requests.
+			// net/http closes the connection (or HTTP/2 stream) for ErrAbortHandler.
+			panic(http.ErrAbortHandler)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -109,17 +114,17 @@ func (v *JWTValidator) Validate(token string) error {
 }
 
 func (v *JWTValidator) validateIdentityClaims(claims map[string]any) error {
-	if iss, ok := claims["iss"]; ok {
+	if iss, ok := claims["iss"]; ok && v.claims.Issuer != "" {
 		if !claimStringEquals(iss, v.claims.Issuer) {
 			return fmt.Errorf("JWT iss claim mismatch")
 		}
 	}
-	if aud, ok := claims["aud"]; ok {
+	if aud, ok := claims["aud"]; ok && v.claims.Audience != "" {
 		if !audienceContains(aud, v.claims.Audience) {
 			return fmt.Errorf("JWT aud claim mismatch")
 		}
 	}
-	if sub, ok := claims["sub"]; ok {
+	if sub, ok := claims["sub"]; ok && v.claims.Subject != "" {
 		if !claimStringEquals(sub, v.claims.Subject) {
 			return fmt.Errorf("JWT sub claim mismatch")
 		}
@@ -214,10 +219,4 @@ func parseRSAPublicKey(publicKeyPEM string) (*rsa.PublicKey, error) {
 	}
 
 	return nil, errors.New("unsupported JWT public key PEM")
-}
-
-func writeUnauthorized(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte(`{"message":"Unauthorized","errorCode":"A003"}`))
 }

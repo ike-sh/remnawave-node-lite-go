@@ -5,7 +5,6 @@ package plugin
 import (
 	"fmt"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"remnawave-node-lite-go/internal/netadmin"
@@ -13,12 +12,21 @@ import (
 
 type nftManager struct {
 	available bool
+	options   NFTOptions
 }
 
-func newNFTManager() *nftManager {
-	manager := &nftManager{available: netadmin.HasCapNetAdmin()}
+func newNFTManager(options ...NFTOptions) *nftManager {
+	opts := defaultNFTOptions()
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	manager := &nftManager{available: netadmin.HasCapNetAdmin(), options: opts}
 	if manager.available {
-		_ = manager.recreateTables()
+		if _, err := exec.LookPath("nft"); err != nil {
+			manager.available = false
+		} else if err := manager.recreateTables(); err != nil {
+			manager.available = false
+		}
 	}
 	return manager
 }
@@ -31,75 +39,14 @@ func (m *nftManager) recreateTables() error {
 	if !m.available {
 		return fmt.Errorf("nftables unavailable")
 	}
-	script := fmt.Sprintf(`
-add table ip %s
-add table ip6 %s
-delete table ip %s
-delete table ip6 %s
-table ip %s {
-	set %s { type ipv4_addr; flags timeout; }
-	set %s { type ipv4_addr; flags interval; }
-	set %s { type ipv4_addr; flags interval; }
-	set %s { type inet_service; }
-
-	chain input {
-		type filter hook input priority -10; policy accept;
-		ip saddr @%s drop
-		ip saddr @%s drop
-	}
-
-	chain forward {
-		type filter hook forward priority -10; policy accept;
-		ip saddr @%s drop
-		ip saddr @%s drop
-	}
-
-	chain output {
-		type filter hook output priority -10; policy accept;
-		ip daddr @%s drop
-		tcp dport @%s drop
-		udp dport @%s drop
-	}
+	return runNFTScript(buildNFTScript(m.options))
 }
 
-table ip6 %s {
-	set %s { type ipv6_addr; flags timeout; }
-	set %s { type ipv6_addr; flags interval; }
-	set %s { type ipv6_addr; flags interval; }
-	set %s { type inet_service; }
-
-	chain input {
-		type filter hook input priority -10; policy accept;
-		ip6 saddr @%s drop
-		ip6 saddr @%s drop
+func (m *nftManager) deleteTables() error {
+	if !m.available {
+		return nil
 	}
-
-	chain forward {
-		type filter hook forward priority -10; policy accept;
-		ip6 saddr @%s drop
-		ip6 saddr @%s drop
-	}
-
-	chain output {
-		type filter hook output priority -10; policy accept;
-		ip6 daddr @%s drop
-		tcp dport @%s drop
-		udp dport @%s drop
-	}
-}
-`, tableName, tableNameV6,
-		tableName, tableNameV6,
-		tableName,
-		torrentBlockerSet, ingressFilterIPSet, egressFilterIPSet, egressFilterPortSet,
-		ingressFilterIPSet, torrentBlockerSet,
-		ingressFilterIPSet, torrentBlockerSet,
-		egressFilterIPSet, egressFilterPortSet, egressFilterPortSet,
-		tableNameV6,
-		torrentBlockerSetV6, ingressFilterIPSetV6, egressFilterIPSetV6, egressFilterPortSetV6,
-		ingressFilterIPSetV6, torrentBlockerSetV6,
-		ingressFilterIPSetV6, torrentBlockerSetV6,
-		egressFilterIPSetV6, egressFilterPortSetV6, egressFilterPortSetV6)
-	return runNFTScript(script)
+	return runNFTScript(fmt.Sprintf("delete table ip %s\ndelete table ip6 %s", tableName, tableNameV6))
 }
 
 func (m *nftManager) blockIP(ip string, timeoutSeconds int) error {
@@ -126,8 +73,25 @@ func (m *nftManager) unblockIP(ip string) error {
 	if !ok {
 		return fmt.Errorf("invalid ip: %s", ip)
 	}
-	script := fmt.Sprintf("delete element %s %s %s { %s }", tableFamily(table), table, set, ip)
-	return runNFTScript(script)
+	if err := deleteNFTElement(table, set, ip); err != nil {
+		return err
+	}
+	_, ingressSet, _ := ipTableAndIngressSet(ip)
+	return deleteNFTElement(table, ingressSet, ip)
+}
+
+// The upstream removeAddresses operation ignores absent elements. Keep table
+// and capability failures visible by checking that the target set still exists.
+func deleteNFTElement(table, set, ip string) error {
+	family := tableFamily(table)
+	script := fmt.Sprintf("delete element %s %s %s { %s }", family, table, set, ip)
+	err := runNFTScript(script)
+	if err != nil && (strings.Contains(err.Error(), "No such file or directory") || strings.Contains(err.Error(), "element does not exist")) {
+		if listErr := exec.Command("nft", "list", "set", family, table, set).Run(); listErr == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 func (m *nftManager) syncIngressFilter(ips []string) error {
@@ -205,16 +169,12 @@ func formatNFTElement(ip string, timeoutSeconds int) string {
 	return ip
 }
 
-func formatPortElements(ports []int) string {
-	items := make([]string, 0, len(ports))
-	for _, port := range ports {
-		items = append(items, strconv.Itoa(port))
-	}
-	return strings.Join(items, ", ")
-}
-
 func runNFTScript(script string) error {
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(strings.TrimSpace(script))
-	return cmd.Run()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("nft -f -: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }

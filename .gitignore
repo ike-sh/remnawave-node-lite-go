@@ -25,6 +25,7 @@ coverage.out
 
 # Node (hash reference vectors only — not used at runtime)
 node_modules/
+__pycache__/
 
 # IDE / OS
 .vscode/

@@ -20,3 +20,14 @@ func ipTableAndTorrentSet(ip string) (table, set string, ok bool) {
 	}
 	return tableNameV6, torrentBlockerSetV6, true
 }
+
+func ipTableAndIngressSet(ip string) (table, set string, ok bool) {
+	table, _, ok = ipTableAndTorrentSet(ip)
+	if !ok {
+		return "", "", false
+	}
+	if table == tableNameV6 {
+		return table, ingressFilterIPSetV6, true
+	}
+	return table, ingressFilterIPSet, true
+}

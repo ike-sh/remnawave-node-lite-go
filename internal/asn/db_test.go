@@ -65,3 +65,16 @@ func TestOpenMissingFile(t *testing.T) {
 		t.Fatal("expected error opening a missing database")
 	}
 }
+
+func TestOpenRejectsCorruptIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.bin")
+	header := make([]byte, headerLen)
+	copy(header[:8], magic)
+	header[8] = 1 // claims one entry, but the index is absent
+	if err := os.WriteFile(path, header, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err == nil {
+		t.Fatal("truncated index accepted")
+	}
+}

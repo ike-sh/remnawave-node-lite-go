@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 卸载脚本（systemd / Alpine OpenRC）
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 PREFIX="/usr/local/bin"
 BIN_NAME="remnanode-lite"
 RUN_WRAPPER="${PREFIX}/remnawave-node-run"
@@ -226,7 +226,7 @@ print_plan() {
   echo "  • 停止并移除服务（$(detect_install_type)）"
   echo "  • 删除二进制：${PREFIX}/${BIN_NAME}"
   echo "  • 删除 geocheck：${GEOCHECK_BIN}"
-  echo "  • 删除辅助命令：xlogs, xerrors, ${RUN_WRAPPER}"
+  echo "  • 删除辅助命令：xlogs, xerrors, asn-builder, ${RUN_WRAPPER}"
   [ "$PURGE_CONFIG" -eq 1 ] && echo "  • 删除配置：${ETC_DIR}"
   [ "$PURGE_LOGS" -eq 1 ] && echo "  • 删除日志：${LOG_DIR}"
   [ "$PURGE_DATA" -eq 1 ] && echo "  • 删除数据：${DATA_DIR}"
@@ -277,6 +277,7 @@ remove_service_files() {
 remove_binaries() {
   step "删除二进制与辅助命令"
   run rm -f "${PREFIX}/${BIN_NAME}"
+  run rm -f "${PREFIX}/asn-builder"
   run rm -f "$GEOCHECK_BIN"
   run rm -f "${RUN_WRAPPER}"
   run rm -f "${PREFIX}/xlogs" "${PREFIX}/xerrors"

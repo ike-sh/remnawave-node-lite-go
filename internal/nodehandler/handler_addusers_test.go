@@ -18,6 +18,51 @@ type hashTrackingProvider struct {
 	hashAdds []string
 }
 
+type previousUserProvider struct {
+	stubProvider
+	lookups int
+}
+
+func (p *previousUserProvider) GetUserIPList(context.Context, string, bool) ([]xtls.IPEntry, error) {
+	p.lookups++
+	return []xtls.IPEntry{{IP: "192.0.2.1"}}, nil
+}
+
+type recordingDropper struct{ ips []string }
+
+func (d *recordingDropper) DropIPs(ips []string) bool { d.ips = append(d.ips, ips...); return true }
+func (d *recordingDropper) DropUsers(context.Context, connections.IPListProvider, []string) bool {
+	return true
+}
+
+func TestAddUserDropsOldConnectionsOnlyForPreviousUUID(t *testing.T) {
+	for _, tc := range []struct {
+		name, previous string
+		wantLookup     int
+	}{
+		{"replacement", `,"prevVlessUuid":"old-uuid"`, 1},
+		{"new-user", "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &previousUserProvider{}
+			dropper := &recordingDropper{}
+			service := nodehandler.NewService(provider, dropper)
+			body := `{"data":[{"type":"vless","tag":"in-1","username":"u1","uuid":"new","flow":""}],"hashData":{"vlessUuid":"new-uuid"` + tc.previous + `}}`
+			rec := httptest.NewRecorder()
+			service.HandleAddUser(rec, httptest.NewRequest(http.MethodPost, "/node/handler/add-user", strings.NewReader(body)), writeJSON)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d", rec.Code)
+			}
+			if provider.lookups != tc.wantLookup {
+				t.Fatalf("lookups = %d, want %d", provider.lookups, tc.wantLookup)
+			}
+			if len(dropper.ips) != tc.wantLookup {
+				t.Fatalf("dropped = %v", dropper.ips)
+			}
+		})
+	}
+}
+
 func (p *hashTrackingProvider) AddUserToInboundHash(tag, uuid string) {
 	p.hashAdds = append(p.hashAdds, tag+":"+uuid)
 }

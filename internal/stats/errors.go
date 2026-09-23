@@ -24,7 +24,7 @@ var (
 
 func writeAPIError(write writeJSONFn, w http.ResponseWriter, err apiError) {
 	write(w, err.HTTPStatus, map[string]any{
-		"timestamp": time.Now().Format(time.RFC3339Nano),
+		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		"message":   err.Message,
 		"errorCode": err.Code,
 	})
@@ -32,7 +32,7 @@ func writeAPIError(write writeJSONFn, w http.ResponseWriter, err apiError) {
 
 func writeAPIErrorMessage(write writeJSONFn, w http.ResponseWriter, apiErr apiError, message string) {
 	write(w, apiErr.HTTPStatus, map[string]any{
-		"timestamp": time.Now().Format(time.RFC3339Nano),
+		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		"message":   message,
 		"errorCode": apiErr.Code,
 	})

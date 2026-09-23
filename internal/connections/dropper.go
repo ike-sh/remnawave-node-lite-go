@@ -15,6 +15,7 @@ type IPListProvider interface {
 type Dropper struct {
 	available     bool
 	isWhitelisted func(ip string) bool
+	kill          func(ip string) error
 }
 
 func NewDropper(isWhitelisted func(ip string) bool) *Dropper {
@@ -24,6 +25,7 @@ func NewDropper(isWhitelisted func(ip string) bool) *Dropper {
 	return &Dropper{
 		available:     netadmin.HasCapNetAdmin(),
 		isWhitelisted: isWhitelisted,
+		kill:          netadmin.KillSocketsByIP,
 	}
 }
 
@@ -35,24 +37,28 @@ func (d *Dropper) DropIPs(ips []string) bool {
 	if !d.available || len(ips) == 0 {
 		return true
 	}
-	ok := true
+	seen := make(map[string]struct{}, len(ips))
 	for _, ip := range ips {
 		if ip == "" || d.isWhitelisted(ip) {
 			continue
 		}
-		if err := netadmin.KillSocketsByIP(ip); err != nil {
+		if _, duplicate := seen[ip]; duplicate {
+			continue
+		}
+		seen[ip] = struct{}{}
+		if err := d.kill(ip); err != nil {
 			slog.Warn("failed to drop connections", "ip", ip, "error", err)
-			ok = false
 		}
 	}
-	return ok
+	// Official v3.4.1 publishes an async event and reports accepted even when
+	// a socket kill later fails; keep the REST result independent of that failure.
+	return true
 }
 
 func (d *Dropper) DropUsers(ctx context.Context, provider IPListProvider, userIDs []string) bool {
 	if !d.available || provider == nil {
 		return true
 	}
-	ok := true
 	for _, userID := range userIDs {
 		entries, err := provider.GetUserIPList(ctx, userID, true)
 		if err != nil || len(entries) == 0 {
@@ -64,9 +70,7 @@ func (d *Dropper) DropUsers(ctx context.Context, provider IPListProvider, userID
 				ips = append(ips, entry.IP)
 			}
 		}
-		if !d.DropIPs(ips) {
-			ok = false
-		}
+		d.DropIPs(ips)
 	}
-	return ok
+	return true
 }

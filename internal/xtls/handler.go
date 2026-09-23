@@ -22,12 +22,6 @@ type HandlerResult struct {
 	Message string
 }
 
-type InboundUser struct {
-	Username string `json:"username"`
-	Email    string `json:"email,omitempty"`
-	Level    uint32 `json:"level,omitempty"`
-}
-
 type HandlerAPI struct {
 	client proxcommand.HandlerServiceClient
 }
@@ -110,34 +104,6 @@ func (h *HandlerAPI) RemoveUser(ctx context.Context, tag, username string) Handl
 		return HandlerResult{OK: true}
 	}
 	return HandlerResult{OK: false, Message: grpcErrorMessage(err)}
-}
-
-func (h *HandlerAPI) GetInboundUsers(ctx context.Context, tag string) ([]InboundUser, HandlerResult) {
-	resp, err := h.client.GetInboundUsers(ctx, &proxcommand.GetInboundUserRequest{Tag: tag})
-	if err != nil {
-		return nil, HandlerResult{OK: false, Message: grpcErrorMessage(err)}
-	}
-
-	users := make([]InboundUser, 0, len(resp.GetUsers()))
-	for _, user := range resp.GetUsers() {
-		if user == nil {
-			continue
-		}
-		users = append(users, InboundUser{
-			Username: user.GetEmail(),
-			Email:    user.GetEmail(),
-			Level:    user.GetLevel(),
-		})
-	}
-	return users, HandlerResult{OK: true}
-}
-
-func (h *HandlerAPI) GetInboundUsersCount(ctx context.Context, tag string) (int64, HandlerResult) {
-	resp, err := h.client.GetInboundUsersCount(ctx, &proxcommand.GetInboundUserRequest{Tag: tag})
-	if err != nil {
-		return 0, HandlerResult{OK: false, Message: grpcErrorMessage(err)}
-	}
-	return resp.GetCount(), HandlerResult{OK: true}
 }
 
 func (h *HandlerAPI) addUser(ctx context.Context, tag string, user *protocol.User) HandlerResult {

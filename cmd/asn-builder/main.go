@@ -1,18 +1,20 @@
 // Command asn-builder converts an ip2asn dataset into the compact asn-prefixes.bin
 // consumed at runtime to resolve plugin `asList` shared lists.
 //
-// Input is the TAB-separated ip2asn "combined" format from https://iptoasn.com/
-// (range_start, range_end, AS_number, country_code, AS_description). IP ranges
+// Input can be the official remnawave/asn-index JSON (ASN keys, IPv4/IPv6
+// prefix arrays) or the TAB-separated ip2asn "combined" format. TSV IP ranges
 // are merged into minimal CIDR sets per ASN via netipx.
 //
 // Usage:
 //
 //	gunzip -c ip2asn-combined.tsv.gz | go run ./cmd/asn-builder -out asn-prefixes.bin
 //	go run ./cmd/asn-builder -in ip2asn-combined.tsv -out asn-prefixes.bin
+//	go run ./cmd/asn-builder -format json -in asn-prefixes.json -out asn-prefixes.bin
 package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -28,8 +30,9 @@ import (
 )
 
 func main() {
-	in := flag.String("in", "", "input ip2asn TSV path (default: stdin)")
+	in := flag.String("in", "", "input path (default: stdin)")
 	out := flag.String("out", "asn-prefixes.bin", "output .bin path")
+	format := flag.String("format", "tsv", "input format: tsv or json (official asn-index JSON)")
 	flag.Parse()
 
 	reader := io.Reader(os.Stdin)
@@ -40,6 +43,17 @@ func main() {
 		}
 		defer f.Close()
 		reader = f
+	}
+	if *format == "json" {
+		entries, err := parseOfficialJSON(reader)
+		if err != nil {
+			log.Fatalf("parse official ASN JSON: %v", err)
+		}
+		writeEntries(*out, entries)
+		return
+	}
+	if *format != "tsv" {
+		log.Fatalf("unsupported input format %q", *format)
 	}
 
 	builders := map[uint32]*netipx.IPSetBuilder{}
@@ -96,7 +110,11 @@ func main() {
 		entries = append(entries, entry)
 	}
 
-	f, err := os.Create(*out)
+	writeEntries(*out, entries)
+}
+
+func writeEntries(path string, entries []asn.Entry) {
+	f, err := os.Create(path)
 	if err != nil {
 		log.Fatalf("create output: %v", err)
 	}
@@ -104,5 +122,53 @@ func main() {
 	if err := asn.Write(f, entries); err != nil {
 		log.Fatalf("write database: %v", err)
 	}
-	fmt.Printf("wrote %d ASN entries to %s\n", len(entries), *out)
+	fmt.Printf("wrote %d ASN entries to %s\n", len(entries), path)
+}
+
+// parseOfficialJSON reads the same ASN→IPv4/IPv6 records as the official LMDB
+// asset, one JSON member at a time so installation-time conversion stays small.
+func parseOfficialJSON(reader io.Reader) ([]asn.Entry, error) {
+	decoder := json.NewDecoder(reader)
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, fmt.Errorf("expected top-level object: %v", err)
+	}
+	var entries []asn.Entry
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		asnNumber, err := strconv.ParseUint(key.(string), 10, 32)
+		if err != nil || asnNumber == 0 {
+			return nil, fmt.Errorf("invalid ASN key %q", key)
+		}
+		var value struct {
+			IPv4 []string `json:"ipv4"`
+			IPv6 []string `json:"ipv6"`
+		}
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		entry := asn.Entry{ASN: uint32(asnNumber)}
+		for _, raw := range value.IPv4 {
+			prefix, err := netip.ParsePrefix(raw)
+			if err != nil || !prefix.Addr().Is4() {
+				return nil, fmt.Errorf("ASN %d invalid IPv4 prefix %q", asnNumber, raw)
+			}
+			entry.IPv4 = append(entry.IPv4, prefix.Masked())
+		}
+		for _, raw := range value.IPv6 {
+			prefix, err := netip.ParsePrefix(raw)
+			if err != nil || !prefix.Addr().Is6() {
+				return nil, fmt.Errorf("ASN %d invalid IPv6 prefix %q", asnNumber, raw)
+			}
+			entry.IPv6 = append(entry.IPv6, prefix.Masked())
+		}
+		entries = append(entries, entry)
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }

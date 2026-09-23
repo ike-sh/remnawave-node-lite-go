@@ -26,10 +26,10 @@ type Service struct {
 	webhook *http.Client
 }
 
-func NewService(state *State, dropper *connections.Dropper, xray XrayController) *Service {
+func NewService(state *State, dropper *connections.Dropper, xray XrayController, options ...NFTOptions) *Service {
 	return &Service{
 		state:   state,
-		nft:     newNFTManager(),
+		nft:     newNFTManager(options...),
 		dropper: dropper,
 		xray:    xray,
 		webhook: &http.Client{Timeout: 5 * time.Second},
@@ -134,6 +134,10 @@ func (s *Service) ResetPlugins() error {
 	}
 	return nil
 }
+
+// Close removes the host nftables tables on graceful node shutdown, as the
+// upstream plugin module does in its OnModuleDestroy hook.
+func (s *Service) Close() error { return s.nft.deleteTables() }
 
 func (s *Service) applyTorrentRestart(wasEnabled, nowEnabled bool, prevIncludeTags, nowIncludeTags []string, prevRulePlacement, nowRulePlacement float64) {
 	if s.xray == nil {

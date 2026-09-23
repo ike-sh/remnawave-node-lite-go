@@ -1,0 +1,1797 @@
+{
+  "source": {
+    "tag": "3.4.1",
+    "commit": "44912631321664dbd5822e9bf8d96766ccff7c93",
+    "image": "ghcr.io/remnawave/node:3.4.1",
+    "digest": "sha256:0cdf386dd49f360fc885bb34bde21132e478e40f0deac62d616086ec0fa9257e"
+  },
+  "cases": [
+    {
+      "case": "valid-health",
+      "method": "GET",
+      "path": "/node/xray/healthcheck",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>"
+      },
+      "requestBody": null,
+      "connection": "response",
+      "status": 200,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "108",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"response\":{\"isAlive\":true,\"xrayInternalStatusCached\":false,\"xrayVersion\":\"26.7.28\",\"nodeVersion\":\"3.4.1\"}}",
+      "bodyShape": {
+        "response": {
+          "isAlive": "boolean",
+          "nodeVersion": "string",
+          "xrayInternalStatusCached": "boolean",
+          "xrayVersion": "string"
+        }
+      }
+    },
+    {
+      "case": "malformed-json-open",
+      "method": "POST",
+      "path": "/node/stats/get-users-stats",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "1"
+      },
+      "requestBody": "{",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "x-powered-by": "Express",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "122",
+        "etag": "<dynamic>",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"message\":\"Expected property name or '}' in JSON at position 1 (line 1 column 2)\",\"error\":\"Bad Request\",\"statusCode\":400}",
+      "bodyShape": {
+        "error": "string",
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "malformed-json-value",
+      "method": "POST",
+      "path": "/node/stats/get-users-stats",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "7"
+      },
+      "requestBody": "{\"foo\":",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "x-powered-by": "Express",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "81",
+        "etag": "<dynamic>",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"message\":\"Unexpected end of JSON input\",\"error\":\"Bad Request\",\"statusCode\":400}",
+      "bodyShape": {
+        "error": "string",
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "malformed-json-without-jwt",
+      "method": "POST",
+      "path": "/node/stats/get-users-stats",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Content-Length": "1"
+      },
+      "requestBody": "{",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "x-powered-by": "Express",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "122",
+        "etag": "<dynamic>",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"message\":\"Expected property name or '}' in JSON at position 1 (line 1 column 2)\",\"error\":\"Bad Request\",\"statusCode\":400}",
+      "bodyShape": {
+        "error": "string",
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "empty-body",
+      "method": "POST",
+      "path": "/node/stats/get-users-stats",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "0"
+      },
+      "requestBody": "",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "185",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"expected\":\"boolean\",\"code\":\"invalid_type\",\"path\":[\"reset\"],\"message\":\"Invalid input: expected boolean, received undefined\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "expected": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "wrong-type-string",
+      "method": "POST",
+      "path": "/node/stats/get-users-stats",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "19"
+      },
+      "requestBody": "{\"reset\":\"invalid\"}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "182",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"expected\":\"boolean\",\"code\":\"invalid_type\",\"path\":[\"reset\"],\"message\":\"Invalid input: expected boolean, received string\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "expected": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "wrong-type-null",
+      "method": "POST",
+      "path": "/node/stats/get-users-stats",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "14"
+      },
+      "requestBody": "{\"reset\":null}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "180",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"expected\":\"boolean\",\"code\":\"invalid_type\",\"path\":[\"reset\"],\"message\":\"Invalid input: expected boolean, received null\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "expected": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "missing-required",
+      "method": "POST",
+      "path": "/node/stats/get-users-stats",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "2"
+      },
+      "requestBody": "{}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "185",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"expected\":\"boolean\",\"code\":\"invalid_type\",\"path\":[\"reset\"],\"message\":\"Invalid input: expected boolean, received undefined\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "expected": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "extra-property",
+      "method": "POST",
+      "path": "/node/stats/get-user-online-status",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "39"
+      },
+      "requestBody": "{\"username\":\"nobody\",\"extra\":\"ignored\"}",
+      "connection": "response",
+      "status": 201,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "31",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"response\":{\"isOnline\":false}}",
+      "bodyShape": {
+        "response": {
+          "isOnline": "boolean"
+        }
+      }
+    },
+    {
+      "case": "bad-uuid-malformed",
+      "method": "POST",
+      "path": "/node/handler/remove-user",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "47"
+      },
+      "requestBody": "{\"username\":\"u\",\"hashData\":{\"vlessUuid\":\"bad\"}}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "357",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"origin\":\"string\",\"code\":\"invalid_format\",\"format\":\"uuid\",\"pattern\":\"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\",\"path\":[\"hashData\",\"vlessUuid\"],\"message\":\"Invalid UUID\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "format": "string",
+              "message": "string",
+              "origin": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "string"
+                ]
+              },
+              "pattern": "string"
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "bad-uuid-empty",
+      "method": "POST",
+      "path": "/node/handler/remove-user",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "44"
+      },
+      "requestBody": "{\"username\":\"u\",\"hashData\":{\"vlessUuid\":\"\"}}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "357",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"origin\":\"string\",\"code\":\"invalid_format\",\"format\":\"uuid\",\"pattern\":\"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\",\"path\":[\"hashData\",\"vlessUuid\"],\"message\":\"Invalid UUID\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "format": "string",
+              "message": "string",
+              "origin": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "string"
+                ]
+              },
+              "pattern": "string"
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "bad-uuid-null",
+      "method": "POST",
+      "path": "/node/handler/remove-user",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "46"
+      },
+      "requestBody": "{\"username\":\"u\",\"hashData\":{\"vlessUuid\":null}}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "193",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"expected\":\"string\",\"code\":\"invalid_type\",\"path\":[\"hashData\",\"vlessUuid\"],\"message\":\"Invalid input: expected string, received null\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "expected": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "string"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "invalid-user-enum",
+      "method": "POST",
+      "path": "/node/handler/add-user",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "127"
+      },
+      "requestBody": "{\"data\": [{\"type\": \"unknown\", \"tag\": \"x\", \"username\": \"u\"}], \"hashData\": {\"vlessUuid\": \"00000000-0000-4000-8000-000000000001\"}}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "365",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"code\":\"invalid_union\",\"errors\":[],\"note\":\"No matching discriminator\",\"discriminator\":\"type\",\"options\":[\"trojan\",\"vless\",\"shadowsocks\",\"shadowsocks22\",\"hysteria\"],\"path\":[\"data\",0,\"type\"],\"message\":\"Invalid discriminator value. Expected 'trojan' | 'vless' | 'shadowsocks' | 'shadowsocks22' | 'hysteria'\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "discriminator": "string",
+              "errors": {
+                "type": "array",
+                "items": []
+              },
+              "message": "string",
+              "note": "string",
+              "options": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "string"
+                ]
+              },
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "number"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "invalid-flow-enum",
+      "method": "POST",
+      "path": "/node/handler/add-user",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "188"
+      },
+      "requestBody": "{\"data\": [{\"type\": \"vless\", \"tag\": \"x\", \"username\": \"u\", \"uuid\": \"00000000-0000-4000-8000-000000000001\", \"flow\": \"bad\"}], \"hashData\": {\"vlessUuid\": \"00000000-0000-4000-8000-000000000001\"}}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "212",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"code\":\"invalid_value\",\"values\":[\"xtls-rprx-vision\",\"\"],\"path\":[\"data\",0,\"flow\"],\"message\":\"Invalid option: expected one of \\\"xtls-rprx-vision\\\"|\\\"\\\"\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "number"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "string"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "invalid-cipher-enum",
+      "method": "POST",
+      "path": "/node/handler/add-user",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "184"
+      },
+      "requestBody": "{\"data\": [{\"type\": \"shadowsocks\", \"tag\": \"x\", \"username\": \"u\", \"password\": \"p\", \"cipherType\": 99, \"ivCheck\": false}], \"hashData\": {\"vlessUuid\": \"00000000-0000-4000-8000-000000000001\"}}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "200",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"code\":\"invalid_value\",\"values\":[5,6,7,9,0,-1,8],\"path\":[\"data\",0,\"cipherType\"],\"message\":\"Invalid option: expected one of 5|6|7|9|0|-1|8\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "number"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": [
+                  "number",
+                  "number"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "nested-add-users-missing-data",
+      "method": "POST",
+      "path": "/node/handler/add-users",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "55"
+      },
+      "requestBody": "{\"affectedInboundTags\":[],\"users\":[{\"inboundData\":[]}]}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "196",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"expected\":\"object\",\"code\":\"invalid_type\",\"path\":[\"users\",0,\"userData\"],\"message\":\"Invalid input: expected object, received undefined\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "expected": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "number"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "nested-remove-users-bad-uuid",
+      "method": "POST",
+      "path": "/node/handler/remove-users",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "43"
+      },
+      "requestBody": "{\"users\":[{\"userId\":\"u\",\"hashUuid\":\"bad\"}]}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "355",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"origin\":\"string\",\"code\":\"invalid_format\",\"format\":\"uuid\",\"pattern\":\"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\",\"path\":[\"users\",0,\"hashUuid\"],\"message\":\"Invalid UUID\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "format": "string",
+              "message": "string",
+              "origin": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "number"
+                ]
+              },
+              "pattern": "string"
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "xray-start-invalid-hash-entry",
+      "method": "POST",
+      "path": "/node/xray/start",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "115"
+      },
+      "requestBody": "{\"internals\":{\"hashes\":{\"emptyConfig\":\"x\",\"inbounds\":[{\"usersCount\":\"bad\",\"hash\":\"h\",\"tag\":\"t\"}]}},\"xrayConfig\":{}}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "219",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"expected\":\"number\",\"code\":\"invalid_type\",\"path\":[\"internals\",\"hashes\",\"inbounds\",0,\"usersCount\"],\"message\":\"Invalid input: expected number, received string\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "expected": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "string"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "invalid-ipv4",
+      "method": "POST",
+      "path": "/node/plugin/nftables/block-ips",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "41"
+      },
+      "requestBody": "{\"ips\":[{\"ip\":\"999.0.0.1\",\"timeout\":10}]}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "466",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"code\":\"invalid_union\",\"errors\":[[{\"origin\":\"string\",\"code\":\"invalid_format\",\"format\":\"ipv4\",\"pattern\":\"/^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/\",\"path\":[],\"message\":\"Invalid IPv4 address\"}],[{\"code\":\"invalid_format\",\"format\":\"ipv6\",\"path\":[],\"message\":\"Invalid IPv6 address\"}]],\"path\":[\"ips\",0,\"ip\"],\"message\":\"Invalid input\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "errors": {
+                "type": "array",
+                "items": [
+                  {
+                    "type": "array",
+                    "items": [
+                      {
+                        "code": "string",
+                        "format": "string",
+                        "message": "string",
+                        "origin": "string",
+                        "path": {
+                          "type": "array",
+                          "items": []
+                        },
+                        "pattern": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "items": [
+                      {
+                        "code": "string",
+                        "format": "string",
+                        "message": "string",
+                        "path": {
+                          "type": "array",
+                          "items": []
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "number"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "invalid-ipv6",
+      "method": "POST",
+      "path": "/node/plugin/nftables/block-ips",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "44"
+      },
+      "requestBody": "{\"ips\":[{\"ip\":\"2001:db8::zz\",\"timeout\":10}]}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "466",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"code\":\"invalid_union\",\"errors\":[[{\"origin\":\"string\",\"code\":\"invalid_format\",\"format\":\"ipv4\",\"pattern\":\"/^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/\",\"path\":[],\"message\":\"Invalid IPv4 address\"}],[{\"code\":\"invalid_format\",\"format\":\"ipv6\",\"path\":[],\"message\":\"Invalid IPv6 address\"}]],\"path\":[\"ips\",0,\"ip\"],\"message\":\"Invalid input\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "errors": {
+                "type": "array",
+                "items": [
+                  {
+                    "type": "array",
+                    "items": [
+                      {
+                        "code": "string",
+                        "format": "string",
+                        "message": "string",
+                        "origin": "string",
+                        "path": {
+                          "type": "array",
+                          "items": []
+                        },
+                        "pattern": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "items": [
+                      {
+                        "code": "string",
+                        "format": "string",
+                        "message": "string",
+                        "path": {
+                          "type": "array",
+                          "items": []
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "number"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "invalid-cidr",
+      "method": "POST",
+      "path": "/node/plugin/nftables/block-ips",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "44"
+      },
+      "requestBody": "{\"ips\":[{\"ip\":\"192.0.2.0/24\",\"timeout\":10}]}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "466",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"code\":\"invalid_union\",\"errors\":[[{\"origin\":\"string\",\"code\":\"invalid_format\",\"format\":\"ipv4\",\"pattern\":\"/^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/\",\"path\":[],\"message\":\"Invalid IPv4 address\"}],[{\"code\":\"invalid_format\",\"format\":\"ipv6\",\"path\":[],\"message\":\"Invalid IPv6 address\"}]],\"path\":[\"ips\",0,\"ip\"],\"message\":\"Invalid input\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "errors": {
+                "type": "array",
+                "items": [
+                  {
+                    "type": "array",
+                    "items": [
+                      {
+                        "code": "string",
+                        "format": "string",
+                        "message": "string",
+                        "origin": "string",
+                        "path": {
+                          "type": "array",
+                          "items": []
+                        },
+                        "pattern": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "items": [
+                      {
+                        "code": "string",
+                        "format": "string",
+                        "message": "string",
+                        "path": {
+                          "type": "array",
+                          "items": []
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "number"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "plugin-missing-required",
+      "method": "POST",
+      "path": "/node/plugin/sync",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "74"
+      },
+      "requestBody": "{\"plugin\":{\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"name\":\"compat\"}}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "193",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"expected\":\"record\",\"code\":\"invalid_type\",\"path\":[\"plugin\",\"config\"],\"message\":\"Invalid input: expected record, received undefined\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "expected": "string",
+              "message": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "string"
+                ]
+              }
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "plugin-invalid-uuid",
+      "method": "POST",
+      "path": "/node/plugin/sync",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "53"
+      },
+      "requestBody": "{\"plugin\":{\"uuid\":\"bad\",\"name\":\"compat\",\"config\":{}}}",
+      "connection": "response",
+      "status": 400,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "350",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"statusCode\":400,\"message\":\"Validation failed\",\"errors\":[{\"origin\":\"string\",\"code\":\"invalid_format\",\"format\":\"uuid\",\"pattern\":\"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\",\"path\":[\"plugin\",\"uuid\"],\"message\":\"Invalid UUID\"}]}",
+      "bodyShape": {
+        "errors": {
+          "type": "array",
+          "items": [
+            {
+              "code": "string",
+              "format": "string",
+              "message": "string",
+              "origin": "string",
+              "path": {
+                "type": "array",
+                "items": [
+                  "string",
+                  "string"
+                ]
+              },
+              "pattern": "string"
+            }
+          ]
+        },
+        "message": "string",
+        "statusCode": "number"
+      }
+    },
+    {
+      "case": "plugin-wrong-array",
+      "method": "POST",
+      "path": "/node/plugin/sync",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "109"
+      },
+      "requestBody": "{\"plugin\":{\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"name\":\"compat\",\"config\":{\"sharedLists\":\"invalid\"}}}",
+      "connection": "response",
+      "status": 201,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "31",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"response\":{\"accepted\":false}}",
+      "bodyShape": {
+        "response": {
+          "accepted": "boolean"
+        }
+      }
+    },
+    {
+      "case": "plugin-invalid-enum",
+      "method": "POST",
+      "path": "/node/plugin/sync",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "149"
+      },
+      "requestBody": "{\"plugin\":{\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"name\":\"compat\",\"config\":{\"sharedLists\":[{\"name\":\"ext:test\",\"type\":\"unknown\",\"items\":[]}]}}}",
+      "connection": "response",
+      "status": 201,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "31",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"response\":{\"accepted\":false}}",
+      "bodyShape": {
+        "response": {
+          "accepted": "boolean"
+        }
+      }
+    },
+    {
+      "case": "plugin-invalid-ip",
+      "method": "POST",
+      "path": "/node/plugin/sync",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "159"
+      },
+      "requestBody": "{\"plugin\":{\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"name\":\"compat\",\"config\":{\"sharedLists\":[{\"name\":\"ext:test\",\"type\":\"ipList\",\"items\":[\"999.0.0.1\"]}]}}}",
+      "connection": "response",
+      "status": 201,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "31",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"response\":{\"accepted\":false}}",
+      "bodyShape": {
+        "response": {
+          "accepted": "boolean"
+        }
+      }
+    },
+    {
+      "case": "plugin-invalid-cidr",
+      "method": "POST",
+      "path": "/node/plugin/sync",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "162"
+      },
+      "requestBody": "{\"plugin\":{\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"name\":\"compat\",\"config\":{\"sharedLists\":[{\"name\":\"ext:test\",\"type\":\"ipList\",\"items\":[\"192.0.2.0/99\"]}]}}}",
+      "connection": "response",
+      "status": 201,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "31",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"response\":{\"accepted\":false}}",
+      "bodyShape": {
+        "response": {
+          "accepted": "boolean"
+        }
+      }
+    },
+    {
+      "case": "plugin-invalid-port",
+      "method": "POST",
+      "path": "/node/plugin/sync",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "156"
+      },
+      "requestBody": "{\"plugin\":{\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"name\":\"compat\",\"config\":{\"egressFilter\":{\"enabled\":true,\"blockedIps\":[],\"blockedPorts\":[70000]}}}}",
+      "connection": "response",
+      "status": 201,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "31",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"response\":{\"accepted\":false}}",
+      "bodyShape": {
+        "response": {
+          "accepted": "boolean"
+        }
+      }
+    },
+    {
+      "case": "jwt-missing",
+      "method": "GET",
+      "path": "/node/xray/healthcheck",
+      "requestHeaders": {
+        "Content-Type": "application/json"
+      },
+      "requestBody": null,
+      "connection": "closed",
+      "status": null,
+      "responseHeaders": {},
+      "rawBodyTemplate": "",
+      "bodyShape": null
+    },
+    {
+      "case": "jwt-random",
+      "method": "GET",
+      "path": "/node/xray/healthcheck",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <random>"
+      },
+      "requestBody": null,
+      "connection": "closed",
+      "status": null,
+      "responseHeaders": {},
+      "rawBodyTemplate": "",
+      "bodyShape": null
+    },
+    {
+      "case": "jwt-malformed",
+      "method": "GET",
+      "path": "/node/xray/healthcheck",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <malformed>"
+      },
+      "requestBody": null,
+      "connection": "closed",
+      "status": null,
+      "responseHeaders": {},
+      "rawBodyTemplate": "",
+      "bodyShape": null
+    },
+    {
+      "case": "jwt-bad-signature",
+      "method": "GET",
+      "path": "/node/xray/healthcheck",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <badSignature>"
+      },
+      "requestBody": null,
+      "connection": "closed",
+      "status": null,
+      "responseHeaders": {},
+      "rawBodyTemplate": "",
+      "bodyShape": null
+    },
+    {
+      "case": "jwt-expired",
+      "method": "GET",
+      "path": "/node/xray/healthcheck",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <expired>"
+      },
+      "requestBody": null,
+      "connection": "closed",
+      "status": null,
+      "responseHeaders": {},
+      "rawBodyTemplate": "",
+      "bodyShape": null
+    },
+    {
+      "case": "jwt-wrong-claims",
+      "method": "GET",
+      "path": "/node/xray/healthcheck",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <wrongClaims>"
+      },
+      "requestBody": null,
+      "connection": "response",
+      "status": 200,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "108",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"response\":{\"isAlive\":true,\"xrayInternalStatusCached\":false,\"xrayVersion\":\"26.7.28\",\"nodeVersion\":\"3.4.1\"}}",
+      "bodyShape": {
+        "response": {
+          "isAlive": "boolean",
+          "nodeVersion": "string",
+          "xrayInternalStatusCached": "boolean",
+          "xrayVersion": "string"
+        }
+      }
+    },
+    {
+      "case": "unknown-get",
+      "method": "GET",
+      "path": "/node/this-does-not-exist",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>"
+      },
+      "requestBody": null,
+      "connection": "closed",
+      "status": null,
+      "responseHeaders": {},
+      "rawBodyTemplate": "",
+      "bodyShape": null
+    },
+    {
+      "case": "unknown-post",
+      "method": "POST",
+      "path": "/node/this-does-not-exist",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "2"
+      },
+      "requestBody": "{}",
+      "connection": "closed",
+      "status": null,
+      "responseHeaders": {},
+      "rawBodyTemplate": "",
+      "bodyShape": null
+    },
+    {
+      "case": "wrong-method-stop",
+      "method": "POST",
+      "path": "/node/xray/stop",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "2"
+      },
+      "requestBody": "{}",
+      "connection": "closed",
+      "status": null,
+      "responseHeaders": {},
+      "rawBodyTemplate": "",
+      "bodyShape": null
+    },
+    {
+      "case": "internal-stats-failure",
+      "method": "GET",
+      "path": "/node/stats/get-system-stats",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>"
+      },
+      "requestBody": null,
+      "connection": "response",
+      "status": 500,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "136",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"timestamp\":\"<ISO8601>\",\"path\":\"/node/stats/get-system-stats\",\"message\":\"Failed to get system stats\",\"errorCode\":\"A010\"}",
+      "bodyShape": {
+        "errorCode": "string",
+        "message": "string",
+        "path": "string",
+        "timestamp": "iso8601"
+      }
+    },
+    {
+      "case": "nonexistent-inbound",
+      "method": "POST",
+      "path": "/node/stats/get-inbound-stats",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "35"
+      },
+      "requestBody": "{\"tag\":\"nonexistent\",\"reset\":false}",
+      "connection": "response",
+      "status": 500,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "138",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"timestamp\":\"<ISO8601>\",\"path\":\"/node/stats/get-inbound-stats\",\"message\":\"Failed to get inbound stats\",\"errorCode\":\"A012\"}",
+      "bodyShape": {
+        "errorCode": "string",
+        "message": "string",
+        "path": "string",
+        "timestamp": "iso8601"
+      }
+    },
+    {
+      "case": "nft-unavailable",
+      "method": "POST",
+      "path": "/node/plugin/nftables/recreate-tables",
+      "requestHeaders": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <valid>",
+        "Content-Length": "0"
+      },
+      "requestBody": "",
+      "connection": "response",
+      "status": 201,
+      "responseHeaders": {
+        "content-security-policy": "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';upgrade-insecure-requests",
+        "cross-origin-opener-policy": "same-origin",
+        "cross-origin-resource-policy": "same-origin",
+        "origin-agent-cluster": "?1",
+        "referrer-policy": "no-referrer",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "x-content-type-options": "nosniff",
+        "x-dns-prefetch-control": "off",
+        "x-download-options": "noopen",
+        "x-frame-options": "SAMEORIGIN",
+        "x-permitted-cross-domain-policies": "none",
+        "x-xss-protection": "0",
+        "content-type": "application/json; charset=utf-8",
+        "content-length": "31",
+        "etag": "<dynamic>",
+        "vary": "Accept-Encoding",
+        "date": "<dynamic>",
+        "connection": "keep-alive",
+        "keep-alive": "timeout=60"
+      },
+      "rawBodyTemplate": "{\"response\":{\"accepted\":false}}",
+      "bodyShape": {
+        "response": {
+          "accepted": "boolean"
+        }
+      }
+    }
+  ]
+}

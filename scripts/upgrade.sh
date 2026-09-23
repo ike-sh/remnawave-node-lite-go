@@ -2,7 +2,7 @@
 # remnawave-node-lite-go 升级脚本（保留 node.env 与 rw-core）
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 UNIT="/etc/systemd/system/remnawave-node.service"
@@ -167,6 +167,7 @@ download_binary() {
   curl -fsSL "${url}" -o "${tmp}/archive.tar.gz"
   tar -xzf "${tmp}/archive.tar.gz" -C "${tmp}"
   install -m 0755 "${tmp}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
+  install_release_asn_assets "$tmp" "$PREFIX" /usr/local/share/asn/asn-prefixes.bin
   rm -rf "$tmp"
 
   "${PREFIX}/${BIN_NAME}" version
@@ -331,6 +332,7 @@ main() {
   echo "升级完成。"
   echo "  当前版本：$(current_version)"
   echo "  配置保留：${NODE_ENV}"
+  echo "  SNI Verification：旧配置未设置时默认 false；如需派生 SNI gate，请手动设 SNI_VERIFICATION=true"
   if is_alpine; then
     echo "  日志：    tail -f /var/log/remnanode/openrc.log"
   else

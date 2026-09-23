@@ -34,8 +34,6 @@ var responseShapeTests = map[string]func(t *testing.T){
 	"/node/stats/get-users-ip-list":         testGetUsersIPListResponseShape,
 	"/node/handler/add-user":                testAddUserResponseShape,
 	"/node/handler/remove-user":             testRemoveUserResponseShape,
-	"/node/handler/get-inbound-users-count": testGetInboundUsersCountResponseShape,
-	"/node/handler/get-inbound-users":       testGetInboundUsersResponseShape,
 	"/node/handler/add-users":               testAddUsersResponseShape,
 	"/node/handler/remove-users":            testRemoveUsersResponseShape,
 	"/node/handler/drop-users-connections":  testDropUsersConnectionsResponseShape,
@@ -230,14 +228,6 @@ func testRemoveUserResponseShape(t *testing.T) {
 	assertJSONPath(t, raw, "response.error")
 }
 
-func testGetInboundUsersResponseShape(t *testing.T) {
-	service := handlerService()
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/get-inbound-users", strings.NewReader(`{"tag":"in-1"}`))
-	rec := httptest.NewRecorder()
-	service.HandleGetInboundUsers(rec, req, writeTestJSON)
-	assertJSONPathArray(t, rec.Body.Bytes(), "response.users")
-}
-
 func testAddUsersResponseShape(t *testing.T) {
 	service := handlerService()
 	body := `{
@@ -292,14 +282,6 @@ func testDropUsersConnectionsResponseShape(t *testing.T) {
 	rec := httptest.NewRecorder()
 	service.HandleDropUsersConnections(rec, req, writeTestJSON)
 	assertJSONPath(t, rec.Body.Bytes(), "response.success")
-}
-
-func testGetInboundUsersCountResponseShape(t *testing.T) {
-	service := handlerService()
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/get-inbound-users-count", strings.NewReader(`{"tag":"in-1"}`))
-	rec := httptest.NewRecorder()
-	service.HandleGetInboundUsersCount(rec, req, writeTestJSON)
-	assertJSONPath(t, rec.Body.Bytes(), "response.count")
 }
 
 func testPluginSyncResponseShape(t *testing.T) {

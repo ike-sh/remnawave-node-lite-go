@@ -4,7 +4,7 @@ package plugin
 
 type nftManager struct{}
 
-func newNFTManager() *nftManager {
+func newNFTManager(_ ...NFTOptions) *nftManager {
 	return &nftManager{}
 }
 
@@ -15,6 +15,8 @@ func (m *nftManager) Available() bool {
 func (m *nftManager) recreateTables() error {
 	return nil
 }
+
+func (m *nftManager) deleteTables() error { return nil }
 
 func (m *nftManager) blockIP(ip string, timeoutSeconds int) error {
 	return nil

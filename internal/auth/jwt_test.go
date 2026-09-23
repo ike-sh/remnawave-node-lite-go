@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -29,7 +31,7 @@ func testJWTKeyPair(t *testing.T) (*rsa.PrivateKey, string) {
 func TestJWTValidator(t *testing.T) {
 	key, publicPEM := testJWTKeyPair(t)
 
-	validator, err := NewJWTValidator(publicPEM)
+	validator, err := NewJWTValidatorWithClaims(publicPEM, DefaultClaimExpectations())
 	if err != nil {
 		t.Fatalf("NewJWTValidator: %v", err)
 	}
@@ -41,9 +43,30 @@ func TestJWTValidator(t *testing.T) {
 	}
 }
 
+func TestJWTMiddlewareAbortsMissingAndInvalidToken(t *testing.T) {
+	_, publicPEM := testJWTKeyPair(t)
+	validator, err := NewJWTValidator(publicPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := validator.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("unauthorized request reached handler") }))
+	for _, header := range []string{"", "Bearer invalid.jwt.token"} {
+		t.Run(header, func(t *testing.T) {
+			defer func() {
+				if got := recover(); got != http.ErrAbortHandler {
+					t.Fatalf("abort = %v", got)
+				}
+			}()
+			req := httptest.NewRequest(http.MethodGet, "/node/xray/healthcheck", nil)
+			req.Header.Set("Authorization", header)
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+		})
+	}
+}
+
 func TestJWTValidatorRejectsMismatchedIssuer(t *testing.T) {
 	key, publicPEM := testJWTKeyPair(t)
-	validator, err := NewJWTValidator(publicPEM)
+	validator, err := NewJWTValidatorWithClaims(publicPEM, DefaultClaimExpectations())
 	if err != nil {
 		t.Fatalf("NewJWTValidator: %v", err)
 	}
@@ -55,6 +78,19 @@ func TestJWTValidatorRejectsMismatchedIssuer(t *testing.T) {
 	})
 	if err := validator.Validate(token); err == nil {
 		t.Fatal("expected mismatched iss to fail")
+	}
+}
+
+func TestJWTValidatorDefaultAcceptsDifferentIdentityClaims(t *testing.T) {
+	key, publicPEM := testJWTKeyPair(t)
+	validator, err := NewJWTValidator(publicPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator.now = func() time.Time { return time.Unix(1000, 0) }
+	token := signedJWT(t, key, map[string]any{"alg": "RS256", "typ": "JWT"}, map[string]any{"exp": 2000, "iss": "other", "aud": "other", "sub": "other"})
+	if err := validator.Validate(token); err != nil {
+		t.Fatalf("official JWT strategy permits unconstrained identity claims: %v", err)
 	}
 }
 

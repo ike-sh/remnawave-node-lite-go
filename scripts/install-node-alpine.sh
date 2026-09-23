@@ -2,7 +2,7 @@
 # remnawave-node-lite-go Alpine Linux 一键安装（OpenRC）
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/remnanode"
 DATA_DIR="/var/lib/remnanode"
@@ -183,7 +183,7 @@ run_sibling_script() {
 
 show_menu() {
   echo
-  echo "Remnawave Node Lite ${VERSION} (contract 3.3.2) — Alpine"
+  echo "Remnawave Node Lite ${VERSION} (contract 3.4.1) — Alpine"
   echo "  1) 安装"
   echo "  2) 升级"
   echo "  3) 卸载"
@@ -391,6 +391,7 @@ download_binary() {
   curl -fsSL "${url}" -o "${tmp}/archive.tar.gz"
   tar -xzf "${tmp}/archive.tar.gz" -C "${tmp}"
   install -m 0755 "${tmp}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
+  install_release_asn_assets "$tmp" "$PREFIX" /usr/local/share/asn/asn-prefixes.bin
   rm -rf "$tmp"
 
   "${PREFIX}/${BIN_NAME}" version

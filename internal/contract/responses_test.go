@@ -35,12 +35,6 @@ func (stubHandlerProvider) HandlerAddShadowsocks2022User(context.Context, string
 func (stubHandlerProvider) HandlerAddHysteriaUser(context.Context, string, string, string, uint32) xtls.HandlerResult {
 	return xtls.HandlerResult{OK: false}
 }
-func (stubHandlerProvider) HandlerGetInboundUsers(context.Context, string) ([]xtls.InboundUser, xtls.HandlerResult) {
-	return nil, xtls.HandlerResult{OK: true}
-}
-func (stubHandlerProvider) HandlerGetInboundUsersCount(context.Context, string) (int64, xtls.HandlerResult) {
-	return 0, xtls.HandlerResult{OK: true}
-}
 
 func writeTestJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")

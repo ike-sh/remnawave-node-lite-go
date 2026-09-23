@@ -10,8 +10,9 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 | 项目 | 说明 |
 | --- | --- |
-| 当前版本 | [v1.3.0](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.3.0) |
-| Panel 契约 | `@remnawave/node` v3.3.2（上报 `nodeVersion=3.3.2`；wire contract v3.2.3） |
+| 当前源码版本 | v1.4.0（尚未发布） |
+| 最新已发布版本 | [v1.3.0](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.3.0) |
+| Panel 契约 | `@remnawave/node` v3.4.1（上报 `nodeVersion=3.4.1`；wire contract v3.4.1） |
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
 
 安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v1.3.0` 指定版本。
@@ -24,6 +25,7 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 - Panel 下发的 `SECRET_KEY`（含 mTLS 证书与 JWT 公钥）
 - [rw-core](https://github.com/XTLS/Xray-core) **v26.7.28** 基线（安装脚本默认安装；Panel 可下发带 SHA-256 的自定义 core）
 - [GeoCheck](https://github.com/remnawave/geocheck) **v0.3.0**（安装脚本默认安装）
+- 官方 asn-index 的 IPv4/IPv6 数据在发布构建时转换为轻量数据库，并随 Linux 归档分发；已有 ASN 数据库升级时保留
 - 可选：`nft`、`ss`（插件 IP 封禁与连接踢除，需 `CAP_NET_ADMIN`）
 
 ---
@@ -78,13 +80,14 @@ SECRET_KEY='eyJ...' NODE_PORT=2222 \
 ```env
 NODE_PORT=2222
 SECRET_KEY="eyJ..."
+SNI_VERIFICATION=false
 XRAY_BIN=/usr/local/bin/rw-core
 GEOCHECK_BIN=/usr/local/bin/geocheck
 GEO_DIR=/usr/local/share/xray
 LOG_DIR=/var/log/remnanode
 ```
 
-可选能力见 `deploy/node.env.example`：`LOW_MEMORY`、`BODY_LIMIT_MB`、`NODE_BIND_ADDR`（绑定监听地址）、`CUSTOM_CORE_URL`、`GEO_ZAPRET_FILE` / `IP_ZAPRET_FILE` 等。保持默认 `XRAY_BIN=/usr/local/bin/rw-core` 时，Node 3.3.2 可按 Panel 配置安全下载/切换自定义 core，并自动准备 geodata assets。
+`SNI_VERIFICATION` 未设置时默认为 `false`，只关闭派生 SNI gate；Node 证书、CA、TLS 1.3、客户端证书验证（mTLS）及 JWT 均保持启用。设置为 `true` 时，客户端必须发送正确的派生 SNI。`doctor` 会显示实际状态。`NFTABLES_LOGGING=true`、`NFTABLES_ACCEPT_REPLY_TRAFFIC=false` 与官方 3.4.1 的默认值一致。其他可选配置见 `deploy/node.env.example`。保持默认 `XRAY_BIN=/usr/local/bin/rw-core` 时，Node 3.4.1 可按 Panel 配置安全下载/切换自定义 core，并自动准备 geodata assets。
 
 ---
 
@@ -94,7 +97,7 @@ LOG_DIR=/var/log/remnanode
 curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/main/scripts/upgrade.sh | sudo bash -s -- --yes
 ```
 
-升级保留现有 `node.env`、数据目录及 rw-core。同步升级 rw-core：
+升级保留现有 `node.env`、Secret Key、数据目录及 rw-core。v1.3.0 的旧配置若没有 `SNI_VERIFICATION`，升级后自然使用官方 3.4.1 默认值 `false`；如需继续使用严格派生 SNI，手动设置 `SNI_VERIFICATION=true`，并确认 Panel/client 发送对应 SNI。同步升级 rw-core：
 
 ```bash
 sudo RNL_UPGRADE_XRAY=1 bash upgrade.sh --yes
@@ -132,9 +135,9 @@ xerrors  # rw-core 错误输出
 
 ## 功能与兼容性
 
-实现与官方 `@remnawave/node` v3.3.2 对齐的 **27 条 REST API**，涵盖：
+实现与官方 `@remnawave/node` v3.4.1 对齐的 **25 条 REST API**，涵盖：
 
-- 节点注册与 mTLS / JWT 认证；TLS 1.3 连接使用由 Secret Key 派生的私有 SNI
+- 节点注册与 mTLS / JWT 认证；TLS 1.3；`SNI_VERIFICATION` 可选（默认 `false`，开启后校验 Secret Key 派生的私有 SNI）
 - Xray 生命周期（启动、停止、配置热更新）
 - 流量、在线统计与 GeoCheck SVG 报告
 - 用户热更新（VLESS / Trojan / Shadowsocks）

@@ -2,6 +2,7 @@ package asn
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net/netip"
 	"sort"
@@ -31,10 +32,18 @@ func Write(w io.Writer, entries []Entry) error {
 	dataOff := uint64(headerLen) + uint64(count)*entryLen
 	index := make([]byte, 0, int(count)*entryLen)
 	var data []byte
+	var previous uint32
 
-	for _, e := range sorted {
+	for i, e := range sorted {
+		if e.ASN == 0 || (i > 0 && e.ASN == previous) {
+			return fmt.Errorf("invalid or duplicate ASN %d", e.ASN)
+		}
+		previous = e.ASN
 		v4 := normalizePrefixes(e.IPv4, true)
 		v6 := normalizePrefixes(e.IPv6, false)
+		if len(v4) > 65535 || len(v6) > 65535 {
+			return fmt.Errorf("ASN %d exceeds database prefix count limit", e.ASN)
+		}
 
 		entry := make([]byte, entryLen)
 		binary.LittleEndian.PutUint32(entry[0:4], e.ASN)

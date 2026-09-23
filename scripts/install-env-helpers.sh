@@ -337,6 +337,11 @@ render_env_template() {
 NODE_PORT=${port}
 SECRET_KEY=
 
+# 官方 3.4.1 默认：派生 SNI gate 关闭；mTLS/JWT 仍开启。
+SNI_VERIFICATION=false
+NFTABLES_LOGGING=true
+NFTABLES_ACCEPT_REPLY_TRAFFIC=false
+
 # 可选：密钥极长时可改用独立文件（取消下行注释并清空 SECRET_KEY）
 # SECRET_KEY_FILE=${SECRET_FILE}
 
@@ -356,4 +361,17 @@ BODY_LIMIT_MB=
 # GEO_ZAPRET_FILE=/path/to/geo-zapret.dat
 # IP_ZAPRET_FILE=/path/to/ip-zapret.dat
 EOF
+}
+
+install_release_asn_assets() {
+  local archive_dir="$1"
+  local prefix="$2"
+  local db_path="$3"
+  if [ -f "${archive_dir}/asn-builder" ]; then
+    install -m 0755 "${archive_dir}/asn-builder" "${prefix}/asn-builder"
+  fi
+  if [ -s "${archive_dir}/asn-prefixes.bin" ] && [ ! -e "$db_path" ] && [ ! -L "$db_path" ]; then
+    mkdir -p "$(dirname "$db_path")"
+    install -m 0644 "${archive_dir}/asn-prefixes.bin" "$db_path"
+  fi
 }

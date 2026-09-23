@@ -18,6 +18,19 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Convert official ASN index
+        shell: bash
+        run: |
+          curl -fsSL --retry 3 \
+            https://github.com/remnawave/asn-index/releases/latest/download/asn-prefixes.json \
+            -o "${RUNNER_TEMP}/asn-prefixes.json"
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/remnawave/asn-index/main/LICENSE \
+            -o "${RUNNER_TEMP}/ASN_INDEX_LICENSE.txt"
+          go run ./cmd/asn-builder -format json \
+            -in "${RUNNER_TEMP}/asn-prefixes.json" \
+            -out "${RUNNER_TEMP}/asn-prefixes.bin"
+
       - name: Build release archives
         shell: bash
         run: |
@@ -34,6 +47,10 @@ jobs:
                 -ldflags="-s -w -X remnawave-node-lite-go/internal/version.Version=${VERSION} -X remnawave-node-lite-go/internal/version.ContractVersion=${CONTRACT_VERSION}" \
                 -o "${out_dir}/remnanode-lite" \
                 ./cmd/remnanode-lite
+            CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
+              go build -trimpath -o "${out_dir}/asn-builder" ./cmd/asn-builder
+            install -m 0644 "${RUNNER_TEMP}/asn-prefixes.bin" "${out_dir}/asn-prefixes.bin"
+            install -m 0644 "${RUNNER_TEMP}/ASN_INDEX_LICENSE.txt" "${out_dir}/ASN_INDEX_LICENSE.txt"
 
             # amd64 runner cannot execute arm64 binaries (Exec format error)
             case "${arch}:${host_arch}" in
@@ -48,10 +65,10 @@ jobs:
             printf '%s\n' \
               "remnanode-lite ${GITHUB_REF_NAME} linux/${arch}" \
               "" \
-              "Extract and install to /usr/local/bin/remnanode-lite" \
+              "Includes remnanode-lite, asn-builder, and the official ASN index converted to Go's compact format" \
               > "${out_dir}/README.txt"
 
-            tar -C "${out_dir}" -czf "dist/remnanode-lite_linux_${arch}.tar.gz" remnanode-lite README.txt
+            tar -C "${out_dir}" -czf "dist/remnanode-lite_linux_${arch}.tar.gz" remnanode-lite asn-builder asn-prefixes.bin ASN_INDEX_LICENSE.txt README.txt
             rm -rf "${out_dir}"
           done
 

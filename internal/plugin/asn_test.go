@@ -14,6 +14,28 @@ func (stubASNResolver) PrefixesByASN(asn uint32) (ipv4, ipv6 []string) {
 	return nil, nil
 }
 
+type overlapASNResolver struct{}
+
+func (overlapASNResolver) PrefixesByASN(asn uint32) ([]string, []string) {
+	switch asn {
+	case 1:
+		return []string{"192.0.2.0/25", "192.0.2.0/25"}, []string{"2001:db8::/33"}
+	case 2:
+		return []string{"192.0.2.128/25"}, []string{"2001:db8:8000::/33"}
+	default:
+		return nil, nil
+	}
+}
+
+func TestASListMultipleASNOverlapAndDedupForNFT(t *testing.T) {
+	raw := []any{float64(1), float64(2), float64(1), float64(-1)}
+	resolved := resolveASList(raw, overlapASNResolver{})
+	v4, v6 := normalizeFilterPrefixes(resolved)
+	if !reflect.DeepEqual(v4, []string{"192.0.2.0/24"}) || !reflect.DeepEqual(v6, []string{"2001:db8::/32"}) {
+		t.Fatalf("merged prefixes = %v / %v", v4, v6)
+	}
+}
+
 func TestParseASN(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

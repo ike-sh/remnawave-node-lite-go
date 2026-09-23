@@ -90,24 +90,6 @@ func (m *Manager) HandlerRemoveUser(ctx context.Context, tag, username string) x
 	return api.RemoveUser(ctx, tag, username)
 }
 
-func (m *Manager) HandlerGetInboundUsers(ctx context.Context, tag string) ([]xtls.InboundUser, xtls.HandlerResult) {
-	api, closeFn, err := m.handlerAPI(ctx)
-	if err != nil {
-		return nil, xtls.HandlerResult{OK: false, Message: err.Error()}
-	}
-	defer closeFn()
-	return api.GetInboundUsers(ctx, tag)
-}
-
-func (m *Manager) HandlerGetInboundUsersCount(ctx context.Context, tag string) (int64, xtls.HandlerResult) {
-	api, closeFn, err := m.handlerAPI(ctx)
-	if err != nil {
-		return 0, xtls.HandlerResult{OK: false, Message: err.Error()}
-	}
-	defer closeFn()
-	return api.GetInboundUsersCount(ctx, tag)
-}
-
 func (m *Manager) RemoveTorrentBlockerOutbound() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

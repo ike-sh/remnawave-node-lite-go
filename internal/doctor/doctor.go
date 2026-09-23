@@ -53,6 +53,7 @@ func Run(args []string) int {
 			fixHint: "创建 " + envPath + " 或指定 --env PATH",
 		})
 	} else {
+		results = append(results, checkSNIVerification(cfg))
 		results = append(results, checkSecret(cfg)...)
 		results = append(results, checkXrayBinary(cfg.XrayBin)...)
 		results = append(results, checkGeocheckBinary(cfg.GeocheckBin)...)
@@ -84,6 +85,13 @@ func Run(args []string) int {
 		fmt.Println("── 结论：存在 ERROR，请先修复后再接入 Panel ──")
 	}
 	return exitCode
+}
+
+func checkSNIVerification(cfg config.Config) result {
+	if cfg.SNIVerification {
+		return result{level: "OK", title: "SNI Verification", detail: "已开启；仅接受 Secret Key 派生的 SNI；mTLS/JWT 保持开启"}
+	}
+	return result{level: "OK", title: "SNI Verification", detail: "已关闭（官方 3.4.1 默认）；mTLS/JWT 保持开启"}
 }
 
 func loadConfig(envPath string) (config.Config, error) {
@@ -150,11 +158,14 @@ func checkSecret(cfg config.Config) []result {
 			fixHint: "从 Panel 节点页重新复制完整 Secret Key",
 		}}
 	}
-	sni, err := secret.DeriveSNI(payload.CACertPEM, payload.JWTPublicKey)
-	if err != nil {
-		return []result{{level: "ERROR", title: "Secret Key", detail: err.Error()}}
+	if cfg.SNIVerification {
+		sni, err := secret.DeriveSNI(payload.CACertPEM, payload.JWTPublicKey)
+		if err != nil {
+			return []result{{level: "ERROR", title: "Secret Key", detail: err.Error()}}
+		}
+		return []result{{level: "OK", title: "Secret Key", detail: "结构、证书链与密钥匹配有效；派生 SNI=" + sni}}
 	}
-	return []result{{level: "OK", title: "Secret Key", detail: "结构、证书链与密钥匹配有效；SNI=" + sni}}
+	return []result{{level: "OK", title: "Secret Key", detail: "结构、证书链、密钥及 JWT 公钥有效"}}
 }
 
 func checkPersistedStart(dataDir string) []result {

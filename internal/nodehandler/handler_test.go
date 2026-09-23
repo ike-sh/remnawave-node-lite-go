@@ -44,12 +44,6 @@ func (s *stubProvider) HandlerAddShadowsocks2022User(context.Context, string, st
 func (s *stubProvider) HandlerAddHysteriaUser(context.Context, string, string, string, uint32) xtls.HandlerResult {
 	return xtls.HandlerResult{OK: true}
 }
-func (s *stubProvider) HandlerGetInboundUsers(context.Context, string) ([]xtls.InboundUser, xtls.HandlerResult) {
-	return nil, xtls.HandlerResult{OK: true}
-}
-func (s *stubProvider) HandlerGetInboundUsersCount(context.Context, string) (int64, xtls.HandlerResult) {
-	return 0, xtls.HandlerResult{OK: true}
-}
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -87,62 +81,6 @@ func TestHandleAddUsersAlwaysSuccess(t *testing.T) {
 	}
 	if !resp.Response.Success {
 		t.Fatalf("success = false, error = %v", resp.Response.Error)
-	}
-}
-
-type failingInboundProvider struct{}
-
-func (failingInboundProvider) AddInboundTag(string)                     {}
-func (failingInboundProvider) InboundTags() []string                    { return nil }
-func (failingInboundProvider) AddUserToInboundHash(string, string)      {}
-func (failingInboundProvider) RemoveUserFromInboundHash(string, string) {}
-func (failingInboundProvider) GetUserIPList(context.Context, string, bool) ([]xtls.IPEntry, error) {
-	return nil, nil
-}
-func (failingInboundProvider) HandlerRemoveUser(context.Context, string, string) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddVlessUser(context.Context, string, string, string, string, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddTrojanUser(context.Context, string, string, string, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddShadowsocksUser(context.Context, string, string, string, int, bool, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddShadowsocks2022User(context.Context, string, string, string, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerAddHysteriaUser(context.Context, string, string, string, uint32) xtls.HandlerResult {
-	return xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerGetInboundUsers(context.Context, string) ([]xtls.InboundUser, xtls.HandlerResult) {
-	return nil, xtls.HandlerResult{OK: true}
-}
-func (failingInboundProvider) HandlerGetInboundUsersCount(context.Context, string) (int64, xtls.HandlerResult) {
-	return 0, xtls.HandlerResult{OK: false, Message: "xray is not online"}
-}
-
-func TestHandleGetInboundUsersCountGRPCFailure(t *testing.T) {
-	t.Parallel()
-
-	service := nodehandler.NewService(failingInboundProvider{}, connections.NewDropper(nil))
-	body := `{"tag":"in-1"}`
-	req := httptest.NewRequest(http.MethodPost, "/node/handler/get-inbound-users-count", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	service.HandleGetInboundUsersCount(rec, req, writeJSON)
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
-	}
-	var resp map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if resp["errorCode"] != "A014" {
-		t.Fatalf("errorCode = %v, want A014", resp["errorCode"])
 	}
 }
 

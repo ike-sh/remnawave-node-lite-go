@@ -33,20 +33,23 @@ func ResolveEnvPath() string {
 }
 
 type Config struct {
-	NodePort              int
-	BindAddr              string
-	SecretKey             string
-	XrayBin               string
-	GeoDir                string
-	LogDir                string
-	DataDir               string
-	InternalSocketPath    string
-	InternalRESTToken     string
-	ASNDBPath             string
-	GeocheckBin           string
-	DisableHashedSetCheck bool
-	LowMemory             bool
-	BodyLimitMB           int
+	NodePort                   int
+	BindAddr                   string
+	SecretKey                  string
+	XrayBin                    string
+	GeoDir                     string
+	LogDir                     string
+	DataDir                    string
+	InternalSocketPath         string
+	InternalRESTToken          string
+	ASNDBPath                  string
+	GeocheckBin                string
+	DisableHashedSetCheck      bool
+	SNIVerification            bool
+	NFTablesLogging            bool
+	NFTablesAcceptReplyTraffic bool
+	LowMemory                  bool
+	BodyLimitMB                int
 }
 
 func Load(dotenvPath string) (Config, error) {
@@ -75,6 +78,9 @@ func Load(dotenvPath string) (Config, error) {
 		"ASN_DB_PATH",
 		"GEOCHECK_BIN",
 		"DISABLE_HASHED_SET_CHECK",
+		"SNI_VERIFICATION",
+		"NFTABLES_LOGGING",
+		"NFTABLES_ACCEPT_REPLY_TRAFFIC",
 		"LOW_MEMORY",
 		"BODY_LIMIT_MB",
 	} {
@@ -109,22 +115,59 @@ func Load(dotenvPath string) (Config, error) {
 		}
 	}
 
+	disableHashedSetCheck, err := officialBool(values, "DISABLE_HASHED_SET_CHECK", false)
+	if err != nil {
+		return Config{}, err
+	}
+	sniVerification, err := officialBool(values, "SNI_VERIFICATION", false)
+	if err != nil {
+		return Config{}, err
+	}
+	nftablesLogging, err := officialBool(values, "NFTABLES_LOGGING", true)
+	if err != nil {
+		return Config{}, err
+	}
+	acceptReplyTraffic, err := officialBool(values, "NFTABLES_ACCEPT_REPLY_TRAFFIC", false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
-		NodePort:              nodePort,
-		BindAddr:              strings.TrimSpace(values["NODE_BIND_ADDR"]),
-		SecretKey:             secretKey,
-		XrayBin:               optionalString(values, "XRAY_BIN", defaultXrayBin),
-		GeoDir:                optionalString(values, "GEO_DIR", defaultGeoDir),
-		LogDir:                optionalString(values, "LOG_DIR", defaultLogDir),
-		DataDir:               optionalString(values, "DATA_DIR", defaultDataDir),
-		InternalSocketPath:    internalSocketPath,
-		InternalRESTToken:     internalRESTToken,
-		ASNDBPath:             optionalString(values, "ASN_DB_PATH", defaultASNDBPath),
-		GeocheckBin:           optionalString(values, "GEOCHECK_BIN", defaultGeocheckBin),
-		DisableHashedSetCheck: optionalBool(values, "DISABLE_HASHED_SET_CHECK", false),
-		LowMemory:             optionalBool(values, "LOW_MEMORY", false),
-		BodyLimitMB:           optionalIntDefault(values, "BODY_LIMIT_MB", 0),
+		NodePort:                   nodePort,
+		BindAddr:                   strings.TrimSpace(values["NODE_BIND_ADDR"]),
+		SecretKey:                  secretKey,
+		XrayBin:                    optionalString(values, "XRAY_BIN", defaultXrayBin),
+		GeoDir:                     optionalString(values, "GEO_DIR", defaultGeoDir),
+		LogDir:                     optionalString(values, "LOG_DIR", defaultLogDir),
+		DataDir:                    optionalString(values, "DATA_DIR", defaultDataDir),
+		InternalSocketPath:         internalSocketPath,
+		InternalRESTToken:          internalRESTToken,
+		ASNDBPath:                  optionalString(values, "ASN_DB_PATH", defaultASNDBPath),
+		GeocheckBin:                optionalString(values, "GEOCHECK_BIN", defaultGeocheckBin),
+		DisableHashedSetCheck:      disableHashedSetCheck,
+		SNIVerification:            sniVerification,
+		NFTablesLogging:            nftablesLogging,
+		NFTablesAcceptReplyTraffic: acceptReplyTraffic,
+		LowMemory:                  optionalBool(values, "LOW_MEMORY", false),
+		BodyLimitMB:                optionalIntDefault(values, "BODY_LIMIT_MB", 0),
 	}, nil
+}
+
+// officialBool follows the upstream 3.4.1 booleanString schema: only the
+// literal strings "true" and "false" are valid; empty means the default.
+func officialBool(values map[string]string, key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(values[key])
+	if raw == "" {
+		return fallback, nil
+	}
+	switch raw {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be \"true\" or \"false\"", key)
+	}
 }
 
 func (c Config) HTTPAddr() string {

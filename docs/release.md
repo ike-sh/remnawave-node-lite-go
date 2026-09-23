@@ -28,30 +28,32 @@
 ```bash
 go test ./...
 go build -o remnanode-lite ./cmd/remnanode-lite
+go build -o asn-builder ./cmd/asn-builder
+bash scripts/test-install-env-helpers.sh
 ```
 
 ## 3. 提交并打 tag
 
 ```bash
 git add -A
-git commit -m "release: v1.3.0"
-git tag v1.3.0
+git commit -m "release: v1.4.0"
+git tag v1.4.0
 git push origin main
-git push origin v1.3.0
+git push origin v1.4.0
 ```
 
 ## 4. 等待 CI Release
 
 1. GitHub → Actions → `release` workflow
 2. 确认 tag 构建成功
-3. Releases 页应出现 `remnanode-lite_linux_amd64.tar.gz`、`remnanode-lite_linux_arm64.tar.gz`、`SHA256SUMS`
+3. Releases 页应出现 `remnanode-lite_linux_amd64.tar.gz`、`remnanode-lite_linux_arm64.tar.gz`、`SHA256SUMS`；每个归档包含 Node、ASN builder 与从官方 asn-index JSON 转换的 `asn-prefixes.bin`
 
 可选：将 `docs/releases/vX.Y.Z.md` 同步为 Release 说明。
 
 ## 5. 服务器验证
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v1.3.0/scripts/upgrade.sh | sudo bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/ike-sh/remnawave-node-lite-go/v1.4.0/scripts/upgrade.sh | sudo bash -s -- --yes
 sudo remnanode-lite doctor
 journalctl -u remnawave-node -n 50 --no-pager
 ```

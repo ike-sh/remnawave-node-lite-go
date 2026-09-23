@@ -103,7 +103,10 @@ func main() {
 		log.Printf("ASN database loaded from %s", cfg.ASNDBPath)
 	}
 	dropper := connections.NewDropper(pluginState.IsWhitelisted)
-	pluginService := plugin.NewService(pluginState, dropper, manager)
+	pluginService := plugin.NewService(pluginState, dropper, manager, plugin.NFTOptions{
+		Logging:            cfg.NFTablesLogging,
+		AcceptReplyTraffic: cfg.NFTablesAcceptReplyTraffic,
+	})
 
 	manager.SetTorrentBlockerProvider(pluginState)
 
@@ -146,6 +149,9 @@ func main() {
 		log.Printf("shutdown error: %v", err)
 	}
 	_ = manager.Stop(false)
+	if err := pluginService.Close(); err != nil {
+		log.Printf("nftables shutdown cleanup: %v", err)
+	}
 }
 
 // applyMemoryLimit caps the Go runtime heap in low-memory mode (128/256MB VPS)

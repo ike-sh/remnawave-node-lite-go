@@ -1,6 +1,6 @@
 // Package asn provides read-only lookups from an ASN→prefixes database file.
 //
-// It mirrors upstream remnawave/node 3.3.2, which resolves plugin `asList`
+// It mirrors upstream remnawave/node 3.4.1, which resolves plugin `asList`
 // shared lists (AS numbers) into IPv4/IPv6 CIDR prefixes via an on-disk LMDB.
 // To keep this node a single CGO-free binary suited to low-memory VPSes, we use
 // a compact, sorted binary format queried with ReadAt + binary search instead of
@@ -48,7 +48,34 @@ func Open(path string) (*DB, error) {
 		f.Close()
 		return nil, fmt.Errorf("invalid asn database magic")
 	}
-	return &DB{f: f, count: binary.LittleEndian.Uint32(hdr[8:12])}, nil
+	count := binary.LittleEndian.Uint32(hdr[8:12])
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	indexEnd := uint64(headerLen) + uint64(count)*entryLen
+	if indexEnd > uint64(info.Size()) {
+		f.Close()
+		return nil, fmt.Errorf("asn database index is truncated")
+	}
+	entry := make([]byte, entryLen)
+	var previous uint32
+	for i := uint32(0); i < count; i++ {
+		if _, err := f.ReadAt(entry, int64(headerLen)+int64(i)*entryLen); err != nil {
+			f.Close()
+			return nil, fmt.Errorf("read asn index: %w", err)
+		}
+		asn := binary.LittleEndian.Uint32(entry[:4])
+		off := binary.LittleEndian.Uint64(entry[4:12])
+		length := uint64(binary.LittleEndian.Uint16(entry[12:14]))*v4Record + uint64(binary.LittleEndian.Uint16(entry[14:16]))*v6Record
+		if asn == 0 || (i > 0 && asn <= previous) || off < indexEnd || off > uint64(info.Size()) || length > uint64(info.Size())-off {
+			f.Close()
+			return nil, fmt.Errorf("asn database index is corrupt")
+		}
+		previous = asn
+	}
+	return &DB{f: f, count: count}, nil
 }
 
 // Close releases the underlying file handle.

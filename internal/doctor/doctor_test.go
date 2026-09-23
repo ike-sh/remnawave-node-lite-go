@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"remnawave-node-lite-go/internal/config"
@@ -25,6 +26,18 @@ func TestCheckSecret(t *testing.T) {
 	}
 	if r := checkSecret(config.Config{}); r[0].level != "ERROR" {
 		t.Fatalf("expected ERROR, got %#v", r)
+	}
+}
+
+func TestCheckSNIVerificationReportsActualMode(t *testing.T) {
+	for _, tc := range []struct {
+		enabled bool
+		want    string
+	}{{false, "已关闭"}, {true, "已开启"}} {
+		got := checkSNIVerification(config.Config{SNIVerification: tc.enabled})
+		if got.level != "OK" || !strings.Contains(got.detail, tc.want) {
+			t.Fatalf("status = %#v", got)
+		}
 	}
 }
 
