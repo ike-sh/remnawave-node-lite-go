@@ -3,14 +3,14 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。  
 仅记录面向用户/运维的 notable 变更；完整 diff 见 GitHub Releases。
 
-## [1.4.0] - Unreleased
+## [1.4.0] - 2026-09-24
 
 对齐官方 `@remnawave/node` v3.4.1：上报 `nodeVersion=3.4.1`，官方 `@remnawave/node-contract` package 版本为 3.4.1。
 
 ### 兼容性变化
 
-- REST API 从 27 条调整为官方 25 条；删除 `get-inbound-users-count` 和 `get-inbound-users` 两条 Handler 路由，并将 Xray stop 收紧为官方 GET 方法。
-- `SNI_VERIFICATION` 从强制派生 SNI gate 改为可配置，默认 `false`。TLS 1.3、Node 证书、CA、mTLS 客户端证书验证和 JWT 不受影响。设置为 `true` 可恢复派生 SNI 校验。
+- REST API 从 27 条调整为官方 25 条；删除 `/node/handler/get-inbound-users-count` 和 `/node/handler/get-inbound-users`，并将 Xray stop 收紧为官方 GET 方法。
+- `SNI_VERIFICATION` 从强制派生 SNI gate 改为可配置，默认 `false`。只关闭派生 SNI gate；TLS 1.3、Node 证书与 CA、mTLS 客户端证书验证、JWT 签名及有效期验证保持启用。设置为 `true` 可恢复旧版严格派生 SNI 校验。
 - 官方配置 schema 对 `DISABLE_HASHED_SET_CHECK` 和新布尔开关仅接受 `true`/`false`；旧配置若使用 `1`/`yes`，需改成对应字面值。
 - `add-user` 请求带 `prevVlessUuid` 时，移除旧用户后踢除旧连接，跟随官方 v3.4.1 修复。
 - 对照 node-plugins 0.8.2 后端 schema（与 0.7.3 相同）以及 nftables-napi 0.7.1；新增 `NFTABLES_LOGGING`（默认 `true`）和 `NFTABLES_ACCEPT_REPLY_TRAFFIC`（默认 `false`）。IPv4/IPv6、CIDR 与 interval set 继续由 Go nft 实现。
@@ -19,7 +19,9 @@
 - `ss -K` IPv6 地址改为正确的方括号过滤语法；执行后检查是否仍有匹配 TCP socket，避免内核静默跳过 `SOCK_DESTROY` 时误报成功，并记录局部失败。
 - 发布构建从官方 asn-index JSON 生成等价的 Go ASN 数据库并放入 Linux 归档；新安装自动部署，升级时仅在本地数据库缺失时补齐。已对当前官方 86,800 条 ASN 记录逐条核对转换结果。
 - 无效 JWT 与不存在的外部路由按官方行为中止连接；已知错误码响应补齐 `path` 字段。
-- 官方 v3.4.1 黑盒错误契约验收：POST 业务响应对齐 HTTP 201；非法 JSON/DTO 对齐 400 的错误类别与顶层字段，JSON 解析在 JWT guard 前执行；JWT 仅按官方验证签名、算法与有效期，不额外要求 issuer/audience/subject。保留 40 个真实官方错误向量夹具。
+- 官方 v3.4.1 黑盒错误契约验收：25/25 路由匹配；POST 业务响应对齐 HTTP 201；非法 JSON/DTO 对齐 400 的错误类别与顶层字段，JSON 解析在 JWT guard 前执行；JWT 仅按官方验证签名、算法与有效期，不额外要求 issuer/audience/subject。40 条官方 HTTP 向量无 wire 差异。
+- 使用当前二进制完成 systemd/OpenRC 启动、重启、停止验收；GitHub Linux runner 已验证 IPv4/IPv6 `SOCK_DESTROY` 成功路径。
+- rw-core 默认基线保持 v26.7.28，GeoCheck 保持 v0.3.0。
 
 ### 升级注意
 

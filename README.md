@@ -10,12 +10,14 @@ Remnawave Panel 的轻量级 Node 实现：以**单一可执行文件**配合安
 
 | 项目 | 说明 |
 | --- | --- |
-| 当前源码版本 | v1.4.0（尚未发布） |
-| 最新已发布版本 | [v1.3.0](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.3.0) |
-| Panel 契约 | `@remnawave/node` v3.4.1（上报 `nodeVersion=3.4.1`；wire contract v3.4.1） |
+| 当前版本 | [v1.4.0](https://github.com/ike-sh/remnawave-node-lite-go/releases/tag/v1.4.0) |
+| 官方 Node | `@remnawave/node` v3.4.1 |
+| Panel 上报 | `nodeVersion=3.4.1`；wire contract v3.4.1 |
+| REST API | 25 条官方路由 |
+| 运行基线 | rw-core v26.7.28；GeoCheck v0.3.0 |
 | 变更日志 | [CHANGELOG.md](docs/CHANGELOG.md) |
 
-安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v1.3.0` 指定版本。
+安装脚本默认拉取 GitHub 最新 Release；可通过环境变量 `RNL_TAG=v1.4.0` 固定版本。
 
 ---
 
@@ -88,6 +90,8 @@ LOG_DIR=/var/log/remnanode
 ```
 
 `SNI_VERIFICATION` 未设置时默认为 `false`，只关闭派生 SNI gate；Node 证书、CA、TLS 1.3、客户端证书验证（mTLS）及 JWT 均保持启用。设置为 `true` 时，客户端必须发送正确的派生 SNI。`doctor` 会显示实际状态。`NFTABLES_LOGGING=true`、`NFTABLES_ACCEPT_REPLY_TRAFFIC=false` 与官方 3.4.1 的默认值一致。其他可选配置见 `deploy/node.env.example`。保持默认 `XRAY_BIN=/usr/local/bin/rw-core` 时，Node 3.4.1 可按 Panel 配置安全下载/切换自定义 core，并自动准备 geodata assets。
+
+`DISABLE_HASHED_SET_CHECK` 及新布尔开关只接受 `true` / `false`；旧配置若使用 `1`、`yes`、`0` 或 `no`，升级前请改为对应字面值。
 
 ---
 

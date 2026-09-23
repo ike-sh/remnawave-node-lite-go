@@ -32,13 +32,21 @@ go build -o asn-builder ./cmd/asn-builder
 bash scripts/test-install-env-helpers.sh
 ```
 
-## 3. 提交并打 tag
+## 3. 快进 main 并打 tag
+
+先确认 RC 分支的 `test` 与 `contract-sync` 均成功。只允许 fast-forward main；推送 main 后，等待该 commit 的 main CI 成功再打 tag。
 
 ```bash
-git add -A
-git commit -m "release: v1.4.0"
-git tag v1.4.0
+git switch main
+git pull --ff-only origin main
+git merge --ff-only release/v1.4.0-rc
 git push origin main
+```
+
+确认 main CI 成功，且 tag 目标就是同一个已验证提交后：
+
+```bash
+git tag -a v1.4.0 -m "v1.4.0"
 git push origin v1.4.0
 ```
 
